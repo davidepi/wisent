@@ -1,5 +1,5 @@
-use corelib;
+use libwisent;
 
 fn main() {
-    corelib::core::print_hello()
+    libwisent::core::print_hello()
 }
