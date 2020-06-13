@@ -7,7 +7,6 @@ pub mod core {
 #[cfg(test)]
 mod tests {
     use crate::core;
-
     #[test]
     fn it_works() {
         core::print_hello();

@@ -26,7 +26,10 @@ commands:
     steps:
       - save_cache:
           paths:
-            - ~/.cargo/registry
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
           key: cargo-cache-v1-{{ .Branch }}-{{ checksum "Cargo.lock" }}
 
 jobs:
@@ -38,7 +41,7 @@ jobs:
       - restore_cargo_cache
       - run:
           name: Running cargo fmt
-          command: cargo fmt --all -- --check
+          command: cargo fmt -- --check
       - save_cargo_cache
   rust-lint:
     executor: rust
@@ -47,14 +50,17 @@ jobs:
       - print_rust_version
       - restore_cargo_cache
       - run:
+          name: Installing Rust nightly
+          command: rustup install nightly
+      - run:
           name: Installing clippy
-          command: rustup component add clippy
+          command: rustup component add clippy --toolchain nightly
       - run:
           name: Running cargo check
-          command: cargo check --workspace --all-targets
+          command: cargo +nightly check --all-features --tests
       - run:
           name: Running cargo clippy
-          command: cargo clippy --all --all-targets -- -D warnings
+          command: cargo +nightly clippy --all-features --tests -- -D warnings
       - save_cargo_cache
   rust-test:
     executor: rust
@@ -64,7 +70,7 @@ jobs:
       - restore_cargo_cache
       - run:
           name: Running cargo test
-          command: cargo test --all --all-targets
+          command: cargo test
       - save_cargo_cache
   rust-coverage:
     executor: rust
@@ -79,25 +85,31 @@ jobs:
           name: Running cargo test (on nightly)
           command: |
             export CARGO_INCREMENTAL=0
-            export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off"
-            cargo +nightly build --all --all-targets --all-features
-            cargo +nightly test --all --all-targets --all-features
+            export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
+            export RUSTDOCFLAGS="-Cpanic=abort"
+            cargo +nightly build
+            cargo +nightly test
       - run:
-          name: Installing grcov (v0.5.13)
+          name: Installing grcov
           command: |
             curl --proto '=https' --tlsv1.2 -sSf -L https://github.com/mozilla/grcov/releases/download/v0.5.15/grcov-linux-x86_64.tar.bz2 | tar -xjf -
             ./grcov --version
       - run:
           name: Running grcov
           command: |
-            ./grcov ./target/debug/ -s . -t html --llvm --branch --ignore-not-existing -o ./coverage/
-            ./grcov ./target/debug/ -s . -t lcov --llvm --branch --ignore-not-existing -o lcov.info
+            options=(
+              ./target/debug/ -s . --llvm --branch --ignore-not-existing --commit-sha "${CIRCLE_SHA1}"
+              --ignore "*_test.rs" --ignore "*_bench.rs" --ignore "**/test_helper/**"
+              --excl-line "#\[derive\(" --excl-br-line "#\[derive\("
+            )
+            ./grcov "${options[@]}" -t html -o ./target/debug/coverage/
+            ./grcov "${options[@]}" -t lcov -o ./target/debug/lcov.info
       - save_cargo_cache
       - store_artifacts:
-          path: ./coverage/
+          path: ./target/debug/coverage/
       - run:
           name: Uploading coverage to Codecov
-          command: bash <(curl -s https://codecov.io/bash) -f lcov.info -n "${CIRCLE_BUILD_NUM}"
+          command: bash <(curl -s https://codecov.io/bash) -f ./target/debug/lcov.info -n "${CIRCLE_BUILD_NUM}"
 
 workflows:
   rust-fmt:
@@ -110,3 +122,4 @@ workflows:
     jobs:
       - rust-test
       - rust-coverage
+      
