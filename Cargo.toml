@@ -5,5 +5,16 @@ authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
 edition = "2018"
 publish = false
 
-[dependencies]
-corelib = {path = "./corelib/"}
+[lib]
+name = "libwisent"
+path = "src/core/lib.rs"
+
+[[bin]]
+name = "wisent"
+path = "src/main.rs"
+
+[profile.release]
+lto = "fat"
+
+[profile.bench]
+lto = "fat"
