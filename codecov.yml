@@ -1,3 +1,5 @@
+ignore:
+   - "*_tests.rs"
 coverage:
   status:
     project:
@@ -6,7 +8,7 @@ coverage:
         threshold: 0%
         base: auto
         paths:
-          - "corelib/src"
+          - "src/core"
         branches:
           - master
         if_ci_failed: error
