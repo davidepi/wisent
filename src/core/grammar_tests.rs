@@ -10,12 +10,42 @@ fn parse_grammar_non_existent() {
 }
 
 #[test]
-//Assert that the file is parsed
-fn parse_grammar_existent() {
+//Assert that the file is parsed correctly even with high number of escape chars
+fn parse_highly_escaped() {
     match grammar::parse_grammar("./resources/comment_rich_grammar.txt") {
         Ok(g) => {
             let productions = g.productions;
             assert_eq!(productions.len(), 5);
+        }
+        Err(_) => assert!(false),
+    }
+}
+
+#[test]
+//Assert that the fragment using non-terminals generates syntax error
+fn parse_fragments_nonterminal() {
+    match grammar::parse_grammar("./resources/fragments_syntax_err.txt") {
+        Ok(_) => assert!(false, "Expected a syntax error!"),
+        Err(_) => assert!(true),
+    }
+}
+
+#[test]
+//Assert that the fragment using wrong naming generates syntax error
+fn parse_fragments_lowercase_naming() {
+    match grammar::parse_grammar("./resources/fragments_case_err.txt") {
+        Ok(_) => assert!(false, "Expected a syntax error!"),
+        Err(_) => assert!(true),
+    }
+}
+
+#[test]
+//Assert that the fragments are replaced correctly
+fn parse_recursive_fragments() {
+    match grammar::parse_grammar("./resources/fragments_grammar.txt") {
+        Ok(g) => {
+            let productions = g.productions;
+            assert_eq!(productions.len(), 2);
         }
         Err(_) => assert!(false),
     }

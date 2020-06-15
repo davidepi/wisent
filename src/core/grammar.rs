@@ -1,14 +1,73 @@
+use std::collections::HashMap;
 use std::{iter::Peekable, str::Chars};
 
+#[derive(Debug)]
 pub struct Grammar {
     //TODO: whis entire struct will be changed probably
     pub productions: Vec<String>,
+    fragments: HashMap<String, String>,
 }
 
 pub fn parse_grammar(path: &str) -> std::io::Result<Grammar> {
     let grammar_content = std::fs::read_to_string(path)?;
     let productions = retrieve_productions(&grammar_content);
-    return Ok(Grammar { productions });
+    let productions_no_nl = remove_newlines(productions);
+    let grammar = replace_fragments(productions_no_nl);
+    //TODO: used for debug, removeme
+    // for fragment in &grammar.fragments {
+    //     println!("{} -> {}", fragment.0, fragment.1);
+    // }
+    Ok(grammar)
+}
+
+/// Replaces all `\n` and `\r` chars with a whitespace.
+/// ## Arguments
+/// * `production` The vector of String representing each production
+/// ## Returns
+/// A vector of Strings containing the input productions withouth `\r` or `\n`
+fn remove_newlines(productions: Vec<String>) -> Vec<String> {
+    let ret = productions
+        .into_iter()
+        .map(|s| {
+            s.chars()
+                .map(|c| match c {
+                    '\n' => ' ',
+                    '\r' => ' ',
+                    _ => c,
+                })
+                .collect()
+        })
+        .collect();
+    ret
+}
+
+fn replace_fragments(productions: Vec<String>) -> Grammar {
+    let mut fragments = HashMap::new();
+    let mut prod_wo_frags = Vec::new();
+    // find all fragments and put them in an hash map. A fragment start with
+    // the `fragment` keyword.
+    for production in productions {
+        if production.starts_with("fragment") && production.chars().nth(8).unwrap().is_whitespace()
+        {
+            let fragment = &production[8..];
+            let mut splitter = fragment.splitn(2, ':');
+            let name = splitter.next().unwrap().trim().to_string();
+            //TODO: maybe check syntax of names? (first letter uppercase)
+            let rule = splitter.next().unwrap().trim().to_string();
+            fragments.insert(name, rule);
+        } else {
+            prod_wo_frags.push(production);
+        }
+    }
+    for fragment in &fragments {
+        if fragment.0.chars().next().unwrap().is_lowercase() {
+            //TODO: need a custom error type :'(
+        }
+    }
+    Grammar {
+        productions: prod_wo_frags,
+        fragments,
+    }
 }
 
 /// Retrieves every production from a `.g4` grammar.
@@ -52,9 +111,6 @@ fn retrieve_productions(content: &String) -> Vec<String> {
                     ret.push(letter);
                 }
             }
-            '#' => {
-                consume_line(&mut it);
-            }
             '\'' => {
                 ret.push(letter);
                 append_until(&mut it, &mut ret, '\'')
@@ -65,22 +121,24 @@ fn retrieve_productions(content: &String) -> Vec<String> {
             }
             ';' => {
                 // end of the production and start of a new one
-                ret.push(letter);
+                // don't push the ; as it's not needed from now on
                 productions.push(ret.trim().to_string());
                 ret.clear();
             }
             _ => ret.push(letter),
         }
     }
-    //remove the first production if it's grammar XX;
-    if productions.len() > 0 && &productions[0][0..7] == "grammar" {
-        productions.drain(0..1);
-    }
+    //remove productions without colon. This should remove the grammar XX; stmt.
+    //very naive as a proper check for escaped char will be performed later.
+    productions = productions
+        .into_iter()
+        .filter(|s| s.contains(':'))
+        .collect();
     productions
 }
 
 /// Advances the iterator until the next `\n` character.
-/// Only the last `\n` is appended to the string passed as input
+/// Alsoi the last `\n` is discarded.
 /// ## Arguments
 /// * `it` The iterator that will be advanced
 /// * `ret` The string where the final \n will be appended

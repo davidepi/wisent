@@ -3,7 +3,7 @@ line
 comment
 */
 
-s: sABCD; // single line
+grammar: grammarABCD; // assert the line is not removed 
 
  #another single line
 
