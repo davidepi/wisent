@@ -7,7 +7,7 @@ s: sABCD; // single line
 
  #another single line
 
- A: /* comment */ [\]'"/*#//] //comment
- B: /* comment */ '\'' // comment
- C: /* comment */ [\\\]/*] // comment
- D: /* comment */ '\\' // comment
+ A: /* comment */ [\]'"/*#//]; //comment
+ B: /* comment */ '\''; // comment
+ C: /* comment */ [\\\]/*]; // comment
+ D: /* comment */ '\\'; // comment

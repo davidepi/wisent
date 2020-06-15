@@ -1,5 +1,6 @@
 ignore:
-   - "*_tests.rs"
+   - "src/core/*_tests.rs"
+   - "src/main.rs" # this is impossible to test so...
 coverage:
   status:
     project:

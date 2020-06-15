@@ -13,12 +13,9 @@ fn parse_grammar_non_existent() {
 //Assert that the file is parsed
 fn parse_grammar_existent() {
     match grammar::parse_grammar("./resources/comment_rich_grammar.txt") {
-        Ok(s) => {
-            let res: String = s.content.chars().filter(|c| !c.is_whitespace()).collect();
-            assert_eq!(
-                &res,
-                "s:sABCD;A:[\\]\'\"/*#//]B:\'\\\'\'C:[\\\\\\]/*]D:\'\\\\\'"
-            )
+        Ok(g) => {
+            let productions = g.productions;
+            assert_eq!(productions.len(), 5);
         }
         Err(_) => assert!(false),
     }

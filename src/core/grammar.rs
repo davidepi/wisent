@@ -1,25 +1,28 @@
 use std::{iter::Peekable, str::Chars};
 
 pub struct Grammar {
-    pub content: String, //TODO: whis will be changed probably
+    //TODO: whis entire struct will be changed probably
+    pub productions: Vec<String>,
 }
 
 pub fn parse_grammar(path: &str) -> std::io::Result<Grammar> {
     let grammar_content = std::fs::read_to_string(path)?;
-    let grammar_no_comments = remove_comments(&grammar_content);
-    return Ok(Grammar {
-        content: grammar_no_comments,
-    });
+    let productions = retrieve_productions(&grammar_content);
+    return Ok(Grammar { productions });
 }
 
-/// Removes all the comments from a `.g4` grammar.
+/// Retrieves every production from a `.g4` grammar.
+/// This effectively works by removing every comment and then splitting over ;
+/// tokens that are not quoted, although in this functions is implemented as a
+/// single pass.
 /// The comments removed are the multiline `/*`-`*/` and single line `//`, `#`.
 /// ## Arguments
 /// * `content` - A string containing the original `.g4` grammar content.
 /// ## Returns
-/// A new string representing the content of the original grammar, without
-/// comments
-fn remove_comments(content: &String) -> String {
+/// A vector of string representing the productions of the original grammar.
+/// Each element represents a single production.
+fn retrieve_productions(content: &String) -> Vec<String> {
+    let mut productions = Vec::new();
     let mut ret = String::new();
     let mut it = content.chars().peekable();
     while let Some(letter) = it.next() {
@@ -37,20 +40,20 @@ fn remove_comments(content: &String) -> String {
                         if skip == '*' {
                             if let Some(lahead) = it.peek() {
                                 if *lahead == '/' {
-                                    it.next(); //drop the lookahead
+                                    it.next(); //skip also the lookahead
                                     break;
                                 }
                             }
                         }
                     }
                 } else if lookahead == '/' {
-                    consume_line(&mut it, &mut ret);
+                    consume_line(&mut it);
                 } else {
                     ret.push(letter);
                 }
             }
             '#' => {
-                consume_line(&mut it, &mut ret);
+                consume_line(&mut it);
             }
             '\'' => {
                 ret.push(letter);
@@ -60,10 +63,20 @@ fn remove_comments(content: &String) -> String {
                 ret.push(letter);
                 append_until(&mut it, &mut ret, ']');
             }
+            ';' => {
+                // end of the production and start of a new one
+                ret.push(letter);
+                productions.push(ret.trim().to_string());
+                ret.clear();
+            }
             _ => ret.push(letter),
         }
     }
-    ret
+    //remove the first production if it's grammar XX;
+    if productions.len() > 0 && &productions[0][0..7] == "grammar" {
+        productions.drain(0..1);
+    }
+    productions
 }
 
 /// Advances the iterator until the next `\n` character.
@@ -71,10 +84,9 @@ fn remove_comments(content: &String) -> String {
 /// ## Arguments
 /// * `it` The iterator that will be advanced
 /// * `ret` The string where the final \n will be appended
-fn consume_line(it: &mut Peekable<Chars>, ret: &mut String) {
+fn consume_line(it: &mut Peekable<Chars>) {
     while let Some(skip) = it.next() {
         if skip == '\n' {
-            ret.push(skip);
             break;
         }
     }
