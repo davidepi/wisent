@@ -1,75 +1,97 @@
 use std::collections::HashMap;
 use std::{iter::Peekable, str::Chars};
 
+use regex::Regex;
+
 use crate::error::ParseError;
 
 #[derive(Debug)]
 pub struct Grammar {
-    //TODO: whis entire struct will be changed probably
-    pub productions: Vec<String>,
+    pub terminals: HashMap<String, String>,
+    pub non_terminals: HashMap<String, String>,
     fragments: HashMap<String, String>,
+}
+
+impl Grammar {
+    /// Returns the total number of productions. This includes terminals and
+    /// non-terminals but not fragments.
+    /// ## Returns
+    /// A number representing the sum of terminals and non-terminals productions
+    pub fn len(self) -> usize {
+        return self.terminals.len() + self.non_terminals.len();
+    }
 }
 
 pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
     let grammar_content = std::fs::read_to_string(path)?;
     let productions = retrieve_productions(&grammar_content);
-    let productions_no_nl = remove_newlines(productions);
-    let grammar = replace_fragments(productions_no_nl);
-    //TODO: used for debug, removeme
-    // for fragment in &grammar.fragments {
-    //     println!("{} -> {}", fragment.0, fragment.1);
-    // }
+    let grammar = build_grammar(productions)?;
+    // validate productions and categorize them into terminal or non-terminal
+    // based on their uppercase or lowercase letter
     Ok(grammar)
 }
 
-/// Replaces all `\n` and `\r` chars with a whitespace.
+/// Categorizes various productions into terminal, non-terminal and
+/// fragments. Fragments will be reduced to a production in the form `S->'...'`.
+/// Then returns a Grammar object.
 /// ## Arguments
-/// * `production` The vector of String representing each production
+/// * `productions` - A vector of String where each String is a production
+/// ending with `;`. This vector may contain fragments, but in this case the
+/// fragment keyword must be passed as well.
 /// ## Returns
-/// A vector of Strings containing the input productions withouth `\r` or `\n`
-fn remove_newlines(productions: Vec<String>) -> Vec<String> {
-    let ret = productions
-        .into_iter()
-        .map(|s| {
-            s.chars()
-                .map(|c| match c {
-                    '\n' => ' ',
-                    '\r' => ' ',
-                    _ => c,
-                })
-                .collect()
-        })
-        .collect();
-    ret
-}
-
-fn replace_fragments(productions: Vec<String>) -> Grammar {
+/// A Result object with the following types:
+/// * `Ok(Grammar)` - A Grammar object containing the parsed productions
+/// * `Err(ParseError)` - A ParseError object containing a description of the
+/// error
+///
+fn build_grammar(productions: Vec<String>) -> Result<Grammar, ParseError> {
+    let mut terminals = HashMap::new();
+    let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
-    let mut prod_wo_frags = Vec::new();
-    // find all fragments and put them in an hash map. A fragment start with
-    // the `fragment` keyword.
-    for production in productions {
-        if production.starts_with("fragment") && production.chars().nth(8).unwrap().is_whitespace()
-        {
-            let fragment = &production[8..];
-            let mut splitter = fragment.splitn(2, ':');
-            let name = splitter.next().unwrap().trim().to_string();
-            //TODO: maybe check syntax of names? (first letter uppercase)
-            let rule = splitter.next().unwrap().trim().to_string();
-            fragments.insert(name, rule);
-        } else {
-            prod_wo_frags.push(production);
+    //the capt.group of this regex will be passed to p_re so I need to include ;
+    let f_re = r"\s*fragment\s+((?:.|\n)+;)";
+    let p_re = r"\s*(\w+)\s*:\s*((?:.|\n)+);";
+    let re_fr = Regex::new(f_re).unwrap(); //fragment detection
+    let re_pd = Regex::new(p_re).unwrap(); //production detection
+    for production in &productions {
+        let mut is_fragment = false;
+        let mut prod = &production[..];
+        if let Some(matches) = re_fr.captures(prod) {
+            prod = matches.get(1).map_or("", |m| m.as_str());
+            is_fragment = true;
+        }
+        match re_pd.captures(prod) {
+            Some(matches) => {
+                let name = matches.get(1).map_or("", |m| m.as_str()).to_string();
+                let rule = matches.get(2).map_or("", |m| m.as_str()).to_string();
+                if name.chars().next().unwrap().is_lowercase() {
+                    if !is_fragment {
+                        non_terminals.insert(name, rule);
+                    } else {
+                        return Err(ParseError::SyntaxError {
+                            message: format!("Fragments should be lowercase {}", production),
+                        });
+                    }
+                } else {
+                    if !is_fragment {
+                        terminals.insert(name, rule);
+                    } else {
+                        fragments.insert(name, rule);
+                    }
+                }
+            }
+            None => {
+                return Err(ParseError::SyntaxError {
+                    message: format!("Unknown production: {}", prod),
+                });
+            }
         }
     }
-    for fragment in &fragments {
-        if fragment.0.chars().next().unwrap().is_lowercase() {
-            //TODO: need a custom error type :'(
-        }
-    }
-    Grammar {
-        productions: prod_wo_frags,
+    Ok(Grammar {
+        terminals,
+        non_terminals,
         fragments,
-    }
+    })
 }
 
 /// Retrieves every production from a `.g4` grammar.
@@ -79,10 +101,11 @@ fn replace_fragments(productions: Vec<String>) -> Grammar {
 /// The comments removed are the multiline `/*`-`*/` and single line `//`, `#`.
 /// ## Arguments
 /// * `content` - A string containing the original `.g4` grammar content.
+/// * `filename` - The name of the original file parsed.
 /// ## Returns
 /// A vector of string representing the productions of the original grammar.
 /// Each element represents a single production.
-fn retrieve_productions(content: &String) -> Vec<String> {
+fn retrieve_productions(content: &str) -> Vec<String> {
     let mut productions = Vec::new();
     let mut ret = String::new();
     let mut it = content.chars().peekable();
@@ -122,21 +145,19 @@ fn retrieve_productions(content: &String) -> Vec<String> {
                 append_until(&mut it, &mut ret, ']');
             }
             ';' => {
-                // end of the production and start of a new one
-                // don't push the ; as it's not needed from now on
-                productions.push(ret.trim().to_string());
-                ret.clear();
+                ret.push(letter);
+                productions.push(ret);
+                ret = String::new();
             }
             _ => ret.push(letter),
         }
     }
     //remove productions without colon. This should remove the grammar XX; stmt.
     //very naive as a proper check for escaped char will be performed later.
-    productions = productions
+    productions
         .into_iter()
         .filter(|s| s.contains(':'))
-        .collect();
-    productions
+        .collect()
 }
 
 /// Advances the iterator until the next `\n` character.

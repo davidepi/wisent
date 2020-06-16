@@ -5,8 +5,8 @@ use criterion::Criterion;
 use wisent::grammar;
 
 fn parse_c_grammar(c: &mut Criterion) {
-    c.bench_function("c grammar", |b| {
-        b.iter(|| grammar::parse_grammar("./resources/comment_rich_grammar.txt"))
+    c.bench_function("c grammar [parse grammar]", |b| {
+        b.iter(|| grammar::parse_grammar("./resources/c_grammar.txt"))
     });
 }
 

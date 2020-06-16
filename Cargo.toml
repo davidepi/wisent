@@ -16,8 +16,11 @@ path = "src/main.rs"
 [profile.release]
 lto = "fat"
 
+[dependencies]
+regex = "1"
+
 [dev-dependencies]
-criterion = "0.3.2"
+criterion = "0.3"
 
 [[bench]]
 name = "generator_bench"

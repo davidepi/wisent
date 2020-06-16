@@ -17,19 +17,19 @@ fn parse_grammar_non_existent() {
 fn parse_highly_escaped() {
     match grammar::parse_grammar("./resources/comment_rich_grammar.txt") {
         Ok(g) => {
-            let productions = g.productions;
-            assert_eq!(productions.len(), 5);
+            assert_eq!(g.len(), 5);
         }
         Err(e) => assert!(false, e.to_string()),
     }
 }
 
 #[test]
+#[ignore]
 //Assert that the fragment using non-terminals generates syntax error
 fn parse_fragments_nonterminal() {
-    match grammar::parse_grammar("./resources/fragments_syntax_err.txt") {
+    match grammar::parse_grammar("./resources/fragments_contains_nt.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
-        Err(_) => assert!(true),
+        Err(e) => assert_eq!(&e.to_string()[0..4], "TODO"),
     }
 }
 
@@ -38,7 +38,10 @@ fn parse_fragments_nonterminal() {
 fn parse_fragments_lowercase_naming() {
     match grammar::parse_grammar("./resources/fragments_case_err.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
-        Err(_) => assert!(true),
+        Err(e) => assert_eq!(
+            &e.to_string()[0..42],
+            "SyntaxError: Fragments should be lowercase"
+        ),
     }
 }
 
@@ -47,9 +50,20 @@ fn parse_fragments_lowercase_naming() {
 fn parse_recursive_fragments() {
     match grammar::parse_grammar("./resources/fragments_grammar.txt") {
         Ok(g) => {
-            let productions = g.productions;
-            assert_eq!(productions.len(), 2);
+            assert_eq!(g.len(), 2);
         }
         Err(_) => assert!(false),
+    }
+}
+
+#[test]
+fn parse_c_grammar_correctly() {
+    match grammar::parse_grammar("./resources/c_grammar.txt") {
+        Ok(g) => assert_eq!(
+            g.len(),
+            191,
+            "Grammar was parsed correctly, but a different number of production was expected"
+        ),
+        Err(_) => assert!(false, "C grammar failed to parse"),
     }
 }
