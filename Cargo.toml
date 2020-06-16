@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [lib]
-name = "libwisent"
+name = "wisent"
 path = "src/core/lib.rs"
 
 [[bin]]

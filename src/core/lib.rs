@@ -1,3 +1,4 @@
+mod error;
 mod grammar;
 
 #[cfg(test)]

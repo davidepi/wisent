@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::{iter::Peekable, str::Chars};
 
+use crate::error::ParseError;
+
 #[derive(Debug)]
 pub struct Grammar {
     //TODO: whis entire struct will be changed probably
@@ -8,7 +10,7 @@ pub struct Grammar {
     fragments: HashMap<String, String>,
 }
 
-pub fn parse_grammar(path: &str) -> std::io::Result<Grammar> {
+pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
     let grammar_content = std::fs::read_to_string(path)?;
     let productions = retrieve_productions(&grammar_content);
     let productions_no_nl = remove_newlines(productions);

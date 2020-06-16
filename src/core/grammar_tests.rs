@@ -5,7 +5,7 @@ use crate::grammar;
 fn parse_grammar_non_existent() {
     match grammar::parse_grammar("./resources/java_grammar.txt") {
         Ok(_) => assert!(false, "Expected the file to not exist!"),
-        Err(_) => assert!(true),
+        Err(e) => assert_eq!(e.to_string(), "IOError: No such file or directory (os error 2)"),
     }
 }
 
@@ -17,7 +17,7 @@ fn parse_highly_escaped() {
             let productions = g.productions;
             assert_eq!(productions.len(), 5);
         }
-        Err(_) => assert!(false),
+        Err(e) => assert!(false, e.to_string()),
     }
 }
 
