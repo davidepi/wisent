@@ -16,5 +16,9 @@ path = "src/main.rs"
 [profile.release]
 lto = "fat"
 
-[profile.bench]
-lto = "fat"
+[dev-dependencies]
+criterion = "0.3.2"
+
+[[bench]]
+name = "generator_bench"
+harness = false

@@ -1,5 +1,5 @@
 /// Error wrapping all the possible kind of errors encountered during parsing.
-/// 
+///
 /// The possible errors can be:
 /// * `IOError` - containing an `std::io::Error`, this kind of error can arise
 /// when opening the grammar on disks fail.

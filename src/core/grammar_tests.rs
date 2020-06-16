@@ -5,7 +5,10 @@ use crate::grammar;
 fn parse_grammar_non_existent() {
     match grammar::parse_grammar("./resources/java_grammar.txt") {
         Ok(_) => assert!(false, "Expected the file to not exist!"),
-        Err(e) => assert_eq!(e.to_string(), "IOError: No such file or directory (os error 2)"),
+        Err(e) => assert_eq!(
+            e.to_string(),
+            "IOError: No such file or directory (os error 2)"
+        ),
     }
 }
 
