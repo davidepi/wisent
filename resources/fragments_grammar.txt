@@ -46,7 +46,7 @@ Digits
 fragment
 Digit
 	:	'0'
-	|	NonZeroDigit
+    |	NonZeroDigit
 	;
 
 fragment

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::{iter::Peekable, str::Chars};
 
 use regex::Regex;
@@ -9,7 +9,6 @@ use crate::error::ParseError;
 pub struct Grammar {
     pub terminals: HashMap<String, String>,
     pub non_terminals: HashMap<String, String>,
-    fragments: HashMap<String, String>,
 }
 
 impl Grammar {
@@ -25,26 +24,32 @@ impl Grammar {
 pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
     let grammar_content = std::fs::read_to_string(path)?;
     let productions = retrieve_productions(&grammar_content);
-    let grammar = build_grammar(productions)?;
+    let frags = build_grammar(productions)?;
     // validate productions and categorize them into terminal or non-terminal
     // based on their uppercase or lowercase letter
+    let grammar = solve_terminals_dependencies(frags.0, frags.1)?;
     Ok(grammar)
 }
 
 /// Categorizes various productions into terminal, non-terminal and
-/// fragments. Fragments will be reduced to a production in the form `S->'...'`.
-/// Then returns a Grammar object.
+/// fragments.
 /// ## Arguments
 /// * `productions` - A vector of String where each String is a production
 /// ending with `;`. This vector may contain fragments, but in this case the
 /// fragment keyword must be passed as well.
 /// ## Returns
 /// A Result object with the following types:
-/// * `Ok(Grammar)` - A Grammar object containing the parsed productions
+/// * `Ok(Grammar, HashMap<String, String>)` - A tuple containing the following
+/// items:
+///     1. a Grammar, comprised of terminals and non-terminals
+///     1. an HashMap comprised of fragments with the left side of the fragment
+///     as key and the right side as value
 /// * `Err(ParseError)` - A ParseError object containing a description of the
 /// error
 ///
-fn build_grammar(productions: Vec<String>) -> Result<Grammar, ParseError> {
+fn build_grammar(
+    productions: Vec<String>,
+) -> Result<(Grammar, HashMap<String, String>), ParseError> {
     let mut terminals = HashMap::new();
     let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
@@ -87,10 +92,90 @@ fn build_grammar(productions: Vec<String>) -> Result<Grammar, ParseError> {
             }
         }
     }
-    Ok(Grammar {
-        terminals,
-        non_terminals,
+    Ok((
+        Grammar {
+            terminals,
+            non_terminals,
+        },
         fragments,
+    ))
+}
+
+/// Removes the fragments from lexer rules by effectively replacing them with
+/// their production body. Additionally, solves the recursion in Lexer rules
+/// (this should not be a thing at all but it's allowed by ANTLR...)
+/// ## Arguments
+/// * `grammar` - A Grammar containing a set of terminals and non-terminals
+/// * `fragments` - An HashMap containing the fragments. The key is the head of
+/// the production and the value is the body.
+/// ## Returns
+/// * `Ok(Grammar)` - The grammar with every fragment and lexer rule recursion
+/// replaced with its actual body
+/// * `Err(ParseError)` - A syntax error in case the lexer or the fragments
+/// reference parser rules (forbidden by the specification)
+fn solve_terminals_dependencies(
+    grammar: Grammar,
+    fragments: HashMap<String, String>,
+) -> Result<Grammar, ParseError> {
+    let mut merge = fragments.clone();
+    merge.extend(
+        grammar
+            .terminals
+            .into_iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
+    //create a map assigning an index to each production. Also creates the
+    //adiacency list (deps)
+    let terminals_no = merge.len();
+    let mut map2ids = HashMap::new();
+    let mut ids2map = vec![""; terminals_no];
+    //I don't expect to have many neighbours so TreeSet > HashSet
+    let mut ad_list = vec![BTreeSet::<usize>::new(); terminals_no];
+    let mut idx = 0_usize;
+    for terminal in &merge {
+        ids2map[idx] = &terminal.0[..];
+        map2ids.insert(&terminal.0[..], idx);
+        idx = idx + 1;
+    }
+    let map2ids = map2ids;
+
+    //find all the productions and build the DAG (hopefully it's a DAG)
+    let re = Regex::new(r"\w+").unwrap();
+    for terminal in &merge {
+        let term_head = &terminal.0[..];
+        let term_body = &terminal.1[..];
+        let term_id = *map2ids.get(term_head).unwrap(); //this DEFINITELY exists
+        let matches = re.find_iter(term_body);
+        for mat in matches {
+            // the terminal referenced (depdendency to be satisfied)
+            let dep = &term_body[mat.start()..mat.end()];
+            //this is NOT guaranteed to exist!
+            match map2ids.get(dep) {
+                Some(dep_id) => {
+                    //add the dependency to the adjacency list
+                    ad_list[term_id].insert(*dep_id);
+                }
+                None => {
+                    if grammar.non_terminals.contains_key(dep) {
+                        //more specific error in case a non-term is referenced
+                        return Err(ParseError::SyntaxError {
+                            message: format!(
+                                "Lexer rule {} cannot reference Parser non-terminal {}",
+                                term_head, dep
+                            ),
+                        });
+                    }
+                    //If I arrive here it is a terminal literal so skip it.
+                }
+            }
+        }
+    }
+
+    todo!();
+
+    Ok(Grammar {
+        terminals: HashMap::new(),
+        non_terminals: HashMap::new(),
     })
 }
 
@@ -161,7 +246,7 @@ fn retrieve_productions(content: &str) -> Vec<String> {
 }
 
 /// Advances the iterator until the next `\n` character.
-/// Alsoi the last `\n` is discarded.
+/// Also the last `\n` is discarded.
 /// ## Arguments
 /// * `it` The iterator that will be advanced
 /// * `ret` The string where the final \n will be appended

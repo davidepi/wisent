@@ -24,12 +24,14 @@ fn parse_highly_escaped() {
 }
 
 #[test]
-#[ignore]
 //Assert that the fragment using non-terminals generates syntax error
 fn parse_fragments_nonterminal() {
     match grammar::parse_grammar("./resources/fragments_contains_nt.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
-        Err(e) => assert_eq!(&e.to_string()[0..4], "TODO"),
+        Err(e) => assert_eq!(
+            &e.to_string()[..],
+            "SyntaxError: Lexer rule DIGIT cannot reference Parser non-terminal digit"
+        ),
     }
 }
 
@@ -39,7 +41,7 @@ fn parse_fragments_lowercase_naming() {
     match grammar::parse_grammar("./resources/fragments_case_err.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
         Err(e) => assert_eq!(
-            &e.to_string()[0..42],
+            &e.to_string()[..],
             "SyntaxError: Fragments should be lowercase"
         ),
     }
