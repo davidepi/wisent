@@ -1,6 +1,5 @@
 use regex::Regex;
-use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::iter::FromIterator;
+use std::collections::{BTreeSet, HashMap};
 use std::{iter::Peekable, str::Chars};
 
 use crate::error::ParseError;
@@ -172,6 +171,7 @@ fn solve_terminals_dependencies(
     }
 
     if let Some(order) = topological_sort(&ad_list) {
+        todo!();
     } else {
         return Err(ParseError::SyntaxError {
             message: format!("Lexer contains cyclic productions!"),
@@ -190,7 +190,7 @@ fn solve_terminals_dependencies(
 /// ## Returns
 /// * `Some(value)` - a Vec containing the ordered indices if graph was a DAG.
 /// * `None` - if the graph was not acyclic.
-fn topological_sort(graph: &Vec<BTreeSet<usize>>) -> Option<Vec<usize>> {
+pub(super) fn topological_sort(graph: &Vec<BTreeSet<usize>>) -> Option<Vec<usize>> {
     //The idea is is the one described by Cormen et al. (2001), Mark record
     //if the DFS can reach node of the current branch and thus there is a cycle
     //In addition, being this function iterative, the `toprocess` array is used
