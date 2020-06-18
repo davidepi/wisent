@@ -1,0 +1,3 @@
+S: A;
+B: S | 'x';
+fragment A: '_' A;

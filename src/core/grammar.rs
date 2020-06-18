@@ -293,6 +293,8 @@ fn retrieve_productions(content: &str) -> Vec<String> {
     }
     //remove productions without colon. This should remove the grammar XX; stmt.
     //very naive as a proper check for escaped char will be performed later.
+    //FIXME: this sucks. I wrote a grammar as S -> A; and didn't realise the
+    //       syntax error because it was stripped away :angery:
     productions
         .into_iter()
         .filter(|s| s.contains(':'))

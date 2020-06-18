@@ -30,7 +30,7 @@ fn parse_fragments_nonterminal() {
     match grammar::parse_grammar("./resources/fragments_contains_nt.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
         Err(e) => assert_eq!(
-            &e.to_string()[..],
+            e.to_string(),
             "SyntaxError: Lexer rule DIGIT cannot reference Parser non-terminal digit"
         ),
     }
@@ -41,10 +41,7 @@ fn parse_fragments_nonterminal() {
 fn parse_fragments_lowercase_naming() {
     match grammar::parse_grammar("./resources/fragments_case_err.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
-        Err(e) => assert_eq!(
-            &e.to_string()[..],
-            "SyntaxError: Fragments should be lowercase"
-        ),
+        Err(e) => assert_eq!(e.to_string(), "SyntaxError: Fragments should be lowercase"),
     }
 }
 
@@ -69,6 +66,18 @@ fn parse_c_grammar_correctly() {
             "Grammar was parsed correctly, but a different number of production was expected"
         ),
         Err(_) => assert!(false, "C grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that cyclic rules like S->S; cannot be solved in the lexer
+fn lexer_cyclic() {
+    match grammar::parse_grammar("./resources/lexer_cyclic.txt") {
+        Ok(_) => assert!(false, "expected a failure"),
+        Err(e) => assert_eq!(
+            e.to_string(),
+            "SyntaxError: Lexer contains cyclic productions!"
+        ),
     }
 }
 
