@@ -1,7 +1,7 @@
-use std::collections::{BTreeSet, HashMap};
-use std::{iter::Peekable, str::Chars};
-
 use regex::Regex;
+use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::iter::FromIterator;
+use std::{iter::Peekable, str::Chars};
 
 use crate::error::ParseError;
 
@@ -171,12 +171,66 @@ fn solve_terminals_dependencies(
         }
     }
 
-    todo!();
+    if let Some(order) = topological_sort(&ad_list) {
+    } else {
+        return Err(ParseError::SyntaxError {
+            message: format!("Lexer contains cyclic productions!"),
+        });
+    }
 
     Ok(Grammar {
         terminals: HashMap::new(),
         non_terminals: HashMap::new(),
     })
+}
+
+/// Performs a topological sort using an iterative DFS.
+/// ## Arguments
+/// * `graph` - A graph represented as adjacency list.
+/// ## Returns
+/// * `Some(value)` - a Vec containing the ordered indices if graph was a DAG.
+/// * `None` - if the graph was not acyclic.
+fn topological_sort(graph: &Vec<BTreeSet<usize>>) -> Option<Vec<usize>> {
+    //The idea is is the one described by Cormen et al. (2001), Mark record
+    //if the DFS can reach node of the current branch and thus there is a cycle
+    //In addition, being this function iterative, the `toprocess` array is used
+    //to defer the node into post-order.
+    #[derive(Clone, PartialEq)]
+    enum Mark {
+        NONE,      //Node untouched
+        TEMPORARY, //Current node being processed
+        PERMANENT, //All the children of this node has been processed
+    };
+    let mut visited = vec![Mark::NONE; graph.len()];
+    //Pair (node, All my neighbours have already been processed)
+    let mut toprocess = Vec::with_capacity(graph.len());
+    let mut ordered = Vec::with_capacity(graph.len());
+    for n in 0..graph.len() {
+        if visited[n] == Mark::NONE {
+            toprocess.push((n, false)); //mark as not visited
+        }
+        while !(toprocess.is_empty()) {
+            let node = toprocess.pop().unwrap();
+            if node.1 {
+                visited[node.0] = Mark::PERMANENT;
+                ordered.push(node.0);
+            } else {
+                visited[node.0] = Mark::TEMPORARY;
+                toprocess.push((node.0, true));
+                let neighbours = &graph[node.0];
+                for neighbour in neighbours {
+                    if visited[*neighbour] == Mark::NONE {
+                        toprocess.push((*neighbour, false));
+                    } else if visited[*neighbour] == Mark::TEMPORARY {
+                        return None;
+                    } else {
+                        //node already visited but does not form a cycle
+                    }
+                }
+            }
+        }
+    }
+    Some(ordered)
 }
 
 /// Retrieves every production from a `.g4` grammar.
