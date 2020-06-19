@@ -116,43 +116,50 @@ fn solve_terminals_dependencies(
     grammar: Grammar,
     fragments: HashMap<String, String>,
 ) -> Result<Grammar, ParseError> {
-    let mut merge = fragments.clone();
-    merge.extend(
-        grammar
-            .terminals
-            .into_iter()
-            .map(|(k, v)| (k.clone(), v.clone())),
-    );
-    //create a map assigning an index to each production. Also creates the
-    //adiacency list (deps)
-    let terminals_no = merge.len();
-    let mut map2ids = HashMap::new();
-    let mut ids2map = vec![""; terminals_no];
-    //I don't expect to have many neighbours so TreeSet > HashSet
-    let mut ad_list = vec![BTreeSet::<usize>::new(); terminals_no];
+    let mut merge = fragments
+        .iter()
+        .map(|(k, v)| (&k[..], &v[..]))
+        .collect::<HashMap<&str, &str>>();
+    merge.extend(grammar.terminals.iter().map(|(k, v)| (&k[..], &v[..])));
+    //create a map assigning an index to each production head. Also creates the
+    //adiacency list containing the other productions used recursively in the body
+    let heads_no = merge.len();
+    let mut head2id = HashMap::new();
+    let mut id2head = vec![""; heads_no];
+    //I don't expect to have many dependencies so TreeSet > HashSet
+    let mut graph = vec![BTreeSet::<usize>::new(); heads_no];
+    let mut transpose = vec![BTreeSet::<usize>::new(); heads_no];
+    //this array contains the index of every terminal referenced in a body
+    //will be used to split the body and remove the terminals
+    let mut split_here = vec![BTreeSet::<usize>::new(); heads_no];
     let mut idx = 0_usize;
     for terminal in &merge {
-        ids2map[idx] = &terminal.0[..];
-        map2ids.insert(&terminal.0[..], idx);
+        id2head[idx] = *terminal.0;
+        head2id.insert(*terminal.0, idx);
         idx = idx + 1;
+        split_here[idx].insert(0);
+        split_here[idx].insert((*terminal.0).len());
     }
-    let map2ids = map2ids;
+    let map2ids = head2id;
 
-    //find all the productions and build the DAG (hopefully it's a DAG)
+    //find all the dependencies in the bodies and build the DAG (hopefully it's a DAG)
     let re = Regex::new(r"\w+").unwrap();
     for terminal in &merge {
-        let term_head = &terminal.0[..];
-        let term_body = &terminal.1[..];
+        let term_head = *terminal.0;
+        let term_body = *terminal.1;
         let term_id = *map2ids.get(term_head).unwrap(); //this DEFINITELY exists
-        let matches = re.find_iter(term_body);
-        for mat in matches {
+        for mat in re.find_iter(term_body) {
             // the terminal referenced (depdendency to be satisfied)
             let dep = &term_body[mat.start()..mat.end()];
-            //this is NOT guaranteed to exist!
+            //this is NOT guaranteed to exist! the regex can match literals!
             match map2ids.get(dep) {
                 Some(dep_id) => {
-                    //add the dependency to the adjacency list
-                    ad_list[term_id].insert(*dep_id);
+                    //build the graph
+                    graph[term_id].insert(*dep_id);
+                    transpose[*dep_id].insert(term_id);
+                    //and record the position in the string of the terminal
+                    split_here[term_id].insert(mat.start());
+                    split_here[term_id].insert(mat.end());
                 }
                 None => {
                     if grammar.non_terminals.contains_key(dep) {
@@ -170,17 +177,49 @@ fn solve_terminals_dependencies(
         }
     }
 
-    if let Some(order) = topological_sort(&ad_list) {
-        todo!();
+    //if the dependencies can be satisfied, replace them
+    let mut new_terminals = HashMap::<String, String>::new();
+    if let Some(order) = topological_sort(&graph) {
+        for node in order {
+            let body = *merge.get(id2head[node]).unwrap();
+            let mut last_split = 0_usize;
+            //
+            let new_body = split_here[node]
+                .iter()
+                .map(|idx| {
+                    let mut ret = String::with_capacity(*idx - last_split + 2);
+                    //get the slice
+                    let cur_slice = &body[last_split..*idx];
+                    last_split = *idx;
+                    //if is a head replace it with body
+                    match merge.get(cur_slice) {
+                        Some(prod) => {
+                            ret.push('(');
+                            ret.push_str(*prod);
+                            ret.push(')');
+                        }
+                        None => {
+                            ret.push_str(cur_slice);
+                        }
+                    };
+                    ret
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            new_terminals.insert(id2head[node].to_string(), new_body);
+        }
     } else {
         return Err(ParseError::SyntaxError {
             message: format!("Lexer contains cyclic productions!"),
         });
     }
-
+    //remove the fragments as I don't need them anymore
+    for fragment in fragments {
+        new_terminals.remove(&fragment.0);
+    }
     Ok(Grammar {
-        terminals: HashMap::new(),
-        non_terminals: HashMap::new(),
+        terminals: new_terminals,
+        non_terminals: grammar.non_terminals,
     })
 }
 
