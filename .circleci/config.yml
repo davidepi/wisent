@@ -39,7 +39,7 @@ jobs:
       - run:
           name: Running cargo check
           command: cargo check --all-features --tests
-       - run:
+      - run:
           name: Running cargo clean
           command: cargo clean
       - run:
@@ -85,6 +85,7 @@ jobs:
       - run:
           name: Running grcov
           command: |
+            mkdir ./target/debug/coverage
             ./grcov ./target/debug/ -s . --commit-sha="${CIRCLE_SHA1}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t lcov -o ./target/debug/coverage/lcov.info
       - store_artifacts:
           path: ./target/debug/coverage/
@@ -101,7 +102,7 @@ workflows:
       - rust-lint
   rust-build:
     jobs:
-      -rust-build
+      - rust-build
   rust-test:
     jobs:
       - rust-test
