@@ -3,7 +3,7 @@ version: 2.1
 executors:
   rust:
     docker:
-      - image: circleci/rust:1.43.1-buster
+      - image: circleci/rust:latest
     resource_class: small
 
 commands:
@@ -50,17 +50,27 @@ jobs:
       - print_rust_version
       - restore_cargo_cache
       - run:
-          name: Installing Rust nightly
-          command: rustup install nightly
-      - run:
           name: Installing clippy
-          command: rustup component add clippy --toolchain nightly
+          command: rustup component add clippy
       - run:
           name: Running cargo check
-          command: cargo +nightly check --all-features --tests
+          command: cargo check --all-features --tests
+       - run:
+          name: Running cargo clean
+          command: cargo clean
       - run:
           name: Running cargo clippy
-          command: cargo +nightly clippy --all-features --tests -- -D warnings
+          command: cargo clippy --all-features --tests -- -D warnings
+      - save_cargo_cache
+  rust-build:
+    executor: rust
+    steps:
+      - checkout
+      - print_rust_version
+      - restore_cargo_cache
+      - run:
+          name: Running cargo build
+          command: cargo build
       - save_cargo_cache
   rust-test:
     executor: rust
@@ -92,24 +102,18 @@ jobs:
       - run:
           name: Installing grcov
           command: |
-            curl --proto '=https' --tlsv1.2 -sSf -L https://github.com/mozilla/grcov/releases/download/v0.5.15/grcov-linux-x86_64.tar.bz2 | tar -xjf -
+            curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -
             ./grcov --version
       - run:
           name: Running grcov
           command: |
-            options=(
-              ./target/debug/ -s . --llvm --branch --ignore-not-existing --commit-sha "${CIRCLE_SHA1}"
-              --ignore "*_test.rs" --ignore "*_bench.rs" --ignore "**/test_helper/**"
-              --excl-line "#\[derive\(" --excl-br-line "#\[derive\("
-            )
-            ./grcov "${options[@]}" -t html -o ./target/debug/coverage/
-            ./grcov "${options[@]}" -t lcov -o ./target/debug/lcov.info
+            ./grcov ./target/debug/ -s . --commit-sha="${CIRCLE_SHA1}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t lcov -o ./target/debug/coverage/lcov.info
       - save_cargo_cache
       - store_artifacts:
           path: ./target/debug/coverage/
       - run:
           name: Uploading coverage to Codecov
-          command: bash <(curl -s https://codecov.io/bash) -f ./target/debug/lcov.info -n "${CIRCLE_BUILD_NUM}"
+          command: bash <(curl -s https://codecov.io/bash) -f ./target/debug/coverage/lcov.info -n "${CIRCLE_BUILD_NUM}"
 
 workflows:
   rust-fmt:
@@ -118,6 +122,9 @@ workflows:
   rust-lint:
     jobs:
       - rust-lint
+  rust-build:
+    jobs:
+      -rust-build
   rust-test:
     jobs:
       - rust-test

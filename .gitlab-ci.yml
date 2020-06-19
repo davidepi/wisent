@@ -1,0 +1,48 @@
+image: rust:latest
+
+stages:
+  - syntax
+  - lint
+  - build
+  - test
+  - coverage
+
+before_script:
+  - rustup show
+
+syntax:
+  stage: syntax
+  script:
+    - cargo fmt -- --check
+
+lint:
+  stage: lint
+  script:
+    - rustup component add clippy
+    - cargo check --all-features --tests
+    - cargo clean
+    - cargo clippy --all-features --tests -- -D warnings
+
+build:
+  stage: build
+  script:
+    - cargo build
+
+test:
+  stage: test
+  script:
+    - cargo test
+
+coverage:
+  stage: coverage
+  script:
+    - curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -
+    - ./grcov --version
+    - export CARGO_INCREMENTAL=0
+    - export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
+    - export RUSTDOCFLAGS="-Cpanic=abort"
+    - rustup install nightly
+    - cargo +nightly build
+    - cargo +nighlty test
+    - ./grcov ./target/debug/ -s . --commit-sha="${CI_COMMIT_SHA}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t lcov -o ./target/debug/coverage/lcov.info
+    - lcov --summary ./target/debug/coverage/lcov.info
