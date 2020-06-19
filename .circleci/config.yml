@@ -15,22 +15,6 @@ commands:
             rustup --version
             rustc --version
             cargo --version
-  restore_cargo_cache:
-    steps:
-      - restore_cache:
-          keys:
-            - cargo-cache-v1-{{ .Branch }}-{{ checksum "Cargo.lock" }}
-            - cargo-cache-v1-{{ .Branch }}
-            - cargo-cache-v1-
-  save_cargo_cache:
-    steps:
-      - save_cache:
-          paths:
-            - ~/.cargo/bin/
-            - ~/.cargo/registry/index/
-            - ~/.cargo/registry/cache/
-            - ~/.cargo/git/db/
-          key: cargo-cache-v1-{{ .Branch }}-{{ checksum "Cargo.lock" }}
 
 jobs:
   rust-fmt:
@@ -38,17 +22,17 @@ jobs:
     steps:
       - checkout
       - print_rust_version
-      - restore_cargo_cache
+      - run:
+          name: Installing fmt
+          command: rustup component add rustfmt
       - run:
           name: Running cargo fmt
           command: cargo fmt -- --check
-      - save_cargo_cache
   rust-lint:
     executor: rust
     steps:
       - checkout
       - print_rust_version
-      - restore_cargo_cache
       - run:
           name: Installing clippy
           command: rustup component add clippy
@@ -61,33 +45,27 @@ jobs:
       - run:
           name: Running cargo clippy
           command: cargo clippy --all-features --tests -- -D warnings
-      - save_cargo_cache
   rust-build:
     executor: rust
     steps:
       - checkout
       - print_rust_version
-      - restore_cargo_cache
       - run:
           name: Running cargo build
           command: cargo build
-      - save_cargo_cache
   rust-test:
     executor: rust
     steps:
       - checkout
       - print_rust_version
-      - restore_cargo_cache
       - run:
           name: Running cargo test
           command: cargo test
-      - save_cargo_cache
   rust-coverage:
     executor: rust
     steps:
       - checkout
       - print_rust_version
-      - restore_cargo_cache
       - run:
           name: Installing Rust nightly
           command: rustup install nightly
@@ -108,7 +86,6 @@ jobs:
           name: Running grcov
           command: |
             ./grcov ./target/debug/ -s . --commit-sha="${CIRCLE_SHA1}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t lcov -o ./target/debug/coverage/lcov.info
-      - save_cargo_cache
       - store_artifacts:
           path: ./target/debug/coverage/
       - run:
