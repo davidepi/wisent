@@ -44,6 +44,6 @@ coverage:
     - export RUSTDOCFLAGS="-Cpanic=abort"
     - rustup install nightly
     - cargo +nightly build
-    - cargo +nighlty test
+    - cargo +nightly test
     - ./grcov ./target/debug/ -s . --commit-sha="${CI_COMMIT_SHA}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t lcov -o ./target/debug/coverage/lcov.info
     - lcov --summary ./target/debug/coverage/lcov.info
