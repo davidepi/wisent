@@ -73,7 +73,7 @@ fn build_grammar(
                         non_terminals.insert(name, rule);
                     } else {
                         return Err(ParseError::SyntaxError {
-                            message: format!("Fragments should be lowercase {}", production),
+                            message: format!("Fragments should be lowercase: {}", production),
                         });
                     }
                 } else {
@@ -136,9 +136,9 @@ fn solve_terminals_dependencies(
     for terminal in &merge {
         id2head[idx] = *terminal.0;
         head2id.insert(*terminal.0, idx);
-        idx = idx + 1;
         split_here[idx].insert(0);
-        split_here[idx].insert((*terminal.0).len());
+        split_here[idx].insert((*terminal.1).len());
+        idx = idx + 1;
     }
     let map2ids = head2id;
 
@@ -182,31 +182,35 @@ fn solve_terminals_dependencies(
     if let Some(order) = topological_sort(&graph) {
         for node in order {
             let body = *merge.get(id2head[node]).unwrap();
-            let mut last_split = 0_usize;
-            //
-            let new_body = split_here[node]
-                .iter()
-                .map(|idx| {
-                    let mut ret = String::with_capacity(*idx - last_split + 2);
-                    //get the slice
-                    let cur_slice = &body[last_split..*idx];
-                    last_split = *idx;
-                    //if is a head replace it with body
-                    match merge.get(cur_slice) {
-                        Some(prod) => {
-                            ret.push('(');
-                            ret.push_str(*prod);
-                            ret.push(')');
-                        }
-                        None => {
-                            ret.push_str(cur_slice);
-                        }
-                    };
-                    ret
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            new_terminals.insert(id2head[node].to_string(), new_body);
+            if !graph[node].is_empty() {
+                let mut last_split = 0_usize;
+                //
+                let new_body = split_here[node]
+                    .iter()
+                    .map(|idx| {
+                        let mut ret = String::with_capacity(*idx - last_split + 2);
+                        //get the slice
+                        let cur_slice = &body[last_split..*idx];
+                        last_split = *idx;
+                        //if is a head replace it with body
+                        match new_terminals.get(cur_slice) {
+                            Some(prod) => {
+                                ret.push('(');
+                                ret.push_str(prod);
+                                ret.push(')');
+                            }
+                            None => {
+                                ret.push_str(cur_slice);
+                            }
+                        };
+                        ret
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                new_terminals.insert(id2head[node].to_string(), new_body);
+            } else {
+                new_terminals.insert(id2head[node].to_string(), body.to_string());
+            }
         }
     } else {
         return Err(ParseError::SyntaxError {

@@ -41,7 +41,10 @@ fn parse_fragments_nonterminal() {
 fn parse_fragments_lowercase_naming() {
     match grammar::parse_grammar("./resources/fragments_case_err.txt") {
         Ok(_) => assert!(false, "Expected a syntax error!"),
-        Err(e) => assert_eq!(e.to_string(), "SyntaxError: Fragments should be lowercase"),
+        Err(e) => assert_eq!(
+            e.to_string(),
+            "SyntaxError: Fragments should be lowercase: fragment digit: [0-9]+;"
+        ),
     }
 }
 
