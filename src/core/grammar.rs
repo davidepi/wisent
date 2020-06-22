@@ -14,9 +14,17 @@ impl Grammar {
     /// Returns the total number of productions. This includes terminals and
     /// non-terminals but not fragments.
     /// ## Returns
-    /// A number representing the sum of terminals and non-terminals productions
-    pub fn len(self) -> usize {
-        return self.terminals.len() + self.non_terminals.len();
+    /// A number representing the sum of terminals and non-terminals productions.
+    pub fn len(&self) -> usize {
+        self.terminals.len() + self.non_terminals.len()
+    }
+
+    /// Checks if the grammar has no productions. This comprises both terminals
+    /// and non terminals.
+    /// ## Returns
+    /// True if the grammar has exactly 0 productions, false otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.terminals.is_empty() && self.non_terminals.is_empty()
     }
 }
 
@@ -31,7 +39,8 @@ pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
 }
 
 /// Categorizes various productions into terminal, non-terminal and
-/// fragments.
+/// fragments. Then splits them into head and body, assuming productions in
+/// the form `head:body;`
 /// ## Arguments
 /// * `productions` - A vector of String where each String is a production
 /// ending with `;`. This vector may contain fragments, but in this case the
@@ -76,12 +85,10 @@ fn build_grammar(
                             message: format!("Fragments should be lowercase: {}", production),
                         });
                     }
+                } else if !is_fragment {
+                    terminals.insert(name, rule);
                 } else {
-                    if !is_fragment {
-                        terminals.insert(name, rule);
-                    } else {
-                        fragments.insert(name, rule);
-                    }
+                    fragments.insert(name, rule);
                 }
             }
             None => {
@@ -132,13 +139,11 @@ fn solve_terminals_dependencies(
     //this array contains the index of every terminal referenced in a body
     //will be used to split the body and remove the terminals
     let mut split_here = vec![BTreeSet::<usize>::new(); heads_no];
-    let mut idx = 0_usize;
-    for terminal in &merge {
+    for (idx, terminal) in merge.iter().enumerate() {
         id2head[idx] = *terminal.0;
         head2id.insert(*terminal.0, idx);
         split_here[idx].insert(0);
         split_here[idx].insert((*terminal.1).len());
-        idx = idx + 1;
     }
     let map2ids = head2id;
 
@@ -214,7 +219,7 @@ fn solve_terminals_dependencies(
         }
     } else {
         return Err(ParseError::SyntaxError {
-            message: format!("Lexer contains cyclic productions!"),
+            message: "Lexer contains cyclic productions!".to_string(),
         });
     }
     //remove the fragments as I don't need them anymore
@@ -233,7 +238,7 @@ fn solve_terminals_dependencies(
 /// ## Returns
 /// * `Some(value)` - a Vec containing the ordered indices if graph was a DAG.
 /// * `None` - if the graph was not acyclic.
-pub(super) fn topological_sort(graph: &Vec<BTreeSet<usize>>) -> Option<Vec<usize>> {
+pub(super) fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
     //The idea is is the one described by Cormen et al. (2001), Mark record
     //if the DFS can reach node of the current branch and thus there is a cycle
     //In addition, being this function iterative, the `toprocess` array is used
@@ -334,13 +339,10 @@ fn retrieve_productions(content: &str) -> Vec<String> {
             _ => ret.push(letter),
         }
     }
-    //remove productions without colon. This should remove the grammar XX; stmt.
-    //very naive as a proper check for escaped char will be performed later.
-    //FIXME: this sucks. I wrote a grammar as S -> A; and didn't realise the
-    //       syntax error because it was stripped away :angery:
+    //remove the grammar XX; stmt.
     productions
         .into_iter()
-        .filter(|s| s.contains(':'))
+        .filter(|s| !s.starts_with("grammar ") && s.contains(':'))
         .collect()
 }
 
@@ -350,7 +352,7 @@ fn retrieve_productions(content: &str) -> Vec<String> {
 /// * `it` The iterator that will be advanced
 /// * `ret` The string where the final \n will be appended
 fn consume_line(it: &mut Peekable<Chars>) {
-    while let Some(skip) = it.next() {
+    for skip in it {
         if skip == '\n' {
             break;
         }
@@ -368,7 +370,7 @@ fn consume_line(it: &mut Peekable<Chars>) {
 /// this character won't be considered
 fn append_until(it: &mut Peekable<Chars>, ret: &mut String, until: char) {
     let mut escapes = 0;
-    while let Some(push) = it.next() {
+    for push in it {
         ret.push(push);
         if push == until {
             if escapes % 2 == 0 {

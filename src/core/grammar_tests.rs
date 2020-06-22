@@ -1,5 +1,46 @@
 use crate::grammar;
-use std::collections::BTreeSet;
+use grammar::Grammar;
+use std::collections::{BTreeSet, HashMap};
+
+#[test]
+//Asserts the method len() returns the sum of terminal and non terminals
+fn grammar_len() {
+    let mut g = Grammar {
+        terminals: HashMap::new(),
+        non_terminals: HashMap::new(),
+    };
+    assert_eq!(g.len(), 0);
+    let mut terminals = HashMap::new();
+    let mut non_terminals = HashMap::new();
+    terminals.insert("S".to_string(), "[a-z]".to_string());
+    non_terminals.insert("a".to_string(), "SS".to_string());
+    non_terminals.insert("b".to_string(), "C".to_string());
+    g = Grammar {
+        terminals,
+        non_terminals,
+    };
+    assert_eq!(g.len(), 3);
+}
+
+#[test]
+//Asserts the method is_empty() works as expected
+fn grammar_is_empty() {
+    let mut g = Grammar {
+        terminals: HashMap::new(),
+        non_terminals: HashMap::new(),
+    };
+    assert!(g.is_empty());
+    let mut terminals = HashMap::new();
+    let mut non_terminals = HashMap::new();
+    terminals.insert("S".to_string(), "[a-z]".to_string());
+    non_terminals.insert("a".to_string(), "SS".to_string());
+    non_terminals.insert("b".to_string(), "C".to_string());
+    g = Grammar {
+        terminals,
+        non_terminals,
+    };
+    assert!(!g.is_empty());
+}
 
 #[test]
 //Asserts that non-existent files returns error
@@ -74,7 +115,7 @@ fn parse_c_grammar_correctly() {
 
 #[test]
 //Asserts that cyclic rules like S->S; cannot be solved in the lexer
-fn lexer_cyclic() {
+fn lexer_rules_cycles_err() {
     match grammar::parse_grammar("./resources/lexer_cyclic.txt") {
         Ok(_) => assert!(false, "expected a failure"),
         Err(e) => assert_eq!(
