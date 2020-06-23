@@ -66,10 +66,10 @@ fn grammar_crafted() {
         "word".to_owned(),
     ];
     let g = Grammar::new(&terminals, &non_terminals, &names);
-    assert_eq!(g.at(0), "[a-z]");
-    assert_eq!(g.at(1), "[A-Z]");
-    assert_eq!(g.at(2), "LETTER_UP | LETTER_LO");
-    assert_eq!(g.at(3), "word letter | letter");
+    assert_eq!(g[0], "[a-z]");
+    assert_eq!(g[1], "[A-Z]");
+    assert_eq!(g[2], "LETTER_UP | LETTER_LO");
+    assert_eq!(g[3], "word letter | letter");
 }
 
 #[test]
@@ -165,12 +165,12 @@ fn get_production() {
 fn order_unchanged_at() {
     match Grammar::parse_grammar("./resources/simple_grammar.txt") {
         Ok(g) => {
-            assert_eq!(g.at(0), "~[,\\n\\r\"]+ ");
-            assert_eq!(g.at(1), "'\"' ('\"\"'|~'\"')* '\"' ");
-            assert_eq!(g.at(2), "hdr row+ ");
-            assert_eq!(g.at(3), "row ");
-            assert_eq!(g.at(4), "field (',' field)* '\\r'? '\\n' ");
-            assert_eq!(g.at(5), "TEXT| STRING|");
+            assert_eq!(g[0], "~[,\\n\\r\"]+ ");
+            assert_eq!(g[1], "'\"' ('\"\"'|~'\"')* '\"' ");
+            assert_eq!(g[2], "hdr row+ ");
+            assert_eq!(g[3], "row ");
+            assert_eq!(g[4], "field (',' field)* '\\r'? '\\n' ");
+            assert_eq!(g[5], "TEXT| STRING|");
         }
         Err(_) => assert!(false, "Simple grammar failed to parse"),
     }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::ops::Index;
 use std::{iter::Peekable, str::Chars};
 
 use regex::Regex;
@@ -54,17 +55,6 @@ impl Grammar {
         }
     }
 
-    pub fn at(&self, index: usize) -> &str {
-        let idx;
-        if index < self.terminals.len() {
-            idx = index;
-            &self.terminals[idx]
-        } else {
-            idx = index - self.terminals.len();
-            &self.non_terminals[idx]
-        }
-    }
-
     pub fn iter_term(&self) -> std::slice::Iter<String> {
         self.terminals.iter()
     }
@@ -80,6 +70,21 @@ impl Grammar {
         let grammar_not_rec = solve_terminals_dependencies(grammar_rec)?;
         let grammar = reindex(grammar_not_rec);
         Ok(grammar)
+    }
+}
+
+impl Index<usize> for Grammar {
+    type Output = String;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        let idx;
+        if index < self.terminals.len() {
+            idx = index;
+            &self.terminals[idx]
+        } else {
+            idx = index - self.terminals.len();
+            &self.non_terminals[idx]
+        }
     }
 }
 
