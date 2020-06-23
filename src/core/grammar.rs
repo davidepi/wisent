@@ -197,6 +197,12 @@ fn build_grammar(productions: Vec<String>) -> Result<GrammarInternal, ParseError
     })
 }
 
+struct TerminalsFragmentsHelper<'a> {
+    prods: HashMap<&'a str, &'a str>,
+    head2id: HashMap<&'a str, usize>,
+    id2head: Vec<&'a str>,
+}
+
 /// Removes the fragments from lexer rules by effectively replacing them with
 /// their production body. Additionally, solves the recursion in Lexer rules
 /// (this should not be a thing at all but it's allowed by ANTLR...)
@@ -210,51 +216,64 @@ fn build_grammar(productions: Vec<String>) -> Result<GrammarInternal, ParseError
 /// * `Err(ParseError)` - A syntax error in case the lexer or the fragments
 /// reference parser rules (forbidden by the specification)
 fn solve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInternal, ParseError> {
+    let terms = merge_terminals_fragments(&grammar);
+    let graph = build_terminals_dag(&terms, &grammar.non_terminals)?;
+    let new_terminals = replace_terminals(&terms, &graph[0], &graph[1])?;
+    Ok(GrammarInternal {
+        terminals: new_terminals,
+        non_terminals: grammar.non_terminals,
+        fragments: grammar.fragments,
+        order: grammar.order,
+    })
+}
+
+fn merge_terminals_fragments(grammar: &GrammarInternal) -> TerminalsFragmentsHelper {
     let fragments_iter = grammar.fragments.iter().map(|(k, v)| (&k[..], &v[..]));
     let terminals_iter = grammar.terminals.iter().map(|(k, v)| (&k[..], &v[..]));
     let merge = fragments_iter
         .chain(terminals_iter)
         .collect::<HashMap<_, _>>();
-    //create a map assigning an index to each production head. Also creates the
-    //adjacency list containing the other productions used recursively in the body
-    let heads_no = merge.len();
     let mut head2id = HashMap::new();
-    let mut id2head = vec![""; heads_no];
-    //I don't expect to have many dependencies so TreeSet > HashSet
-    let mut graph = vec![BTreeSet::<usize>::new(); heads_no];
-    let mut transpose = vec![BTreeSet::<usize>::new(); heads_no];
-    //this array contains the index of every terminal referenced in a body
-    //will be used to split the body and remove the terminals
-    let mut split_here = vec![BTreeSet::<usize>::new(); heads_no];
+    let mut id2head = vec![""; merge.len()];
     for (idx, terminal) in merge.iter().enumerate() {
         id2head[idx] = *terminal.0;
         head2id.insert(*terminal.0, idx);
-        split_here[idx].insert(0);
-        split_here[idx].insert((*terminal.1).len());
     }
-    let map2ids = head2id;
+    TerminalsFragmentsHelper {
+        prods: merge,
+        head2id,
+        id2head,
+    }
+}
 
-    //find all the dependencies in the bodies and build the DAG (hopefully it's a DAG)
+fn build_terminals_dag(
+    terms: &TerminalsFragmentsHelper,
+    nonterms: &HashMap<String, String>,
+) -> Result<[Vec<BTreeSet<usize>>; 2], ParseError> {
+    let mut graph = vec![BTreeSet::<usize>::new(); terms.prods.len()];
+    //where each "recursive token" starts and ends
+    let mut split = vec![BTreeSet::<usize>::new(); terms.prods.len()];
     let re = Regex::new(r"\w+").unwrap();
-    for terminal in &merge {
+    for terminal in terms.prods.iter() {
         let term_head = *terminal.0;
         let term_body = *terminal.1;
-        let term_id = *map2ids.get(term_head).unwrap(); //this DEFINITELY exists
+        let term_id = *terms.head2id.get(term_head).unwrap(); //this DEFINITELY exists
+        split[term_id].insert(0);
+        split[term_id].insert((*terminal.1).len());
         for mat in re.find_iter(term_body) {
             // the terminal referenced (dependency to be satisfied)
             let dep = &term_body[mat.start()..mat.end()];
             //this is NOT guaranteed to exist! the regex can match literals!
-            match map2ids.get(dep) {
+            match terms.head2id.get(dep) {
                 Some(dep_id) => {
                     //build the graph
                     graph[term_id].insert(*dep_id);
-                    transpose[*dep_id].insert(term_id);
                     //and record the position in the string of the terminal
-                    split_here[term_id].insert(mat.start());
-                    split_here[term_id].insert(mat.end());
+                    split[term_id].insert(mat.start());
+                    split[term_id].insert(mat.end());
                 }
                 None => {
-                    if grammar.non_terminals.contains_key(dep) {
+                    if nonterms.contains_key(dep) {
                         //more specific error in case a non-term is referenced
                         return Err(ParseError::SyntaxError {
                             message: format!(
@@ -268,16 +287,22 @@ fn solve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInter
             }
         }
     }
+    Ok([graph, split])
+}
 
-    //if the dependencies can be satisfied, replace them
+fn replace_terminals(
+    terms: &TerminalsFragmentsHelper,
+    graph: &[BTreeSet<usize>],
+    split: &[BTreeSet<usize>],
+) -> Result<HashMap<String, String>, ParseError> {
     let mut new_terminals = HashMap::<String, String>::new();
-    if let Some(order) = topological_sort(&graph) {
+    if let Some(order) = topological_sort(graph) {
         for node in order {
-            let body = *merge.get(id2head[node]).unwrap();
+            let body = *terms.prods.get(&terms.id2head[node]).unwrap();
             if !graph[node].is_empty() {
                 let mut last_split = 0_usize;
                 //
-                let new_body = split_here[node]
+                let new_body = split[node]
                     .iter()
                     .map(|idx| {
                         let mut ret = String::with_capacity(*idx - last_split + 2);
@@ -299,22 +324,17 @@ fn solve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInter
                     })
                     .collect::<Vec<_>>()
                     .join("");
-                new_terminals.insert(id2head[node].to_string(), new_body);
+                new_terminals.insert(terms.id2head[node].to_owned(), new_body);
             } else {
-                new_terminals.insert(id2head[node].to_string(), body.to_string());
+                new_terminals.insert(terms.id2head[node].to_owned(), body.to_owned());
             }
         }
+        Ok(new_terminals)
     } else {
-        return Err(ParseError::SyntaxError {
-            message: "Lexer contains cyclic productions!".to_string(),
-        });
+        Err(ParseError::SyntaxError {
+            message: "Lexer contains cyclic productions!".to_owned(),
+        })
     }
-    Ok(GrammarInternal {
-        terminals: new_terminals,
-        non_terminals: grammar.non_terminals,
-        fragments: grammar.fragments,
-        order: grammar.order,
-    })
 }
 
 /// Performs a topological sort using an iterative DFS.
