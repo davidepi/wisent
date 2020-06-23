@@ -1,44 +1,54 @@
-use crate::grammar;
-use grammar::Grammar;
 use std::collections::{BTreeSet, HashMap};
+
+use grammar::Grammar;
+
+use crate::grammar;
 
 #[test]
 //Asserts the method len() returns the sum of terminal and non terminals
 fn grammar_len() {
-    let mut g = Grammar {
-        terminals: HashMap::new(),
-        non_terminals: HashMap::new(),
-    };
+    let mut g = Grammar::new(
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+    );
     assert_eq!(g.len(), 0);
-    let mut terminals = HashMap::new();
-    let mut non_terminals = HashMap::new();
-    terminals.insert("S".to_string(), "[a-z]".to_string());
-    non_terminals.insert("a".to_string(), "SS".to_string());
-    non_terminals.insert("b".to_string(), "C".to_string());
-    g = Grammar {
-        terminals,
-        non_terminals,
-    };
-    assert_eq!(g.len(), 3);
+    let mut terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    let mut non_terminals = vec![
+        "LETTER_UP | LETTER_LO".to_owned(),
+        "word letter | letter".to_owned(),
+    ];
+    let mut names = vec![
+        "LETTER_LO".to_owned(),
+        "LETTER_UP".to_owned(),
+        "letter".to_owned(),
+        "word".to_owned(),
+    ];
+    let mut g = Grammar::new(&terminals, &non_terminals, &names);
+    assert_eq!(g.len(), 4);
 }
 
 #[test]
 //Asserts the method is_empty() works as expected
 fn grammar_is_empty() {
-    let mut g = Grammar {
-        terminals: HashMap::new(),
-        non_terminals: HashMap::new(),
-    };
+    let mut g = Grammar::new(
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+    );
     assert!(g.is_empty());
-    let mut terminals = HashMap::new();
-    let mut non_terminals = HashMap::new();
-    terminals.insert("S".to_string(), "[a-z]".to_string());
-    non_terminals.insert("a".to_string(), "SS".to_string());
-    non_terminals.insert("b".to_string(), "C".to_string());
-    g = Grammar {
-        terminals,
-        non_terminals,
-    };
+    let mut terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    let mut non_terminals = vec![
+        "LETTER_UP | LETTER_LO".to_owned(),
+        "word letter | letter".to_owned(),
+    ];
+    let mut names = vec![
+        "LETTER_LO".to_owned(),
+        "LETTER_UP".to_owned(),
+        "letter".to_owned(),
+        "word".to_owned(),
+    ];
+    let mut g = Grammar::new(&terminals, &non_terminals, &names);
     assert!(!g.is_empty());
 }
 
@@ -101,7 +111,39 @@ fn parse_recursive_fragments() {
 }
 
 #[test]
-//Asserts that the C ANTLR grammar is parsed correctly
+//Asserts that a simple grammar is parsed correctly.
+fn parse_simple_grammar_correctly() {
+    match grammar::parse_grammar("./resources/simple_grammar.txt") {
+        Ok(g) => assert_eq!(
+            g.len(),
+            6,
+            "Grammar was parsed correctly, but a different number of production was expected"
+        ),
+        Err(_) => assert!(false, "Simple grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that the order of the production is kept unchanged (between terminals and non-terminals)
+fn order_unchanged() {
+    match grammar::parse_grammar("./resources/simple_grammar.txt") {
+        Ok(g) => {
+            assert_eq!(g.names[0], "TEXT");
+            assert_eq!(g.terminals[0], "~[,\\n\\r\"]+ ");
+            assert_eq!(g.names[1], "STRING");
+            assert_eq!(g.terminals[1], "'\"' ('\"\"'|~'\"')* '\"' ");
+            assert_eq!(g.names[2], "csvFile");
+            assert_eq!(g.names[3], "hdr");
+            assert_eq!(g.names[4], "row");
+            assert_eq!(g.non_terminals[2], "field (',' field)* '\\r'? '\\n' ");
+            assert_eq!(g.names[5], "field");
+        }
+        Err(_) => assert!(false, "Simple grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that the C ANTLR grammar is parsed correctly. This grammar is longer than the CSV one.
 fn parse_c_grammar_correctly() {
     match grammar::parse_grammar("./resources/c_grammar.txt") {
         Ok(g) => assert_eq!(

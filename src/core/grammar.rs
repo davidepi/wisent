@@ -1,16 +1,33 @@
-use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
 use std::{iter::Peekable, str::Chars};
+
+use regex::Regex;
 
 use crate::error::ParseError;
 
 #[derive(Debug)]
 pub struct Grammar {
-    pub terminals: HashMap<String, String>,
-    pub non_terminals: HashMap<String, String>,
+    pub terminals: Vec<String>,
+    pub non_terminals: Vec<String>,
+    pub names: Vec<String>,
+}
+
+struct GrammarInternal {
+    terminals: HashMap<String, String>,
+    non_terminals: HashMap<String, String>,
+    fragments: HashMap<String, String>,
+    order: Vec<String>,
 }
 
 impl Grammar {
+    pub fn new(terminals: &[String], non_terminals: &[String], names: &[String]) -> Grammar {
+        Grammar {
+            terminals: terminals.to_vec(),
+            non_terminals: non_terminals.to_vec(),
+            names: names.to_vec(),
+        }
+    }
+
     /// Returns the total number of productions. This includes terminals and
     /// non-terminals but not fragments.
     /// ## Returns
@@ -31,11 +48,44 @@ impl Grammar {
 pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
     let grammar_content = std::fs::read_to_string(path)?;
     let productions = retrieve_productions(&grammar_content);
-    let frags = build_grammar(productions)?;
-    // validate productions and categorize them into terminal or non-terminal
-    // based on their uppercase or lowercase letter
-    let grammar = solve_terminals_dependencies(frags.0, frags.1)?;
+    let grammar_rec = build_grammar(productions)?;
+    let grammar_not_rec = solve_terminals_dependencies(grammar_rec)?;
+    let grammar = reindex(grammar_not_rec);
     Ok(grammar)
+}
+
+/// Transforms the Unordered maps of the GrammarInternal into the indexed Vec of the Grammar
+/// GrammarInternal uses an Hash-based indexing because it's more convenient for productions removal
+/// (i.e. fragments). Grammar instead, uses a more efficient numerical indexing. Given that the
+/// index matters, especially for the lexer, this method transform a GrammarInternal into a Grammar
+/// while keeping the original indexing
+/// ## Arguments
+/// * `grammar` - A grammar represented with a GrammarInternal
+/// ## Returns
+/// A grammar represented with a `Grammar` struct
+fn reindex(grammar: GrammarInternal) -> Grammar {
+    let mut terminals = Vec::with_capacity(grammar.terminals.len());
+    let mut non_terminals = Vec::with_capacity(grammar.non_terminals.len());
+    let mut names_t = Vec::with_capacity(grammar.terminals.len());
+    let mut names_nt = Vec::with_capacity(grammar.non_terminals.len());
+    //the new order will be: first every terminal, then every non-terminal. In the original order.
+    for head in grammar.order.into_iter() {
+        if let Some(body) = grammar.terminals.get(&head) {
+            terminals.push(body.to_owned());
+            names_t.push(head);
+        } else if let Some(body) = grammar.non_terminals.get(&head) {
+            non_terminals.push(body.to_owned());
+            names_nt.push(head);
+        } else {
+            panic!("Expected production to be either in terminals or non terminals.");
+        }
+    }
+    names_t.extend(names_nt.into_iter());
+    Grammar {
+        terminals,
+        non_terminals,
+        names: names_t,
+    }
 }
 
 /// Categorizes various productions into terminal, non-terminal and
@@ -55,18 +105,17 @@ pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
 /// * `Err(ParseError)` - A ParseError object containing a description of the
 /// error
 ///
-fn build_grammar(
-    productions: Vec<String>,
-) -> Result<(Grammar, HashMap<String, String>), ParseError> {
+fn build_grammar(productions: Vec<String>) -> Result<GrammarInternal, ParseError> {
     let mut terminals = HashMap::new();
     let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
+    let mut order = Vec::new();
     //the capt.group of this regex will be passed to p_re so I need to include ;
     let f_re = r"\s*fragment\s+((?:.|\n)+;)";
     let p_re = r"\s*(\w+)\s*:\s*((?:.|\n)+);";
     let re_fr = Regex::new(f_re).unwrap(); //fragment detection
     let re_pd = Regex::new(p_re).unwrap(); //production detection
-    for production in &productions {
+    for production in productions.iter() {
         let mut is_fragment = false;
         let mut prod = &production[..];
         if let Some(matches) = re_fr.captures(prod) {
@@ -79,15 +128,18 @@ fn build_grammar(
                 let rule = matches.get(2).map_or("", |m| m.as_str()).to_string();
                 if name.chars().next().unwrap().is_lowercase() {
                     if !is_fragment {
-                        non_terminals.insert(name, rule);
+                        non_terminals.insert(name.to_owned(), rule);
+                        order.push(name);
                     } else {
                         return Err(ParseError::SyntaxError {
                             message: format!("Fragments should be lowercase: {}", production),
                         });
                     }
                 } else if !is_fragment {
-                    terminals.insert(name, rule);
+                    terminals.insert(name.to_owned(), rule);
+                    order.push(name);
                 } else {
+                    //no position recorded for fragments
                     fragments.insert(name, rule);
                 }
             }
@@ -98,13 +150,12 @@ fn build_grammar(
             }
         }
     }
-    Ok((
-        Grammar {
-            terminals,
-            non_terminals,
-        },
+    Ok(GrammarInternal {
+        terminals,
+        non_terminals,
         fragments,
-    ))
+        order,
+    })
 }
 
 /// Removes the fragments from lexer rules by effectively replacing them with
@@ -119,17 +170,14 @@ fn build_grammar(
 /// replaced with its actual body
 /// * `Err(ParseError)` - A syntax error in case the lexer or the fragments
 /// reference parser rules (forbidden by the specification)
-fn solve_terminals_dependencies(
-    grammar: Grammar,
-    fragments: HashMap<String, String>,
-) -> Result<Grammar, ParseError> {
-    let mut merge = fragments
-        .iter()
-        .map(|(k, v)| (&k[..], &v[..]))
-        .collect::<HashMap<&str, &str>>();
-    merge.extend(grammar.terminals.iter().map(|(k, v)| (&k[..], &v[..])));
+fn solve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInternal, ParseError> {
+    let fragments_iter = grammar.fragments.iter().map(|(k, v)| (&k[..], &v[..]));
+    let terminals_iter = grammar.terminals.iter().map(|(k, v)| (&k[..], &v[..]));
+    let merge = fragments_iter
+        .chain(terminals_iter)
+        .collect::<HashMap<_, _>>();
     //create a map assigning an index to each production head. Also creates the
-    //adiacency list containing the other productions used recursively in the body
+    //adjacency list containing the other productions used recursively in the body
     let heads_no = merge.len();
     let mut head2id = HashMap::new();
     let mut id2head = vec![""; heads_no];
@@ -154,7 +202,7 @@ fn solve_terminals_dependencies(
         let term_body = *terminal.1;
         let term_id = *map2ids.get(term_head).unwrap(); //this DEFINITELY exists
         for mat in re.find_iter(term_body) {
-            // the terminal referenced (depdendency to be satisfied)
+            // the terminal referenced (dependency to be satisfied)
             let dep = &term_body[mat.start()..mat.end()];
             //this is NOT guaranteed to exist! the regex can match literals!
             match map2ids.get(dep) {
@@ -222,13 +270,11 @@ fn solve_terminals_dependencies(
             message: "Lexer contains cyclic productions!".to_string(),
         });
     }
-    //remove the fragments as I don't need them anymore
-    for fragment in fragments {
-        new_terminals.remove(&fragment.0);
-    }
-    Ok(Grammar {
+    Ok(GrammarInternal {
         terminals: new_terminals,
         non_terminals: grammar.non_terminals,
+        fragments: grammar.fragments,
+        order: grammar.order,
     })
 }
 
@@ -245,8 +291,10 @@ pub(super) fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> 
     //to defer the node into post-order.
     #[derive(Clone, PartialEq)]
     enum Mark {
-        NONE,      //Node untouched
-        TEMPORARY, //Current node being processed
+        NONE,
+        //Node untouched
+        TEMPORARY,
+        //Current node being processed
         PERMANENT, //All the children of this node has been processed
     };
     let mut visited = vec![Mark::NONE; graph.len()];
@@ -361,7 +409,7 @@ fn consume_line(it: &mut Peekable<Chars>) {
 
 /// Advances the iterator until the given character and appends all the
 /// encountered characters. This function takes into account also escape
-/// character, so if the given charcater is ', this won't  stop in case a \' is
+/// character, so if the given character is ', this won't  stop in case a \' is
 /// encountered.
 /// ## Arguments
 /// * `it` - The iterator that will be advanced
