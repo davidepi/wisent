@@ -7,24 +7,22 @@ use crate::error::ParseError;
 
 #[derive(Debug)]
 pub struct Grammar {
-    pub terminals: Vec<String>,
-    pub non_terminals: Vec<String>,
-    pub names: Vec<String>,
-}
-
-struct GrammarInternal {
-    terminals: HashMap<String, String>,
-    non_terminals: HashMap<String, String>,
-    fragments: HashMap<String, String>,
-    order: Vec<String>,
+    terminals: Vec<String>,
+    non_terminals: Vec<String>,
+    names: HashMap<String, (usize, bool)>,
 }
 
 impl Grammar {
     pub fn new(terminals: &[String], non_terminals: &[String], names: &[String]) -> Grammar {
+        let mut map = HashMap::new();
+        for (idx, item) in names.iter().enumerate() {
+            let term = idx < terminals.len();
+            map.insert(item.to_owned(), (idx, term));
+        }
         Grammar {
             terminals: terminals.to_vec(),
             non_terminals: non_terminals.to_vec(),
-            names: names.to_vec(),
+            names: map,
         }
     }
 
@@ -43,15 +41,53 @@ impl Grammar {
     pub fn is_empty(&self) -> bool {
         self.terminals.is_empty() && self.non_terminals.is_empty()
     }
+
+    pub fn get(&self, head: &str) -> Option<&str> {
+        if let Some(found) = self.names.get(head) {
+            if found.1 {
+                Some(&self.terminals[found.0])
+            } else {
+                Some(&self.non_terminals[found.0])
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn at(&self, index: usize) -> &str {
+        let idx;
+        if index < self.terminals.len() {
+            idx = index;
+            &self.terminals[idx]
+        } else {
+            idx = index - self.terminals.len();
+            &self.non_terminals[idx]
+        }
+    }
+
+    pub fn iter_term(&self) -> std::slice::Iter<String> {
+        self.terminals.iter()
+    }
+
+    pub fn iter_nonterm(&self) -> std::slice::Iter<String> {
+        self.non_terminals.iter()
+    }
+
+    pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
+        let grammar_content = std::fs::read_to_string(path)?;
+        let productions = retrieve_productions(&grammar_content);
+        let grammar_rec = build_grammar(productions)?;
+        let grammar_not_rec = solve_terminals_dependencies(grammar_rec)?;
+        let grammar = reindex(grammar_not_rec);
+        Ok(grammar)
+    }
 }
 
-pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
-    let grammar_content = std::fs::read_to_string(path)?;
-    let productions = retrieve_productions(&grammar_content);
-    let grammar_rec = build_grammar(productions)?;
-    let grammar_not_rec = solve_terminals_dependencies(grammar_rec)?;
-    let grammar = reindex(grammar_not_rec);
-    Ok(grammar)
+struct GrammarInternal {
+    terminals: HashMap<String, String>,
+    non_terminals: HashMap<String, String>,
+    fragments: HashMap<String, String>,
+    order: Vec<String>,
 }
 
 /// Transforms the Unordered maps of the GrammarInternal into the indexed Vec of the Grammar
@@ -66,25 +102,28 @@ pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
 fn reindex(grammar: GrammarInternal) -> Grammar {
     let mut terminals = Vec::with_capacity(grammar.terminals.len());
     let mut non_terminals = Vec::with_capacity(grammar.non_terminals.len());
-    let mut names_t = Vec::with_capacity(grammar.terminals.len());
-    let mut names_nt = Vec::with_capacity(grammar.non_terminals.len());
+    let mut names = HashMap::with_capacity(grammar.terminals.len() + grammar.non_terminals.len());
     //the new order will be: first every terminal, then every non-terminal. In the original order.
     for head in grammar.order.into_iter() {
+        let idx;
+        let term;
         if let Some(body) = grammar.terminals.get(&head) {
+            idx = terminals.len();
+            term = true;
             terminals.push(body.to_owned());
-            names_t.push(head);
         } else if let Some(body) = grammar.non_terminals.get(&head) {
+            idx = non_terminals.len();
+            term = false;
             non_terminals.push(body.to_owned());
-            names_nt.push(head);
         } else {
             panic!("Expected production to be either in terminals or non terminals.");
         }
+        names.insert(head, (idx, term));
     }
-    names_t.extend(names_nt.into_iter());
     Grammar {
         terminals,
         non_terminals,
-        names: names_t,
+        names,
     }
 }
 

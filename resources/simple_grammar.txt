@@ -33,9 +33,5 @@ csvFile: hdr row+ ;
 hdr : row ;
 row : field (',' field)* '\r'? '\n' ;
 TEXT   : ~[,\n\r"]+ ;
-field
-    : TEXT
-    | STRING
-    |
-    ;
+field: TEXT| STRING|;
 STRING : '"' ('""'|~'"')* '"' ; // quote-quote is an escaped quote
