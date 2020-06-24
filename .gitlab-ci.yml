@@ -1,42 +1,62 @@
-image: rust:latest
-
 stages:
+  - commitlint
+  - markdownlint
   - syntax
   - lint
   - build
   - test
   - coverage
 
-before_script:
-  - rustup show
+commitlint:
+  stage: commitlint
+  script:
+    - npm install
+    - npm run commitlint
+  image: node:latest
+
+markdownlint:
+  stage: markdownlint
+  script:
+    - npm install
+    - npm run markdownlint
+  image: node:latest
 
 syntax:
   stage: syntax
   script:
+    - rustup show
     - rustup component add rustfmt
     - cargo fmt -- --check
+  image: rust:latest
 
 lint:
   stage: lint
   script:
+    - rustup show
     - rustup component add clippy
     - cargo check --all-features --tests
     - cargo clean
     - cargo clippy --all-features --tests -- -D warnings
+  image: rust:latest
 
 build:
   stage: build
   script:
+    - rustup show
     - cargo build
+  image: rust:latest
 
 test:
   stage: test
   script:
+    - rustup show
     - cargo test
+  image: rust:latest
 
 coverage:
   stage: coverage
   script:
+    - rustup show
     - curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -
     - ./grcov --version
     - export CARGO_INCREMENTAL=0
@@ -47,3 +67,4 @@ coverage:
     - cargo +nightly test
     - ./grcov ./target/debug/ -s . --commit-sha="${CI_COMMIT_SHA}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t html -o ./target/debug/coverage
     - cat ./target/debug/coverage/index.html
+  image: rust:latest
