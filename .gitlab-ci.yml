@@ -1,27 +1,26 @@
 stages:
-  - commitlint
-  - markdownlint
+  - commit
   - syntax
   - lint
   - build
   - test
   - coverage
 
-commitlint:
-  stage: commitlint
+commit-convention:
+  stage: commit
   script:
     - npm install
     - npm run commitlint
   image: node:latest
 
-markdownlint:
-  stage: markdownlint
+markdown-lint:
+  stage: syntax
   script:
     - npm install
     - npm run markdownlint
   image: node:latest
 
-syntax:
+rust-fmt:
   stage: syntax
   script:
     - rustup show
@@ -29,7 +28,7 @@ syntax:
     - cargo fmt -- --check
   image: rust:latest
 
-lint:
+rust-clippy:
   stage: lint
   script:
     - rustup show
@@ -39,21 +38,21 @@ lint:
     - cargo clippy --all-features --tests -- -D warnings
   image: rust:latest
 
-build:
+rust-build:
   stage: build
   script:
     - rustup show
     - cargo build
   image: rust:latest
 
-test:
+rust-test:
   stage: test
   script:
     - rustup show
     - cargo test
   image: rust:latest
 
-coverage:
+rust-coverage:
   stage: coverage
   script:
     - rustup show
