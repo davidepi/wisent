@@ -5,8 +5,17 @@ executors:
     docker:
       - image: circleci/rust:latest
     resource_class: small
+  node:
+    docker:
+      - image: circleci/node:latest
+    resource_class: small
 
 commands:
+  install_npm_dependencies:
+    steps:
+      - run:
+          name: Installing yarn dependencies
+          command: npm install
   print_rust_version:
     steps:
       - run:
@@ -17,6 +26,22 @@ commands:
             cargo --version
 
 jobs:
+  commitlint:
+    executor: node
+    steps:
+      - checkout
+      - install_npm_dependencies
+      - run:
+          name: Running commitlint
+          command: npm run commitlint
+  markdownlint:
+    executor: node
+    steps:
+      - checkout
+      - install_npm_dependencies
+      - run:
+          name: Running markdownlint
+          command: npm run markdownlint
   rust-fmt:
     executor: rust
     steps:
@@ -94,6 +119,12 @@ jobs:
           command: bash <(curl -s https://codecov.io/bash) -f ./target/debug/coverage/lcov.info -n "${CIRCLE_BUILD_NUM}"
 
 workflows:
+  commitlint:
+    jobs:
+      - commitlint
+  markdownlint:
+    jobs:
+      - markdownlint
   rust-fmt:
     jobs:
       - rust-fmt
