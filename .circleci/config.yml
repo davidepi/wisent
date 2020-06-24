@@ -69,7 +69,7 @@ jobs:
           command: cargo clean
       - run:
           name: Running cargo clippy
-          command: cargo clippy --all-features --tests -- -D warnings
+          command: cargo clippy --all-features -- -D warnings
   rust-build:
     executor: rust
     steps:

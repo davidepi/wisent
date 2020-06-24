@@ -35,7 +35,7 @@ rust-clippy:
     - rustup component add clippy
     - cargo check --all-features --tests
     - cargo clean
-    - cargo clippy --all-features --tests -- -D warnings
+    - cargo clippy --all-features -- -D warnings
   image: rust:latest
 
 rust-build:
