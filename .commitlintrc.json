@@ -35,11 +35,9 @@
       2,
       "always",
       [
-        "core",
-        "cli",
-        "android",
-        "ios",
-        "web"
+        "grammar",
+        "lexer",
+        "parser"
       ]
     ],
     "subject-case": [
