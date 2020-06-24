@@ -114,7 +114,7 @@ fn parse_fragments_lowercase_naming() {
         Ok(_) => assert!(false, "Expected a syntax error!"),
         Err(e) => assert_eq!(
             e.to_string(),
-            "SyntaxError: Fragments should be lowercase: fragment digit: [0-9]+;"
+            "SyntaxError: Fragments should be uppercase: fragment digit: [0-9]+;"
         ),
     }
 }

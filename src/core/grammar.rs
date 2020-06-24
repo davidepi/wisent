@@ -7,13 +7,44 @@ use regex::Regex;
 use crate::error::ParseError;
 
 #[derive(Debug)]
+/// Struct representing a parsed grammar.
+/// This struct stores terminal and non-terminal productions in the form `head`:`body`; and allows
+/// to access every `body` given a particular `head`
 pub struct Grammar {
+    //vector containing the bodies of the terminal productions
     terminals: Vec<String>,
+    //vector containing the bodies of the non-terminal productions
     non_terminals: Vec<String>,
+    //map assigning a tuple (index, is_terminal?) to the productions' heads
     names: HashMap<String, (usize, bool)>,
 }
 
 impl Grammar {
+    /// Constructs a new Grammar with the given terminals and non terminals.
+    /// No checks will be performed on the productions naming and no recursion will be resolved.
+    /// This method is used mostly for debug purposes, and `parse_grammar()` should be used.
+    /// # Arguments
+    /// * `terminals` - A slice of strings representing the terminal productions' bodies.
+    /// * `non_terminals` - A slice of strings representing the non_terminal productions' bodies.
+    /// * `names` - A slice of strings representing the names of every terminal and non terminal in
+    /// order. First all the terminals are read, then the non-terminals.
+    /// # Returns
+    /// The newly created Grammar struct.
+    /// # Examples
+    /// ```
+    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    /// let non_terminals = vec![
+    ///     "LETTER_UPPERCASE | LETTER_LOWERCASE".to_owned(),
+    ///     "word letter | letter".to_owned(),
+    /// ];
+    /// let names = vec![
+    ///     "LETTER_LOWERCASE".to_owned(),
+    ///     "LETTER_UPPERCASE".to_owned(),
+    ///     "letter".to_owned(),
+    ///     "word".to_owned(),
+    /// ];
+    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// ```
     pub fn new(terminals: &[String], non_terminals: &[String], names: &[String]) -> Grammar {
         let mut map = HashMap::new();
         for (idx, item) in names.iter().enumerate() {
@@ -27,22 +58,63 @@ impl Grammar {
         }
     }
 
-    /// Returns the total number of productions. This includes terminals and
-    /// non-terminals but not fragments.
-    /// ## Returns
+    /// Returns the total number of productions. This includes terminals and non-terminals but not
+    /// fragments.
+    /// # Returns
     /// A number representing the sum of terminals and non-terminals productions.
+    /// # Examples
+    /// ```
+    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    /// let non_terminals = vec![
+    ///     "LETTER_UPPERCASE | LETTER_LOWERCASE".to_owned(),
+    ///     "word letter | letter".to_owned(),
+    /// ];
+    /// let names = vec![
+    ///     "LETTER_LOWERCASE".to_owned(),
+    ///     "LETTER_UPPERCASE".to_owned(),
+    ///     "letter".to_owned(),
+    ///     "word".to_owned(),
+    /// ];
+    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// assert_eq!(grammar.len(), 4);
+    /// ```
     pub fn len(&self) -> usize {
         self.terminals.len() + self.non_terminals.len()
     }
 
-    /// Checks if the grammar has no productions. This comprises both terminals
-    /// and non terminals.
-    /// ## Returns
+    /// Checks if the grammar has no productions.
+    /// This comprises both terminals and non terminals.
+    /// # Returns
     /// True if the grammar has exactly 0 productions, false otherwise.
+    /// # Examples
+    /// ```
+    /// let grammar = wisent::grammar::Grammar::new(
+    ///     Vec::new().as_slice(),
+    ///     Vec::new().as_slice(),
+    ///     Vec::new().as_slice(),
+    /// );
+    /// assert!(grammar.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.terminals.is_empty() && self.non_terminals.is_empty()
     }
 
+    /// Returns the production body associated to a given head.
+    /// Productions are expressed in the form `head: body;`. This method takes the `head` and
+    /// returns the given `body` or None if the production does not exists.
+    /// # Arguments
+    /// * `head` - The head, or name, of the production.
+    /// # Returns
+    /// An option containing the given production body or None if the production does not exists.
+    /// # Examples
+    /// ```
+    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    /// let non_terminals = vec!["".to_owned()];
+    /// let names = vec!["LETTER_LOWERCASE".to_owned(), "LETTER_UPPERCASE".to_owned()];
+    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let body = grammar.get("LETTER_LOWERCASE").unwrap();
+    /// assert_eq!(body, "[a-z]");
+    /// ```
     pub fn get(&self, head: &str) -> Option<&str> {
         if let Some(found) = self.names.get(head) {
             if found.1 {
@@ -55,19 +127,72 @@ impl Grammar {
         }
     }
 
+    /// Returns an iterator over the terminals slice.
+    /// This method is just a wrapper of `iter()` and as such does not take ownership.
+    /// # Returns
+    /// An iterator over the terminals slice.
+    /// # Examples
+    /// ```
+    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    /// let non_terminals = vec!["LETTER_LOWERCASE | LETTER_UPPERCASE".to_owned()];
+    /// let names = vec![
+    ///     "LETTER_LOWERCASE".to_owned(),
+    ///     "LETTER_UPPERCASE".to_owned(),
+    ///     "letter".to_owned(),
+    /// ];
+    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let mut iterator = grammar.iter_term();
+    /// assert_eq!(iterator.next(), Some(&"[a-z]".to_owned()));
+    /// assert_eq!(iterator.next(), Some(&"[A-Z]".to_owned()));
+    /// assert_eq!(iterator.next(), None);
+    /// ```
     pub fn iter_term(&self) -> std::slice::Iter<String> {
         self.terminals.iter()
     }
 
+    /// Returns an iterator over the non-terminals slice.
+    /// This method is just a wrapper of `iter()` and as such does not take ownership.
+    /// # Returns
+    /// An iterator over the non-terminals slice.
+    /// # Examples
+    /// ```
+    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    /// let non_terminals = vec!["LETTER_LOWERCASE | LETTER_UPPERCASE".to_owned()];
+    /// let names = vec![
+    ///     "LETTER_LOWERCASE".to_owned(),
+    ///     "LETTER_UPPERCASE".to_owned(),
+    ///     "letter".to_owned(),
+    /// ];
+    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let mut iterator = grammar.iter_nonterm();
+    /// assert_eq!(
+    ///     iterator.next(),
+    ///     Some(&"LETTER_LOWERCASE | LETTER_UPPERCASE".to_owned())
+    /// );
+    /// assert_eq!(iterator.next(), None);
+    /// ```
     pub fn iter_nonterm(&self) -> std::slice::Iter<String> {
         self.non_terminals.iter()
     }
 
+    /// Builds a grammar from an ANTLR `.g4` file.
+    /// This method construct and initialize a Grammar class by parsing an external specification
+    /// written in a `.g4` file.
+    /// # Arguments
+    /// * `path` - The path pointing to the `.g4` file.
+    /// # Results
+    /// The newly constructed grammar or an error.
+    /// # Errors
+    /// A ParseError in case the file cannot be found or contains syntax errors.
+    /// # Examples
+    /// ```no_run
+    /// let grammar = wisent::grammar::Grammar::parse_grammar("Rust.g4").unwrap();
+    /// ```
     pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
         let grammar_content = std::fs::read_to_string(path)?;
         let productions = retrieve_productions(&grammar_content);
-        let grammar_rec = build_grammar(productions)?;
-        let grammar_not_rec = solve_terminals_dependencies(grammar_rec)?;
+        let grammar_rec = split_head_body(productions)?;
+        let grammar_not_rec = resolve_terminals_dependencies(grammar_rec)?;
         let grammar = reindex(grammar_not_rec);
         Ok(grammar)
     }
@@ -88,22 +213,29 @@ impl Index<usize> for Grammar {
     }
 }
 
+///struct used internally. hash map are less space efficient but easier to use during constructions
+///at some point I also drop the fragments map, but I prefer to pass them around using a single
+///struct.
 struct GrammarInternal {
+    ///`key`:`value`; map containing terminals.
     terminals: HashMap<String, String>,
+    ///`key`:`value`; map containing non-terminals.
     non_terminals: HashMap<String, String>,
+    ///`key`:`value`; map containing fragments.
     fragments: HashMap<String, String>,
+    ///array containing every production `key` in the order they appear in the file.
     order: Vec<String>,
 }
 
-/// Transforms the Unordered maps of the GrammarInternal into the indexed Vec of the Grammar
+/// Transforms the Unordered maps of the GrammarInternal into the indexed Vec of the Grammar.
 /// GrammarInternal uses an Hash-based indexing because it's more convenient for productions removal
 /// (i.e. fragments). Grammar instead, uses a more efficient numerical indexing. Given that the
 /// index matters, especially for the lexer, this method transform a GrammarInternal into a Grammar
 /// while keeping the original indexing
-/// ## Arguments
-/// * `grammar` - A grammar represented with a GrammarInternal
-/// ## Returns
-/// A grammar represented with a `Grammar` struct
+/// # Arguments
+/// * `grammar` - A grammar represented with a GrammarInternal.
+/// # Returns
+/// A grammar represented with a `Grammar` struct.
 fn reindex(grammar: GrammarInternal) -> Grammar {
     let mut terminals = Vec::with_capacity(grammar.terminals.len());
     let mut non_terminals = Vec::with_capacity(grammar.non_terminals.len());
@@ -132,24 +264,17 @@ fn reindex(grammar: GrammarInternal) -> Grammar {
     }
 }
 
-/// Categorizes various productions into terminal, non-terminal and
-/// fragments. Then splits them into head and body, assuming productions in
-/// the form `head:body;`
-/// ## Arguments
-/// * `productions` - A vector of String where each String is a production
-/// ending with `;`. This vector may contain fragments, but in this case the
-/// fragment keyword must be passed as well.
-/// ## Returns
-/// A Result object with the following types:
-/// * `Ok(Grammar, HashMap<String, String>)` - A tuple containing the following
-/// items:
-///     1. a Grammar, comprised of terminals and non-terminals
-///     1. an HashMap comprised of fragments with the left side of the fragment
-///     as key and the right side as value
-/// * `Err(ParseError)` - A ParseError object containing a description of the
-/// error
-///
-fn build_grammar(productions: Vec<String>) -> Result<GrammarInternal, ParseError> {
+/// Categorizes various productions into terminal, non-terminal and fragments. Then splits them into
+/// head and body, assuming productions in the form `head:body;`
+/// # Arguments
+/// * `productions` - A vector of String where each String is a production ending with `;`. This
+/// vector may contain fragments, but in this case the fragment keyword must be passed as well.
+/// # Returns
+/// A GrammarInternal containing the built grammar, with recursive lexing rules and fragments yet to
+/// be removed.
+/// # Errors
+/// SyntaxError if fragments does not start with uppercase letter
+fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseError> {
     let mut terminals = HashMap::new();
     let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
@@ -176,7 +301,7 @@ fn build_grammar(productions: Vec<String>) -> Result<GrammarInternal, ParseError
                         order.push(name);
                     } else {
                         return Err(ParseError::SyntaxError {
-                            message: format!("Fragments should be lowercase: {}", production),
+                            message: format!("Fragments should be uppercase: {}", production),
                         });
                     }
                 } else if !is_fragment {
@@ -202,25 +327,18 @@ fn build_grammar(productions: Vec<String>) -> Result<GrammarInternal, ParseError
     })
 }
 
-struct TerminalsFragmentsHelper<'a> {
-    prods: HashMap<&'a str, &'a str>,
-    head2id: HashMap<&'a str, usize>,
-    id2head: Vec<&'a str>,
-}
-
-/// Removes the fragments from lexer rules by effectively replacing them with
-/// their production body. Additionally, solves the recursion in Lexer rules
-/// (this should not be a thing at all but it's allowed by ANTLR...)
-/// ## Arguments
-/// * `grammar` - A Grammar containing a set of terminals and non-terminals
-/// * `fragments` - An HashMap containing the fragments. The key is the head of
-/// the production and the value is the body.
-/// ## Returns
-/// * `Ok(Grammar)` - The grammar with every fragment and lexer rule recursion
-/// replaced with its actual body
-/// * `Err(ParseError)` - A syntax error in case the lexer or the fragments
-/// reference parser rules (forbidden by the specification)
-fn solve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInternal, ParseError> {
+/// Removes the fragments from lexer rules by effectively replacing them with their production body.
+/// Additionally, solves the recursion in Lexer rules (this should not be a thing at all but it's
+/// allowed by ANTLR...).
+/// # Arguments
+/// * `grammar` - A Grammar containing a set of terminals and non-terminals.
+/// * `fragments` - An HashMap containing the fragments. The key is the head of the production and
+/// the value is the body.
+/// # Returns
+/// A GrammarInternal object where each terminals does NOT contain recursive rules.
+/// # Errors
+/// SyntaxError if the terminals have cyclic dependencies or calls non-terminals productions.
+fn resolve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInternal, ParseError> {
     let terms = merge_terminals_fragments(&grammar);
     let graph = build_terminals_dag(&terms, &grammar.non_terminals)?;
     let new_terminals = replace_terminals(&terms, &graph[0], &graph[1])?;
@@ -232,6 +350,23 @@ fn solve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInter
     })
 }
 
+/// Helper struct used to contain an hash map and unique ids referencing to each key-value pair.
+struct TerminalsFragmentsHelper<'a> {
+    /// An hash map.
+    prods: HashMap<&'a str, &'a str>,
+    /// Maps each key of the map to an unique, sequential number.
+    head2id: HashMap<&'a str, usize>,
+    /// Maps each unique sequential number to a key of the map.
+    id2head: Vec<&'a str>,
+}
+
+/// Merge together the fragments and the terminals in a single map and assigns a temporary index to
+/// each production (this index will be used for dependency graph and is independent of the
+/// production order index).
+/// # Arguments
+/// * `grammar` - The grammar from where terminals and fragments will be extracted.
+/// # Returns
+/// The generated merged struct.
 fn merge_terminals_fragments(grammar: &GrammarInternal) -> TerminalsFragmentsHelper {
     let fragments_iter = grammar.fragments.iter().map(|(k, v)| (&k[..], &v[..]));
     let terminals_iter = grammar.terminals.iter().map(|(k, v)| (&k[..], &v[..]));
@@ -251,6 +386,22 @@ fn merge_terminals_fragments(grammar: &GrammarInternal) -> TerminalsFragmentsHel
     }
 }
 
+/// Builds the dependency graph of each terminal rule and fragment rule in relation with the others.
+/// # Arguments
+/// * `terms` - The helper struct created with the `merge_terminals_fragments()` function.
+/// * `nonterms` - An HashMasp containing the key value pair for every non terminal production.
+/// This map is used for error checking.
+/// # Returns
+/// Two arrays. Each index in the array correspond to a node ID (IDs can be found inside `term`) and
+/// contains a set. The set for the two arrays contains:
+/// * `[1]` - The dependencies in form of adjacency list: if a node A references productions B and
+/// C, its adjacency list will contain the index of B and C.
+/// * `[2] - For each node, the position in the body production (in bytes) where a recursive word
+/// starts and ends. For example the body `'_' | DIGIT` will contain the indices where the word
+/// `DIGIT` starts and ends. This will be useful to remove this word and replace it with the actual
+/// production.
+/// # Errors
+/// SyntaxError if terminal rules refer non-terminal rules.
 fn build_terminals_dag(
     terms: &TerminalsFragmentsHelper,
     nonterms: &HashMap<String, String>,
@@ -295,6 +446,17 @@ fn build_terminals_dag(
     Ok([graph, split])
 }
 
+/// Given the results of `build_terminals_dag()`, this function actually replaces the terminals with
+/// the actual production, in the correct order.
+/// # Arguments
+/// * `terms` - The helper struct created with the `merge_terminals_fragments()` function.
+/// * `graph` - The dependencies graph created with the function `build_terminals_dag()`.
+/// * `split` - The recursive rule positions obtained with the function `build_terminals_dag()`.
+/// # Returns
+/// An HashMap containing every terminal rule (including the fragments) with no dependencies on
+/// other terminal rules.
+/// # Errors
+/// SyntaxError if the productions form cycles.
 fn replace_terminals(
     terms: &TerminalsFragmentsHelper,
     graph: &[BTreeSet<usize>],
@@ -343,9 +505,9 @@ fn replace_terminals(
 }
 
 /// Performs a topological sort using an iterative DFS.
-/// ## Arguments
+/// # Arguments
 /// * `graph` - A graph represented as adjacency list.
-/// ## Returns
+/// # Returns
 /// * `Some(value)` - a Vec containing the ordered indices if graph was a DAG.
 /// * `None` - if the graph was not acyclic.
 pub(super) fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
@@ -394,14 +556,13 @@ pub(super) fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> 
 }
 
 /// Retrieves every production from a `.g4` grammar.
-/// This effectively works by removing every comment and then splitting over ;
-/// tokens that are not quoted, although in this functions is implemented as a
-/// single pass.
+/// This effectively works by removing every comment and then splitting over ; tokens that are not
+/// quoted, although in this functions is implemented as a single pass.
 /// The comments removed are the multiline `/*`-`*/` and single line `//`, `#`.
-/// ## Arguments
+/// # Arguments
 /// * `content` - A string containing the original `.g4` grammar content.
 /// * `filename` - The name of the original file parsed.
-/// ## Returns
+/// # Returns
 /// A vector of string representing the productions of the original grammar.
 /// Each element represents a single production.
 fn retrieve_productions(content: &str) -> Vec<String> {
@@ -458,11 +619,10 @@ fn retrieve_productions(content: &str) -> Vec<String> {
         .collect()
 }
 
-/// Advances the iterator until the next `\n` character.
-/// Also the last `\n` is discarded.
-/// ## Arguments
-/// * `it` The iterator that will be advanced
-/// * `ret` The string where the final \n will be appended
+/// Advances the iterator until the next `\n` character. Also the last `\n` is discarded.
+/// # Arguments
+/// * `it` The iterator that will be advanced.
+/// * `ret` The string where the final \n will be appended.
 fn consume_line(it: &mut Peekable<Chars>) {
     for skip in it {
         if skip == '\n' {
@@ -471,15 +631,14 @@ fn consume_line(it: &mut Peekable<Chars>) {
     }
 }
 
-/// Advances the iterator until the given character and appends all the
-/// encountered characters. This function takes into account also escape
-/// character, so if the given character is ', this won't  stop in case a \' is
-/// encountered.
-/// ## Arguments
-/// * `it` - The iterator that will be advanced
-/// * `ret` - The string where the various character will be appended
-/// * `until` - The character that will stop the method. Escaped versions of
-/// this character won't be considered
+/// Advances the iterator until the given character and appends all the encountered characters.
+/// This function takes into account also escape character, so if the given character is ', this
+/// won't  stop in case a \' is encountered.
+/// # Arguments
+/// * `it` - The iterator that will be advanced.
+/// * `ret` - The string where the various character will be appended.
+/// * `until` - The character that will stop the method. Escaped versions of this character won't be
+/// considered.
 fn append_until(it: &mut Peekable<Chars>, ret: &mut String, until: char) {
     let mut escapes = 0;
     for push in it {
