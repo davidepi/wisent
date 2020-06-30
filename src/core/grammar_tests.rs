@@ -28,6 +28,50 @@ fn grammar_len() {
 }
 
 #[test]
+//Asserts the method len() returns the sum of terminal and non terminals
+fn grammar_len_term() {
+    let g = Grammar::new(
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+    );
+    assert_eq!(g.len(), 0);
+    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    let non_terminals = vec![
+        "LETTER_UP | LETTER_LO".to_owned(),
+        "word letter | letter".to_owned(),
+    ];
+    let names = vec![
+        "LETTER_LO".to_owned(),
+        "LETTER_UP".to_owned(),
+        "letter".to_owned(),
+        "word".to_owned(),
+    ];
+    let g = Grammar::new(&terminals, &non_terminals, &names);
+    assert_eq!(g.len_term(), 2);
+}
+
+#[test]
+//Asserts the method len() returns the sum of terminal and non terminals
+fn grammar_len_nonterm() {
+    let g = Grammar::new(
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+        Vec::new().as_slice(),
+    );
+    assert_eq!(g.len(), 0);
+    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    let non_terminals = vec!["LETTER_UP | LETTER_LO".to_owned()];
+    let names = vec![
+        "LETTER_LO".to_owned(),
+        "LETTER_UP".to_owned(),
+        "letter".to_owned(),
+    ];
+    let g = Grammar::new(&terminals, &non_terminals, &names);
+    assert_eq!(g.len_nonterm(), 1);
+}
+
+#[test]
 //Asserts the method is_empty() works as expected
 fn grammar_is_empty() {
     let g = Grammar::new(
@@ -70,6 +114,24 @@ fn grammar_crafted() {
     assert_eq!(g[1], "[A-Z]");
     assert_eq!(g[2], "LETTER_UP | LETTER_LO");
     assert_eq!(g[3], "word letter | letter");
+}
+
+#[test]
+//Asserts that a grammar content can be parsed (without invoking the file)
+fn grammar_parse_string() {
+    let g = "grammar g;
+    letter: LETTER_UP | LETTER_LO;
+    word: word letter | letter;
+    LETTER_UP: [A-Z];
+    LETTER_LO: [a-z];";
+    match Grammar::parse_string(g) {
+        Ok(g) => {
+            assert_eq!(g.len(), 4);
+            assert_eq!(g.len_term(), 2);
+            assert_eq!(g.len_nonterm(), 2);
+        }
+        Err(_) => assert!(false, "Failed to parse grammar string"),
+    }
 }
 
 #[test]

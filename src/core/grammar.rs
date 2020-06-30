@@ -22,7 +22,8 @@ pub struct Grammar {
 impl Grammar {
     /// Constructs a new Grammar with the given terminals and non terminals.
     /// No checks will be performed on the productions naming and no recursion will be resolved.
-    /// This method is used mostly for debug purposes, and `parse_grammar()` should be used.
+    /// This method is used mostly for debug purposes, and `parse_grammar()` or `parse_string()`
+    /// should be used.
     /// # Arguments
     /// * `terminals` - A slice of strings representing the terminal productions' bodies.
     /// * `non_terminals` - A slice of strings representing the non_terminal productions' bodies.
@@ -64,22 +65,51 @@ impl Grammar {
     /// A number representing the sum of terminals and non-terminals productions.
     /// # Examples
     /// ```
-    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    /// let non_terminals = vec![
-    ///     "LETTER_UPPERCASE | LETTER_LOWERCASE".to_owned(),
-    ///     "word letter | letter".to_owned(),
-    /// ];
-    /// let names = vec![
-    ///     "LETTER_LOWERCASE".to_owned(),
-    ///     "LETTER_UPPERCASE".to_owned(),
-    ///     "letter".to_owned(),
-    ///     "word".to_owned(),
-    /// ];
-    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let g = "grammar g;
+    ///     letter: LETTER_UP | LETTER_LO;
+    ///     word: word letter | letter;
+    ///     LETTER_UP: [A-Z];
+    ///     LETTER_LO: [a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
     /// assert_eq!(grammar.len(), 4);
     /// ```
     pub fn len(&self) -> usize {
         self.terminals.len() + self.non_terminals.len()
+    }
+
+    /// Returns the total number of terminal productions.
+    /// Note that fragments are excluded from the count, as they are merged within the terminals and
+    /// non-terminals.
+    /// # Returns
+    /// A number representing the amount of terminals.
+    /// # Examples
+    /// ```
+    /// let g = "grammar g;
+    ///     letter: LETTER_UP | LETTER_LO;
+    ///     word: word letter | letter;
+    ///     LETTER_UP: [A-Z];
+    ///     LETTER_LO: [a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// assert_eq!(grammar.len_term(), 2);
+    /// ```
+    pub fn len_term(&self) -> usize {
+        self.terminals.len()
+    }
+
+    /// Returns the total number of non-terminal productions.
+    /// # Returns
+    /// A number representing the amount of non-terminals.
+    /// # Examples
+    /// ```
+    /// let g = "grammar g;
+    ///          letter: LETTER_UP | LETTER_LO;
+    ///          LETTER_UP: [A-Z];
+    ///          LETTER_LO: [a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// assert_eq!(grammar.len_nonterm(), 1);
+    /// ```
+    pub fn len_nonterm(&self) -> usize {
+        self.non_terminals.len()
     }
 
     /// Checks if the grammar has no productions.
@@ -108,10 +138,10 @@ impl Grammar {
     /// An option containing the given production body or None if the production does not exists.
     /// # Examples
     /// ```
-    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    /// let non_terminals = vec!["".to_owned()];
-    /// let names = vec!["LETTER_LOWERCASE".to_owned(), "LETTER_UPPERCASE".to_owned()];
-    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let g = "grammar g;
+    /// LETTER_UPPERCASE: [A-Z];
+    /// LETTER_LOWERCASE: [a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
     /// let body = grammar.get("LETTER_LOWERCASE").unwrap();
     /// assert_eq!(body, "[a-z]");
     /// ```
@@ -133,14 +163,12 @@ impl Grammar {
     /// An iterator over the terminals slice.
     /// # Examples
     /// ```
-    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    /// let non_terminals = vec!["LETTER_LOWERCASE | LETTER_UPPERCASE".to_owned()];
-    /// let names = vec![
-    ///     "LETTER_LOWERCASE".to_owned(),
-    ///     "LETTER_UPPERCASE".to_owned(),
-    ///     "letter".to_owned(),
-    /// ];
-    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let g = "grammar g;
+    ///     letter: LETTER_UP | LETTER_LO;
+    ///     word: word letter | letter;
+    ///     LETTER_LO: [a-z];
+    ///     LETTER_UP: [A-Z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
     /// let mut iterator = grammar.iter_term();
     /// assert_eq!(iterator.next(), Some(&"[a-z]".to_owned()));
     /// assert_eq!(iterator.next(), Some(&"[A-Z]".to_owned()));
@@ -156,19 +184,13 @@ impl Grammar {
     /// An iterator over the non-terminals slice.
     /// # Examples
     /// ```
-    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    /// let non_terminals = vec!["LETTER_LOWERCASE | LETTER_UPPERCASE".to_owned()];
-    /// let names = vec![
-    ///     "LETTER_LOWERCASE".to_owned(),
-    ///     "LETTER_UPPERCASE".to_owned(),
-    ///     "letter".to_owned(),
-    /// ];
-    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let g = "grammar g;
+    ///     letter:LT_LO | LT_UP;
+    ///     LT_LO: [a-z];
+    ///     LT_U: [A-Z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
     /// let mut iterator = grammar.iter_nonterm();
-    /// assert_eq!(
-    ///     iterator.next(),
-    ///     Some(&"LETTER_LOWERCASE | LETTER_UPPERCASE".to_owned())
-    /// );
+    /// assert_eq!(iterator.next(), Some(&"LT_LO | LT_UP".to_owned()));
     /// assert_eq!(iterator.next(), None);
     /// ```
     pub fn iter_nonterm(&self) -> std::slice::Iter<String> {
@@ -176,8 +198,9 @@ impl Grammar {
     }
 
     /// Builds a grammar from an ANTLR `.g4` file.
-    /// This method construct and initialize a Grammar class by parsing an external specification
+    /// This method constructs and initializes a Grammar class by parsing an external specification
     /// written in a `.g4` file.
+    /// This method effectively reads the files and forward the content to `parse_string()`
     /// # Arguments
     /// * `path` - The path pointing to the `.g4` file.
     /// # Results
@@ -190,7 +213,26 @@ impl Grammar {
     /// ```
     pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
         let grammar_content = std::fs::read_to_string(path)?;
-        let productions = retrieve_productions(&grammar_content);
+        Self::parse_string(&grammar_content[..])
+    }
+
+    /// Builds a grammar from a String with the content of an ANTLR `.g4` file.
+    /// This method constructs and initializes a Grammar class by parsing a String following the
+    /// ANTLR `.g4` specification
+    /// # Arguments
+    /// * `content` - The content of the `.g4` file.
+    /// # Results
+    /// The newly constructed grammar or an error.
+    /// # Errors
+    /// A ParseError in case the String contains syntax errors.
+    /// # Examples
+    /// ```
+    /// let cont = "grammar g; letter:[a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(cont).unwrap();
+    /// assert_eq!(grammar.len(), 1);
+    /// ```
+    pub fn parse_string(content: &str) -> Result<Grammar, ParseError> {
+        let productions = retrieve_productions(&content);
         let grammar_rec = split_head_body(productions)?;
         let grammar_not_rec = resolve_terminals_dependencies(grammar_rec)?;
         let grammar = reindex(grammar_not_rec);
@@ -389,7 +431,7 @@ fn merge_terminals_fragments(grammar: &GrammarInternal) -> TerminalsFragmentsHel
 /// Builds the dependency graph of each terminal rule and fragment rule in relation with the others.
 /// # Arguments
 /// * `terms` - The helper struct created with the `merge_terminals_fragments()` function.
-/// * `nonterms` - An HashMasp containing the key value pair for every non terminal production.
+/// * `nonterms` - An HashMap containing the key value pair for every non terminal production.
 /// This map is used for error checking.
 /// # Returns
 /// Two arrays. Each index in the array correspond to a node ID (IDs can be found inside `term`) and
