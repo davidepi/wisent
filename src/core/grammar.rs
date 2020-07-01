@@ -178,8 +178,11 @@ impl Grammar {
     ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
     ///     LETTER_LOWERCASE: [a-z];";
     /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
-    /// assert_eq!(grammar.action("LETTER_LOWERCASE"), "");
-    /// assert_eq!(grammar.action("LETTER_UPPERCASE"), "mode,mode(NEW_MODE)");
+    /// let act_lo = grammar.action("LETTER_LOWERCASE").unwrap();
+    /// let mut act_up = grammar.action("LETTER_UPPERCASE").unwrap().iter();
+    /// assert_eq!(*act_up.next().unwrap(), wisent::grammar::Action::MORE);
+    /// assert_eq!(*act_up.next().unwrap(), wisent::grammar::Action::MODE("NEW_MODE".to_owned()));
+    /// assert!(act_lo.is_empty());
     /// ```
     pub fn action(&self, head: &str) -> Option<&BTreeSet<Action>> {
         if let Some(found) = self.names.get(head) {
@@ -205,8 +208,11 @@ impl Grammar {
     ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
     ///     LETTER_LOWERCASE: [a-z];";
     /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
-    /// assert_eq!(grammar.action_nth(0), "mode,mode(NEW_MODE)");
-    /// assert_eq!(grammar.action_nth(1), "");
+    /// let mut actions0 = grammar.action_nth(0).iter();
+    /// let actions1 = grammar.action_nth(1);
+    /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MORE);
+    /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MODE("NEW_MODE".to_owned()));
+    /// assert!(actions1.is_empty());
     /// ```
     pub fn action_nth(&self, index: usize) -> &BTreeSet<Action> {
         &self.actions[index]
@@ -311,13 +317,33 @@ impl Index<usize> for Grammar {
 }
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+/// Enum representing the possible lexer actions supported by the ANTLR lexer. These actions are
+/// default operations that aims to give language-independent instruction to the lexer.
+///
+/// These action are expressed after a production in the form `head: body -> action;` where action
+/// can assume only specific values.
+///
+/// A brief documentation is provided for each action, but the user should refer to the ANTLR
+/// reference.
 pub enum Action {
+    ///Action telling the lexer to not return the matched token.
     SKIP,
+    /// Action telling the lexer to match the current rule but continue collecting tokens.
     MORE,
+    /// Action assigning a specific type for the matched token.
+    /// The type is passed as a String parameter.
     TYPE(String),
+    /// Action telling the lexer to switch to a specific channel after matching the token.
+    /// The name of the channel is passed as a String parameter.
     CHANNEL(String),
+    /// After matching the token, the lexer will switch to the mode passed as String. Only rules
+    /// matching the newly passed mode will be matched.
     MODE(String),
+    /// Same behaviour of `Action::MODE` but the mode is pushed on a stack, to be later popped by
+    /// `Action::POPMODE`.
     PUSHMODE(String),
+    /// After matching the token, pop a mode from the mode stack and continue matching tokens using
+    /// the mode on the top of the stack.
     POPMODE,
 }
 
@@ -562,6 +588,9 @@ fn build_terminals_dag(
     Ok([graph, split])
 }
 
+/// Inner type used only in `replace_terminals()`. Check that function doc for a description.
+type TerminalsActionsMap = (HashMap<String, String>, HashMap<String, BTreeSet<Action>>);
+
 /// Given the results of `build_terminals_dag()`, this function actually replaces the terminals with
 /// the actual production, in the correct order.
 /// # Arguments
@@ -572,15 +601,14 @@ fn build_terminals_dag(
 /// Two HashMaps:
 /// * the first containing every terminal rule (including the fragments) with no dependencies on
 /// other terminal rules.
-/// * the second containing every action for every terminal
+/// * the second containing every action for every terminal name
 /// # Errors
-/// SyntaxError if the productions form cycles or the lexer rules are contradictory (like assigning
-/// two different modes)
+/// SyntaxError if the productions form cycles or the lexer rules are illegal
 fn replace_terminals(
     terms: &TerminalsFragmentsHelper,
     graph: &[BTreeSet<usize>],
     split: &[BTreeSet<usize>],
-) -> Result<(HashMap<String, String>, HashMap<String, BTreeSet<Action>>), ParseError> {
+) -> Result<TerminalsActionsMap, ParseError> {
     let mut new_terminals = HashMap::<String, String>::new();
     let mut new_actions = HashMap::<String, BTreeSet<Action>>::new();
     if let Some(order) = topological_sort(graph) {
@@ -627,6 +655,16 @@ fn replace_terminals(
     }
 }
 
+/// Given the body of a terminal production, splits it into actual body and lexer rule.
+/// # Arguments
+/// * `body` - The body of a terminal production.
+/// # Returns
+/// A tuple containing
+/// * The body without the action. For example `a -> skip` will return `a`.
+/// * A Set containing every Action for the current production. For example `a -> skip, popMode`
+/// will return a set containing `Action::SKIP` and `Action::POPMODE`
+/// # Errors
+/// SyntaxError if the action is illegal
 fn get_actions(body: &str) -> Result<(String, BTreeSet<Action>), ParseError> {
     let mut action_builder = String::with_capacity(body.len());
     let mut body_iter = body.chars().rev().peekable();
@@ -665,6 +703,13 @@ fn get_actions(body: &str) -> Result<(String, BTreeSet<Action>), ParseError> {
     }
 }
 
+/// Match a specific action into an enum. Just a wrapper to split longer functions.
+/// # Arguments
+/// * `act` - The text representing a SINGLE action
+/// # Returns
+/// The action expressed as the Action enum
+/// # Errors
+/// SyntaxError if the action is illegal
 fn match_action(act: &str) -> Result<Action, ParseError> {
     match act {
         "skip" => Ok(Action::SKIP),
@@ -749,7 +794,7 @@ pub(super) fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> 
 /// Retrieves every production from a `.g4` grammar.
 /// This effectively works by removing every comment and then splitting over ; tokens that are not
 /// quoted, although in this functions is implemented as a single pass.
-/// The comments removed are the multiline `/*`-`*/` and single line `//`, `#`.
+/// The comments removed are the multi-line `/*`-`*/` and single line `//`, `#`.
 /// # Arguments
 /// * `content` - A string containing the original `.g4` grammar content.
 /// * `filename` - The name of the original file parsed.
@@ -810,6 +855,13 @@ fn retrieve_productions(content: &str) -> Vec<String> {
         .collect()
 }
 
+/// Removes whitespaces and embedded actions from a production in a context-aware fashion.
+/// For example the production `[ ]+ | a -> channel (NAME) { embedded };` becomes
+/// `[ ]+|a->channel(NAME)`
+/// # Arguments
+/// * `terminal` - The body of a terminal production.
+/// # Returns
+/// The body without spaces, excluding the one inside [] or '' blocks and without embedded rules
 fn clean_ws(terminal: &str) -> String {
     let mut new = String::with_capacity(terminal.len());
     let mut it = terminal.chars().peekable();
