@@ -1,0 +1,13 @@
+grammar idk;
+
+Skip: a -> skip;
+More: a -> more;
+TypeFull: a -> type(TypeName);
+TypeEmpty: a-> type();
+ChannelFull: a-> channel(ChannelName );
+ChannelEmpty: a-> channel();
+ModeFull: a-> mode( ChannelName);
+ModeEmpty: a-> mode();
+PushModeFull: a-> pushMode(ChannelName);
+PushModeEmpty: a-> pushMode();
+PopMode: a->popMode;

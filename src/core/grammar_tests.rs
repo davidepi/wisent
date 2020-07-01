@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::grammar;
-use crate::grammar::Grammar;
+use crate::grammar::{Action, Grammar};
 
 #[test]
 //Asserts the method len() returns the sum of terminal and non terminals
@@ -210,8 +210,8 @@ fn parse_simple_grammar_correctly() {
 fn get_production() {
     match Grammar::parse_grammar("./resources/simple_grammar.txt") {
         Ok(g) => {
-            assert_eq!(g.get("TEXT").unwrap(), "~[,\\n\\r\"]+ ");
-            assert_eq!(g.get("STRING").unwrap(), "'\"' ('\"\"'|~'\"')* '\"' ");
+            assert_eq!(g.get("TEXT").unwrap(), "~[,\\n\\r\"]+");
+            assert_eq!(g.get("STRING").unwrap(), "'\"'('\"\"'|~'\"')*'\"'");
             assert_eq!(g.get("csvFile").unwrap(), "hdr row+ ");
             assert_eq!(g.get("hdr").unwrap(), "row ");
             assert_eq!(g.get("row").unwrap(), "field (',' field)* '\\r'? '\\n' ");
@@ -227,8 +227,8 @@ fn get_production() {
 fn order_unchanged_at() {
     match Grammar::parse_grammar("./resources/simple_grammar.txt") {
         Ok(g) => {
-            assert_eq!(g[0], "~[,\\n\\r\"]+ ");
-            assert_eq!(g[1], "'\"' ('\"\"'|~'\"')* '\"' ");
+            assert_eq!(g[0], "~[,\\n\\r\"]+");
+            assert_eq!(g[1], "'\"'('\"\"'|~'\"')*'\"'");
             assert_eq!(g[2], "hdr row+ ");
             assert_eq!(g[3], "row ");
             assert_eq!(g[4], "field (',' field)* '\\r'? '\\n' ");
@@ -244,8 +244,8 @@ fn order_unchanged_iter_term() {
     match Grammar::parse_grammar("./resources/simple_grammar.txt") {
         Ok(g) => {
             let vec = g.iter_term().as_slice();
-            assert_eq!(vec[0], "~[,\\n\\r\"]+ ");
-            assert_eq!(vec[1], "'\"' ('\"\"'|~'\"')* '\"' ");
+            assert_eq!(vec[0], "~[,\\n\\r\"]+");
+            assert_eq!(vec[1], "'\"'('\"\"'|~'\"')*'\"'");
         }
         Err(_) => assert!(false, "Simple grammar failed to parse"),
     }
@@ -263,6 +263,118 @@ fn order_unchanged_iter_nonterm() {
             assert_eq!(vec[3], "TEXT| STRING|");
         }
         Err(_) => assert!(false, "Simple grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that a grammar is parsed and the actions extracted correctly.
+//Simpler version with trivial body and single action.
+fn parse_actions_simpler() {
+    match Grammar::parse_grammar("./resources/lexer_actions_simpler.txt") {
+        Ok(g) => {
+            assert_eq!(
+                *g.action("Skip").unwrap().iter().next().unwrap(),
+                Action::SKIP
+            );
+            assert_eq!(
+                *g.action("More").unwrap().iter().next().unwrap(),
+                Action::MORE
+            );
+            assert_eq!(
+                *g.action("PopMode").unwrap().iter().next().unwrap(),
+                Action::POPMODE
+            );
+            assert_eq!(
+                *g.action("TypeEmpty").unwrap().iter().next().unwrap(),
+                Action::TYPE("".to_owned())
+            );
+            assert_eq!(
+                *g.action("TypeFull").unwrap().iter().next().unwrap(),
+                Action::TYPE("TypeName".to_owned())
+            );
+            assert_eq!(
+                *g.action("ChannelEmpty").unwrap().iter().next().unwrap(),
+                Action::CHANNEL("".to_owned())
+            );
+            assert_eq!(
+                *g.action("ChannelFull").unwrap().iter().next().unwrap(),
+                Action::CHANNEL("ChannelName".to_owned())
+            );
+            assert_eq!(
+                *g.action("ModeEmpty").unwrap().iter().next().unwrap(),
+                Action::MODE("".to_owned())
+            );
+            assert_eq!(
+                *g.action("ModeFull").unwrap().iter().next().unwrap(),
+                Action::MODE("ChannelName".to_owned())
+            );
+            assert_eq!(
+                *g.action("PushModeEmpty").unwrap().iter().next().unwrap(),
+                Action::PUSHMODE("".to_owned())
+            );
+            assert_eq!(
+                *g.action("PushModeFull").unwrap().iter().next().unwrap(),
+                Action::PUSHMODE("ChannelName".to_owned())
+            );
+        }
+        Err(_) => assert!(false, "grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that a grammar is parsed and the actions extracted correctly.
+//Harder version with multiple actions and tricky -> productions
+fn parse_actions_harder() {
+    match Grammar::parse_grammar("./resources/lexer_actions_harder.txt") {
+        Ok(g) => {
+            assert!(g.action("Dashbrack").unwrap().is_empty());
+            assert_eq!(g.action("Whitespace").unwrap().len(), 2);
+            let mut ws_iter = g.action("Whitespace").unwrap().iter();
+            assert_eq!(*ws_iter.next().unwrap(), Action::MORE);
+            assert_eq!(
+                *ws_iter.next().unwrap(),
+                Action::CHANNEL("CHANNEL_NAME".to_owned())
+            );
+            assert_eq!(
+                *g.action("Newline").unwrap().iter().next().unwrap(),
+                Action::SKIP
+            );
+            assert_eq!(
+                *g.action("Text").unwrap().iter().next().unwrap(),
+                Action::MORE
+            );
+            assert_eq!(g.action_nth(0), g.action("Dashbrack").unwrap());
+            assert_eq!(g.action_nth(1), g.action("Whitespace").unwrap());
+            assert_eq!(g.action_nth(2), g.action("Newline").unwrap());
+            assert_eq!(g.action_nth(3), g.action("Text").unwrap());
+            assert_eq!(g.action("NONEXISTENT"), None);
+        }
+        Err(_) => assert!(false, "grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that terminal productions are cleaned up of spaces and embedded productions
+//this should be done also in recursive replacement of terminals
+fn terminal_cleaned() {
+    match Grammar::parse_grammar("./resources/lexer_actions_harder.txt") {
+        Ok(g) => {
+            assert_eq!(g.get("Dashbrack").unwrap(), "[a->b\\-\\]]+'->'|([ ]+)");
+            assert_eq!(g.get("Newline").unwrap(), "('\\r''\\n'?|'\\n')");
+        }
+        Err(_) => assert!(false, "grammar failed to parse"),
+    }
+}
+
+#[test]
+//Asserts that invalid lexer actions are reported as errors
+fn invalid_lexer_actions() {
+    match Grammar::parse_grammar("./resources/lexer_invalid_action.txt") {
+        Ok(_) => assert!(
+            false,
+            "Invalid lexer actions should not be able to parse correctly"
+        ),
+        Err(e) => assert_eq!(e.to_string(), "SyntaxError: invalid action `channel(name`"),
     }
 }
 

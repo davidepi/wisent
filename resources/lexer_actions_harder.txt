@@ -1,0 +1,19 @@
+grammar idk;
+
+Dashbrack
+    :   [a->b\-\]]+ '->' { semantic predicate }?
+    |   Whitespace
+    ;
+
+Whitespace
+    :   [ ]+ -> more, channel ( CHANNEL_NAME ) {another action}
+    ;
+
+Newline
+    :   (   '\r' '\n'?
+        |   '\n'
+        )
+        -> skip
+    ;
+
+Text: . -> more;

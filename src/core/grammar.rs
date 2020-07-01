@@ -1,6 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Index;
-use std::{iter::Peekable, str::Chars};
 
 use regex::Regex;
 
@@ -10,9 +9,13 @@ use crate::error::ParseError;
 /// Struct representing a parsed grammar.
 /// This struct stores terminal and non-terminal productions in the form `head`:`body`; and allows
 /// to access every `body` given a particular `head`
+/// This struct also record the lexer actions for each terminal production, but drops any embedded
+/// action as they are language dependent.
 pub struct Grammar {
     //vector containing the bodies of the terminal productions
     terminals: Vec<String>,
+    //lexer actions (ANTLR-specific feature for g4 grammars)
+    actions: Vec<BTreeSet<Action>>,
     //vector containing the bodies of the non-terminal productions
     non_terminals: Vec<String>,
     //map assigning a tuple (index, is_terminal?) to the productions' heads
@@ -55,6 +58,7 @@ impl Grammar {
         Grammar {
             terminals: terminals.to_vec(),
             non_terminals: non_terminals.to_vec(),
+            actions: Vec::new(),
             names: map,
         }
     }
@@ -157,6 +161,57 @@ impl Grammar {
         }
     }
 
+    /// Returns the lexer action for a given terminal name.
+    /// Lexer actions are an ANTLR-specific, language independent feature useful only to the lexer.
+    /// For more information refer to the ANTLR specification.
+    /// # Arguments
+    /// * `head` - The head, or name, of the terminal production.
+    /// # Returns
+    /// A string representing the requested action. The action is guaranteed to be returned WITHOUT
+    /// any space or the arrow `->`. For example the production `[a-z] -> skip` will return `skip`
+    /// as action.
+    /// If the action does not exists, empty string is returned
+    /// If the requested name does not exists, None is returned
+    /// # Examples
+    /// ```
+    /// let g = "grammar g;
+    ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
+    ///     LETTER_LOWERCASE: [a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// assert_eq!(grammar.action("LETTER_LOWERCASE"), "");
+    /// assert_eq!(grammar.action("LETTER_UPPERCASE"), "mode,mode(NEW_MODE)");
+    /// ```
+    pub fn action(&self, head: &str) -> Option<&BTreeSet<Action>> {
+        if let Some(found) = self.names.get(head) {
+            Some(&self.actions[found.0])
+        } else {
+            None
+        }
+    }
+
+    /// Returns the lexer action for a given terminal index.
+    /// Lexer actions are an ANTLR-specific, language independent feature useful only to the lexer.
+    /// For more information refer to the ANTLR specification.
+    /// # Arguments
+    /// * `index` - The index of the terminal production
+    /// # Returns
+    /// A string representing the requested action. The action is guaranteed to be returned WITHOUT
+    /// any space or the arrow `->`. For example the production `[a-z] -> skip` will return `skip`
+    /// as action.
+    /// If the action does not exists, empty string is returned
+    /// # Examples
+    /// ```
+    /// let g = "grammar g;
+    ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
+    ///     LETTER_LOWERCASE: [a-z];";
+    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// assert_eq!(grammar.action_nth(0), "mode,mode(NEW_MODE)");
+    /// assert_eq!(grammar.action_nth(1), "");
+    /// ```
+    pub fn action_nth(&self, index: usize) -> &BTreeSet<Action> {
+        &self.actions[index]
+    }
+
     /// Returns an iterator over the terminals slice.
     /// This method is just a wrapper of `iter()` and as such does not take ownership.
     /// # Returns
@@ -255,6 +310,17 @@ impl Index<usize> for Grammar {
     }
 }
 
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum Action {
+    SKIP,
+    MORE,
+    TYPE(String),
+    CHANNEL(String),
+    MODE(String),
+    PUSHMODE(String),
+    POPMODE,
+}
+
 ///struct used internally. hash map are less space efficient but easier to use during constructions
 ///at some point I also drop the fragments map, but I prefer to pass them around using a single
 ///struct.
@@ -267,6 +333,8 @@ struct GrammarInternal {
     fragments: HashMap<String, String>,
     ///array containing every production `key` in the order they appear in the file.
     order: Vec<String>,
+    //`key`:`value`; map containing terminal actions
+    actions: HashMap<String, BTreeSet<Action>>,
 }
 
 /// Transforms the Unordered maps of the GrammarInternal into the indexed Vec of the Grammar.
@@ -278,22 +346,24 @@ struct GrammarInternal {
 /// * `grammar` - A grammar represented with a GrammarInternal.
 /// # Returns
 /// A grammar represented with a `Grammar` struct.
-fn reindex(grammar: GrammarInternal) -> Grammar {
+fn reindex(mut grammar: GrammarInternal) -> Grammar {
     let mut terminals = Vec::with_capacity(grammar.terminals.len());
     let mut non_terminals = Vec::with_capacity(grammar.non_terminals.len());
     let mut names = HashMap::with_capacity(grammar.terminals.len() + grammar.non_terminals.len());
+    let mut actions = Vec::with_capacity(grammar.terminals.len());
     //the new order will be: first every terminal, then every non-terminal. In the original order.
-    for head in grammar.order.into_iter() {
+    for head in grammar.order {
         let idx;
         let term;
-        if let Some(body) = grammar.terminals.get(&head) {
+        if let Some(body) = grammar.terminals.remove(&head) {
             idx = terminals.len();
             term = true;
-            terminals.push(body.to_owned());
-        } else if let Some(body) = grammar.non_terminals.get(&head) {
+            terminals.push(body);
+            actions.push(grammar.actions.remove(&head).unwrap()); //this should exist
+        } else if let Some(body) = grammar.non_terminals.remove(&head) {
             idx = non_terminals.len();
             term = false;
-            non_terminals.push(body.to_owned());
+            non_terminals.push(body);
         } else {
             panic!("Expected production to be either in terminals or non terminals.");
         }
@@ -303,6 +373,7 @@ fn reindex(grammar: GrammarInternal) -> Grammar {
         terminals,
         non_terminals,
         names,
+        actions,
     }
 }
 
@@ -320,6 +391,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
     let mut terminals = HashMap::new();
     let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
+    let actions = HashMap::new();
     let mut order = Vec::new();
     //the capt.group of this regex will be passed to p_re so I need to include ;
     let f_re = r"\s*fragment\s+((?:.|\n)+;)";
@@ -363,6 +435,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
     }
     Ok(GrammarInternal {
         terminals,
+        actions,
         non_terminals,
         fragments,
         order,
@@ -385,7 +458,8 @@ fn resolve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInt
     let graph = build_terminals_dag(&terms, &grammar.non_terminals)?;
     let new_terminals = replace_terminals(&terms, &graph[0], &graph[1])?;
     Ok(GrammarInternal {
-        terminals: new_terminals,
+        terminals: new_terminals.0,
+        actions: new_terminals.1,
         non_terminals: grammar.non_terminals,
         fragments: grammar.fragments,
         order: grammar.order,
@@ -495,23 +569,28 @@ fn build_terminals_dag(
 /// * `graph` - The dependencies graph created with the function `build_terminals_dag()`.
 /// * `split` - The recursive rule positions obtained with the function `build_terminals_dag()`.
 /// # Returns
-/// An HashMap containing every terminal rule (including the fragments) with no dependencies on
+/// Two HashMaps:
+/// * the first containing every terminal rule (including the fragments) with no dependencies on
 /// other terminal rules.
+/// * the second containing every action for every terminal
 /// # Errors
-/// SyntaxError if the productions form cycles.
+/// SyntaxError if the productions form cycles or the lexer rules are contradictory (like assigning
+/// two different modes)
 fn replace_terminals(
     terms: &TerminalsFragmentsHelper,
     graph: &[BTreeSet<usize>],
     split: &[BTreeSet<usize>],
-) -> Result<HashMap<String, String>, ParseError> {
+) -> Result<(HashMap<String, String>, HashMap<String, BTreeSet<Action>>), ParseError> {
     let mut new_terminals = HashMap::<String, String>::new();
+    let mut new_actions = HashMap::<String, BTreeSet<Action>>::new();
     if let Some(order) = topological_sort(graph) {
         for node in order {
-            let body = *terms.prods.get(&terms.id2head[node]).unwrap();
+            let mut body = *terms.prods.get(&terms.id2head[node]).unwrap();
+            let replaced_body;
             if !graph[node].is_empty() {
                 let mut last_split = 0_usize;
                 //
-                let new_body = split[node]
+                replaced_body = split[node]
                     .iter()
                     .map(|idx| {
                         let mut ret = String::with_capacity(*idx - last_split + 2);
@@ -533,16 +612,86 @@ fn replace_terminals(
                     })
                     .collect::<Vec<_>>()
                     .join("");
-                new_terminals.insert(terms.id2head[node].to_owned(), new_body);
-            } else {
-                new_terminals.insert(terms.id2head[node].to_owned(), body.to_owned());
+                body = &replaced_body;
             }
+            let clean_body = clean_ws(body);
+            let action = get_actions(&clean_body)?;
+            new_terminals.insert(terms.id2head[node].to_owned(), action.0);
+            new_actions.insert(terms.id2head[node].to_owned(), action.1);
         }
-        Ok(new_terminals)
+        Ok((new_terminals, new_actions))
     } else {
         Err(ParseError::SyntaxError {
             message: "Lexer contains cyclic productions!".to_owned(),
         })
+    }
+}
+
+fn get_actions(body: &str) -> Result<(String, BTreeSet<Action>), ParseError> {
+    let mut action_builder = String::with_capacity(body.len());
+    let mut body_iter = body.chars().rev().peekable();
+    while let Some(letter) = body_iter.next() {
+        action_builder.push(letter);
+        match letter {
+            '\'' => append_until(&mut body_iter, &mut action_builder, '\''),
+            ']' => append_until(&mut body_iter, &mut action_builder, '['),
+            '>' => {
+                if let Some(next) = body_iter.peek() {
+                    if *next == '-' {
+                        //this is the boundary between lexer rules and actions
+                        action_builder.push(*next);
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    //at this point action_builder either contains `->action` (reversed) or the entire string
+    if action_builder.len() == body.len() {
+        //entire string -> no action found
+        Ok((body.to_owned(), BTreeSet::new()))
+    } else {
+        //action(s) will be converted to enum
+        let clean_body = &body[..body.len() - action_builder.len()];
+        action_builder = action_builder.chars().rev().collect(); //gather correct order
+        let action_str = &action_builder[2..];
+        let mut actions = BTreeSet::new();
+        let action_split: Vec<&str> = action_str.split(',').collect();
+        for act in action_split {
+            actions.insert(match_action(act)?);
+        }
+        Ok((clean_body.to_owned(), actions))
+    }
+}
+
+fn match_action(act: &str) -> Result<Action, ParseError> {
+    match act {
+        "skip" => Ok(Action::SKIP),
+        "more" => Ok(Action::MORE),
+        "popMode" => Ok(Action::POPMODE),
+        _ => {
+            let last_is_par = match act.chars().last() {
+                Some(char) => char == ')',
+                None => false,
+            };
+            if act.starts_with("type(") && last_is_par {
+                let arg = &act[5..act.len() - 1];
+                Ok(Action::TYPE(arg.to_owned()))
+            } else if act.starts_with("channel(") && last_is_par {
+                let arg = &act[8..act.len() - 1];
+                Ok(Action::CHANNEL(arg.to_owned()))
+            } else if act.starts_with("mode(") && last_is_par {
+                let arg = &act[5..act.len() - 1];
+                Ok(Action::MODE(arg.to_owned()))
+            } else if act.starts_with("pushMode(") && last_is_par {
+                let arg = &act[9..act.len() - 1];
+                Ok(Action::PUSHMODE(arg.to_owned()))
+            } else {
+                let message = format!("invalid action `{}`", act);
+                Err(ParseError::SyntaxError { message })
+            }
+        }
     }
 }
 
@@ -633,7 +782,7 @@ fn retrieve_productions(content: &str) -> Vec<String> {
                         }
                     }
                 } else if lookahead == '/' {
-                    consume_line(&mut it);
+                    consume_until(&mut it, '\n', false);
                 } else {
                     ret.push(letter);
                 }
@@ -661,14 +810,55 @@ fn retrieve_productions(content: &str) -> Vec<String> {
         .collect()
 }
 
-/// Advances the iterator until the next `\n` character. Also the last `\n` is discarded.
+fn clean_ws(terminal: &str) -> String {
+    let mut new = String::with_capacity(terminal.len());
+    let mut it = terminal.chars().peekable();
+    while let Some(letter) = it.next() {
+        if !letter.is_whitespace() {
+            new.push(letter);
+            match letter {
+                '\'' => append_until(&mut it, &mut new, '\''),
+                '[' => append_until(&mut it, &mut new, ']'),
+                '{' => {
+                    new.pop();
+                    consume_until(&mut it, '}', false);
+                    //remove semantic predicate as well
+                    if let Some(next) = it.peek() {
+                        if *next == '?' {
+                            it.next();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    new
+}
+
+/// Advances the iterator until the given character.
+/// This function can take into account also escape characters, so if the given character is ', this
+/// won't  stop in case a \' is encountered.
 /// # Arguments
-/// * `it` The iterator that will be advanced.
-/// * `ret` The string where the final \n will be appended.
-fn consume_line(it: &mut Peekable<Chars>) {
+/// * `it` - The iterator that will be advanced.
+/// * `until` - The character that will stop the method. Escaped versions of this character won't be
+/// considered.
+/// * `allow_escapes` - true if escaped character won't stop the function, false otherwise
+fn consume_until<T>(it: &mut T, until: char, allow_escapes: bool)
+where
+    T: Iterator<Item = char>,
+{
+    let mut escapes = 0;
     for skip in it {
-        if skip == '\n' {
-            break;
+        if skip == until {
+            if !allow_escapes || escapes % 2 == 0 {
+                break;
+            }
+            escapes = 0;
+        } else if skip == '\\' {
+            escapes += 1;
+        } else {
+            escapes = 0;
         }
     }
 }
@@ -681,7 +871,10 @@ fn consume_line(it: &mut Peekable<Chars>) {
 /// * `ret` - The string where the various character will be appended.
 /// * `until` - The character that will stop the method. Escaped versions of this character won't be
 /// considered.
-fn append_until(it: &mut Peekable<Chars>, ret: &mut String, until: char) {
+fn append_until<T>(it: &mut T, ret: &mut String, until: char)
+where
+    T: Iterator<Item = char>,
+{
     let mut escapes = 0;
     for push in it {
         ret.push(push);
