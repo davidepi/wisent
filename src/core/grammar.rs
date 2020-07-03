@@ -644,7 +644,7 @@ fn replace_terminals(
             }
             let clean_body = clean_ws(body);
             let action = get_actions(&clean_body)?;
-            new_terminals.insert(terms.id2head[node].to_owned(), action.0);
+            new_terminals.insert(terms.id2head[node].to_owned(), action.0.to_owned());
             new_actions.insert(terms.id2head[node].to_owned(), action.1);
         }
         Ok((new_terminals, new_actions))
@@ -665,7 +665,7 @@ fn replace_terminals(
 /// will return a set containing `Action::SKIP` and `Action::POPMODE`
 /// # Errors
 /// SyntaxError if the action is illegal
-fn get_actions(body: &str) -> Result<(String, BTreeSet<Action>), ParseError> {
+fn get_actions(body: &str) -> Result<(&str, BTreeSet<Action>), ParseError> {
     let mut action_builder = String::with_capacity(body.len());
     let mut body_iter = body.chars().rev().peekable();
     while let Some(letter) = body_iter.next() {
@@ -688,7 +688,7 @@ fn get_actions(body: &str) -> Result<(String, BTreeSet<Action>), ParseError> {
     //at this point action_builder either contains `->action` (reversed) or the entire string
     if action_builder.len() == body.len() {
         //entire string -> no action found
-        Ok((body.to_owned(), BTreeSet::new()))
+        Ok((body, BTreeSet::new()))
     } else {
         //action(s) will be converted to enum
         let clean_body = &body[..body.len() - action_builder.len()];
@@ -699,7 +699,7 @@ fn get_actions(body: &str) -> Result<(String, BTreeSet<Action>), ParseError> {
         for act in action_split {
             actions.insert(match_action(act)?);
         }
-        Ok((clean_body.to_owned(), actions))
+        Ok((clean_body, actions))
     }
 }
 

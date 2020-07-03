@@ -5,3 +5,7 @@ pub mod error;
 pub mod grammar;
 #[cfg(test)]
 mod grammar_tests;
+
+pub mod lexer;
+#[cfg(test)]
+mod lexer_tests;
