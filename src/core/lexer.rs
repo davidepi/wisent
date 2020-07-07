@@ -1,20 +1,22 @@
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
-use std::vec;
-
-use regex::Regex;
 
 use crate::error::ParseError;
 
 pub(super) struct TreeNode<T> {
-    node_type: Operators,
     value: T,
     left: Option<Box<TreeNode<T>>>,
     right: Option<Box<TreeNode<T>>>,
 }
 
-#[derive(PartialEq)]
-enum Operators {
+pub(super) struct Operator<'a> {
+    r#type: OpType,
+    value: &'a str,
+    priority: u8,
+}
+
+#[derive(PartialEq, Debug)]
+enum OpType {
     KLEENE,
     QM,
     PL,
@@ -56,6 +58,8 @@ fn consume_counting_until(
     }
 }
 
+//No clippy, this is not more readable.
+#[allow(clippy::useless_let_if_seq)]
 fn read_token<'a>(
     input: &'a str,
     first: char,
@@ -76,22 +80,25 @@ fn read_token<'a>(
                 it.next();
                 it.next();
                 //then update the counter for the literal length by accounting also the new lit.
-                counted = counted + consume_counting_until(it, '\'')?;
+                counted += consume_counting_until(it, '\'')?;
                 id = &input[..counted + 6];
             }
             Ok(id)
         }
         _ => Err(ParseError::SyntaxError {
-            message: format!("Unsupported literal {}", "all"),
+            message: format!("Unsupported literal {}", input),
         }),
     }
 }
 
-fn combine_nodes(operands: &mut Vec<TreeNode<&str>>, operators: &mut Vec<Operators>) {
+fn combine_nodes<'a>(
+    operands: &mut Vec<TreeNode<Operator<'a>>>,
+    operators: &mut Vec<Operator<'a>>,
+) {
     let operator = operators.pop().unwrap();
     let left;
     let right;
-    if operator == Operators::OR {
+    if operator.r#type == OpType::OR || operator.r#type == OpType::AND {
         //binary operator
         right = Some(Box::new(operands.pop().unwrap()));
         left = Some(Box::new(operands.pop().unwrap()));
@@ -101,123 +108,153 @@ fn combine_nodes(operands: &mut Vec<TreeNode<&str>>, operators: &mut Vec<Operato
         right = None;
     };
     let ret = TreeNode {
-        node_type: operator,
-        value: "",
+        value: operator,
         left,
         right,
     };
     operands.push(ret);
 }
 
-pub(super) fn gen_parse_tree(regex: &str) -> Result<TreeNode<&str>, ParseError> {
-    let mut operands = Vec::new();
-    let mut operators = Vec::new();
+fn tokenize(regex: &str) -> Result<Vec<Operator>, ParseError> {
+    let mut tokenz = Vec::<Operator>::new();
+    let mut balanced = 0;
     let mut iter = regex.chars().peekable().enumerate();
-    let mut consecutive_ids = false; //if last was ID and current is ID add a concatenation
     while let Some((index, char)) = iter.next() {
-        let operator = match char {
-            '*' => Operators::KLEENE,
-            '|' => Operators::OR,
-            '?' => Operators::QM,
-            '+' => Operators::PL,
-            '~' => Operators::NOT,
-            '(' => Operators::LP,
-            ')' => Operators::RP,
-            _ => Operators::ID,
+        let tp;
+        let val;
+        let priority;
+        match char {
+            '*' => {
+                tp = OpType::KLEENE;
+                val = &regex[index..index + 1];
+                priority = 4;
+            }
+            '|' => {
+                tp = OpType::OR;
+                val = &regex[index..index + 1];
+                priority = 1;
+            }
+            '?' => {
+                tp = OpType::QM;
+                val = &regex[index..index + 1];
+                priority = 4;
+            }
+            '+' => {
+                tp = OpType::PL;
+                val = &regex[index..index + 1];
+                priority = 4;
+            }
+            '~' => {
+                tp = OpType::NOT;
+                val = &regex[index..index + 1];
+                priority = 3;
+            }
+            '(' => {
+                tp = OpType::LP;
+                val = &regex[index..index + 1];
+                priority = 5;
+                balanced += 1;
+            }
+            ')' => {
+                tp = OpType::RP;
+                val = &regex[index..index + 1];
+                priority = 5;
+                balanced -= 1;
+            }
+            _ => {
+                tp = OpType::ID;
+                priority = 0;
+                val = read_token(&regex[index..], char, &mut iter)?;
+            }
         };
-        if operator != Operators::ID && consecutive_ids {
-            consecutive_ids = false;
+        if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().r#type, &tp) {
+            tokenz.push(Operator {
+                r#type: OpType::AND,
+                value: "&",
+                priority: 2,
+            })
         }
-        match operator {
-            //operators after operand -> solve last in stack and ALSO this (as I have the operand)
-            Operators::KLEENE | Operators::QM | Operators::PL => {
-                if !operators.is_empty() && *operators.last().unwrap() != Operators::LP {
-                    combine_nodes(&mut operands, &mut operators);
-                }
+        tokenz.push(Operator {
+            r#type: tp,
+            value: val,
+            priority,
+        });
+    }
+    if balanced == 0 {
+        Ok(tokenz)
+    } else {
+        Err(ParseError::SyntaxError {
+            message: format!("Unmatched parentheses in {}", regex),
+        })
+    }
+}
+
+fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
+    let last_is_kleene_family =
+        *last == OpType::KLEENE || *last == OpType::PL || *last == OpType::QM;
+    let cur_is_lp_or_id = *current == OpType::LP || *current == OpType::ID;
+    (last_is_kleene_family && cur_is_lp_or_id)
+        || (*last == OpType::RP && (*current == OpType::NOT || cur_is_lp_or_id))
+        || (*last == OpType::ID && (*current == OpType::NOT || cur_is_lp_or_id))
+}
+
+pub(super) fn gen_parse_tree(regex: &str) -> Result<TreeNode<Operator>, ParseError> {
+    let mut operands = Vec::new();
+    let mut operators: Vec<Operator> = Vec::new();
+    let tokens = tokenize(&regex)?;
+    for operator in tokens {
+        match operator.r#type {
+            //operators after operand with highest priority -> solve immediately
+            OpType::KLEENE | OpType::QM | OpType::PL => {
                 operators.push(operator);
                 combine_nodes(&mut operands, &mut operators);
             }
-            //operators before operand, solve last in stack and push this
-            Operators::OR | Operators::NOT => {
-                if !operators.is_empty() && *operators.last().unwrap() != Operators::LP {
-                    combine_nodes(&mut operands, &mut operators);
+            //operators before operand solve if precedent has higher priority and not (
+            //then push current
+            OpType::NOT | OpType::OR | OpType::AND => {
+                if !operators.is_empty() {
+                    let top = operators.last().unwrap();
+                    if top.priority > operator.priority && top.r#type != OpType::LP {
+                        combine_nodes(&mut operands, &mut operators);
+                    }
                 }
                 operators.push(operator);
             }
-            Operators::LP => operators.push(operator),
-            Operators::RP => {
-                while !operators.is_empty() && *operators.last().unwrap() != Operators::LP {
+            OpType::LP => operators.push(operator),
+            OpType::RP => {
+                while !operators.is_empty() && operators.last().unwrap().r#type != OpType::LP {
                     combine_nodes(&mut operands, &mut operators);
                 }
                 operators.pop();
             }
-            Operators::ID => {
+            OpType::ID => {
                 let leaf = TreeNode {
-                    node_type: Operators::ID,
-                    value: read_token(&regex[index..], char, &mut iter)?,
+                    value: operator,
                     left: None,
                     right: None,
                 };
                 operands.push(leaf);
-                if consecutive_ids {
-                    operators.push(Operators::AND);
-                    combine_nodes(&mut operands, &mut operators);
-                }
-                consecutive_ids = true;
             }
-            Operators::AND => {}
         }
     }
-    //solve all remaining operators (usually unary ones)
+    //solve all remaining operators
     while !operators.is_empty() {
         combine_nodes(&mut operands, &mut operators);
-    }
-    //concatenate all the remaining nodes
-    while operands.len() > 1 {
-        let right = Some(Box::new(operands.pop().unwrap()));
-        let left = Some(Box::new(operands.pop().unwrap()));
-        let node = TreeNode {
-            node_type: Operators::AND,
-            value: "",
-            left,
-            right,
-        };
-        operands.push(node);
     }
     let tree = operands.pop().unwrap();
     Ok(tree)
 }
 
-pub(super) fn tree_json(node: &TreeNode<&str>, stream: &mut String) {
+pub(super) fn tree_json(node: &TreeNode<Operator>, stream: &mut String) {
     stream.push('{');
-    if node.node_type != Operators::ID {
-        stream.push_str("\"id\":\"");
-        match node.node_type {
-            Operators::OR => stream.push('|'),
-            Operators::PL => stream.push('+'),
-            Operators::QM => stream.push('?'),
-            Operators::NOT => stream.push('~'),
-            Operators::KLEENE => stream.push('*'),
-            Operators::AND => stream.push('&'),
-            _ => {}
-        }
-        stream.push_str("\",\"val\":[");
-        if let Some(left) = &node.left {
-            tree_json(left, stream);
-        } else {
-            stream.push_str("{}");
-        }
-        stream.push(',');
-        if let Some(right) = &node.right {
-            tree_json(right, stream);
-        } else {
-            stream.push_str("{}");
-        }
-        stream.push(']');
-    } else {
-        stream.push_str("\"id\":\"ID\",\"val\":\"");
-        stream.push_str(node.value);
-        stream.push('"');
+    stream.push_str(&format!("\"val\":\"{}\"", &node.value.value));
+    if let Some(left) = &node.left {
+        stream.push_str(",\"left\":");
+        tree_json(left, stream);
+    }
+    if let Some(right) = &node.right {
+        stream.push_str(",\"right\":");
+        tree_json(right, stream);
     }
     stream.push('}');
 }

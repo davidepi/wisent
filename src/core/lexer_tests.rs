@@ -16,28 +16,52 @@ fn identify_literal() {
 }
 
 #[test]
-fn regex_parse_tree() {
+//Asserts an error is thrown in case parentheses are unmatched
+fn unmatched_parentheses() {
+    let expr = "('a'|'b'))";
+    match gen_parse_tree(expr) {
+        Ok(_) => assert!(false, "The regexp should be invalid"),
+        Err(e) => assert_eq!(
+            e.to_string(),
+            "SyntaxError: Unmatched parentheses in ('a'|'b'))"
+        ),
+    }
+}
+
+#[test]
+//Asserts correctness in precedence evaluation when parentheses are not present
+fn regex_correct_precedence() {
     let mut expr;
     let mut tree;
     let mut str;
-    expr = "~[a-z]*";
-    tree = gen_parse_tree(expr).unwrap();
-    str = String::new();
-    tree_json(&tree, &mut str);
-    assert_eq!(
-        str,
-        "{\"id\":\"*\",\"val\":[{\"id\":\"~\",\"val\":[{\"id\":\"ID\",\"val\":\"[a-z]\"},{}]},{}]}"
-    );
 
-    expr = "'a'('b'|'c')*'d'";
+    expr = "'a'|'b'*'c'";
     tree = gen_parse_tree(expr).unwrap();
     str = String::new();
     tree_json(&tree, &mut str);
-    assert_eq!(str, "{\"id\":\"&\",\"val\":[{\"id\":\"ID\",\"val\":\"'a'\"},{\"id\":\"&\",\"val\":[{\"id\":\"*\",\"val\":[{\"id\":\"|\",\"val\":[{\"id\":\"ID\",\"val\":\"'b'\"},{\"id\":\"ID\",\"val\":\"'c'\"}]},{}]},{\"id\":\"ID\",\"val\":\"'d'\"}]}]}");
+    assert_eq!(str, "{\"val\":\"|\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"'c'\"}}}");
 
-    expr = "'#'([ \\t]+)?'define'~[#]*";
+    expr = "'a'*('b'|'c')*'d'";
     tree = gen_parse_tree(expr).unwrap();
     str = String::new();
     tree_json(&tree, &mut str);
-    assert_eq!(str,"{\"id\":\"&\",\"val\":[{\"id\":\"ID\",\"val\":\"'#'\"},{\"id\":\"&\",\"val\":[{\"id\":\"?\",\"val\":[{\"id\":\"+\",\"val\":[{\"id\":\"ID\",\"val\":\"[ \\t]\"},{}]},{}]},{\"id\":\"&\",\"val\":[{\"id\":\"ID\",\"val\":\"'define'\"},{\"id\":\"*\",\"val\":[{\"id\":\"~\",\"val\":[{\"id\":\"ID\",\"val\":\"[#]\"},{}]},{}]}]}]}]}");
+    assert_eq!(str, "{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'a'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"'b'\"},\"right\":{\"val\":\"'c'\"}}},\"right\":{\"val\":\"'d'\"}}}");
+
+    expr = "('a')~'b'('c')('d')'e'";
+    tree = gen_parse_tree(expr).unwrap();
+    str = String::new();
+    tree_json(&tree, &mut str);
+    assert_eq!(str, "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'d'\"},\"right\":{\"val\":\"'e'\"}}}}}");
+
+    expr = "'a'~'b''c'('d')";
+    tree = gen_parse_tree(expr).unwrap();
+    str = String::new();
+    tree_json(&tree, &mut str);
+    assert_eq!(str, "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\"right\":{\"val\":\"'d'\"}}}}");
+
+    expr = "'a'?('b'*|'c'*)+'d'";
+    tree = gen_parse_tree(expr).unwrap();
+    str = String::new();
+    tree_json(&tree, &mut str);
+    assert_eq!(str,"{\"val\":\"&\",\"left\":{\"val\":\"?\",\"left\":{\"val\":\"'a'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"+\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"*\",\"left\":{\"val\":\"'c'\"}}}},\"right\":{\"val\":\"'d'\"}}}");
 }

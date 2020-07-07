@@ -181,7 +181,10 @@ impl Grammar {
     /// let act_lo = grammar.action("LETTER_LOWERCASE").unwrap();
     /// let mut act_up = grammar.action("LETTER_UPPERCASE").unwrap().iter();
     /// assert_eq!(*act_up.next().unwrap(), wisent::grammar::Action::MORE);
-    /// assert_eq!(*act_up.next().unwrap(), wisent::grammar::Action::MODE("NEW_MODE".to_owned()));
+    /// assert_eq!(
+    ///     *act_up.next().unwrap(),
+    ///     wisent::grammar::Action::MODE("NEW_MODE".to_owned())
+    /// );
     /// assert!(act_lo.is_empty());
     /// ```
     pub fn action(&self, head: &str) -> Option<&BTreeSet<Action>> {
@@ -211,7 +214,10 @@ impl Grammar {
     /// let mut actions0 = grammar.action_nth(0).iter();
     /// let actions1 = grammar.action_nth(1);
     /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MORE);
-    /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MODE("NEW_MODE".to_owned()));
+    /// assert_eq!(
+    ///     *actions0.next().unwrap(),
+    ///     wisent::grammar::Action::MODE("NEW_MODE".to_owned())
+    /// );
     /// assert!(actions1.is_empty());
     /// ```
     pub fn action_nth(&self, index: usize) -> &BTreeSet<Action> {
