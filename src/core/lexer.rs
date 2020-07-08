@@ -1,22 +1,29 @@
+use std::collections::HashSet;
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
 use crate::error::ParseError;
 
-pub(super) struct TreeNode<T> {
+pub(super) struct BSTree<T> {
     value: T,
-    left: Option<Box<TreeNode<T>>>,
-    right: Option<Box<TreeNode<T>>>,
+    left: Option<Box<BSTree<T>>>,
+    right: Option<Box<BSTree<T>>>,
 }
 
-pub(super) struct Operator<'a> {
+pub(super) struct RegexOperation<'a> {
     r#type: OpType,
     value: &'a str,
     priority: u8,
 }
 
-#[derive(PartialEq, Debug)]
-enum OpType {
+pub(super) enum Literal {
+    Value(char),
+    AnyValue,
+    Operation(OpType),
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub(super) enum OpType {
     KLEENE,
     QM,
     PL,
@@ -92,8 +99,8 @@ fn read_token<'a>(
 }
 
 fn combine_nodes<'a>(
-    operands: &mut Vec<TreeNode<Operator<'a>>>,
-    operators: &mut Vec<Operator<'a>>,
+    operands: &mut Vec<BSTree<RegexOperation<'a>>>,
+    operators: &mut Vec<RegexOperation<'a>>,
 ) {
     let operator = operators.pop().unwrap();
     let left;
@@ -107,7 +114,7 @@ fn combine_nodes<'a>(
         left = Some(Box::new(operands.pop().unwrap()));
         right = None;
     };
-    let ret = TreeNode {
+    let ret = BSTree {
         value: operator,
         left,
         right,
@@ -115,8 +122,8 @@ fn combine_nodes<'a>(
     operands.push(ret);
 }
 
-fn tokenize(regex: &str) -> Result<Vec<Operator>, ParseError> {
-    let mut tokenz = Vec::<Operator>::new();
+fn tokenize(regex: &str) -> Result<Vec<RegexOperation>, ParseError> {
+    let mut tokenz = Vec::<RegexOperation>::new();
     let mut balanced = 0;
     let mut iter = regex.chars().peekable().enumerate();
     while let Some((index, char)) = iter.next() {
@@ -168,13 +175,13 @@ fn tokenize(regex: &str) -> Result<Vec<Operator>, ParseError> {
             }
         };
         if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().r#type, &tp) {
-            tokenz.push(Operator {
+            tokenz.push(RegexOperation {
                 r#type: OpType::AND,
                 value: "&",
                 priority: 2,
             })
         }
-        tokenz.push(Operator {
+        tokenz.push(RegexOperation {
             r#type: tp,
             value: val,
             priority,
@@ -198,9 +205,9 @@ fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
         || (*last == OpType::ID && (*current == OpType::NOT || cur_is_lp_or_id))
 }
 
-pub(super) fn gen_parse_tree(regex: &str) -> Result<TreeNode<Operator>, ParseError> {
+pub(super) fn gen_parse_tree(regex: &str) -> Result<BSTree<RegexOperation>, ParseError> {
     let mut operands = Vec::new();
-    let mut operators: Vec<Operator> = Vec::new();
+    let mut operators: Vec<RegexOperation> = Vec::new();
     let tokens = tokenize(&regex)?;
     for operator in tokens {
         match operator.r#type {
@@ -228,7 +235,7 @@ pub(super) fn gen_parse_tree(regex: &str) -> Result<TreeNode<Operator>, ParseErr
                 operators.pop();
             }
             OpType::ID => {
-                let leaf = TreeNode {
+                let leaf = BSTree {
                     value: operator,
                     left: None,
                     right: None,
@@ -245,7 +252,7 @@ pub(super) fn gen_parse_tree(regex: &str) -> Result<TreeNode<Operator>, ParseErr
     Ok(tree)
 }
 
-pub(super) fn tree_json(node: &TreeNode<Operator>, stream: &mut String) {
+pub(super) fn tree_json(node: &BSTree<RegexOperation>, stream: &mut String) {
     stream.push('{');
     stream.push_str(&format!("\"val\":\"{}\"", &node.value.value));
     if let Some(left) = &node.left {
@@ -257,4 +264,148 @@ pub(super) fn tree_json(node: &TreeNode<Operator>, stream: &mut String) {
         tree_json(right, stream);
     }
     stream.push('}');
+}
+
+fn collect_alphabet(parse_tree: BSTree<RegexOperation>) -> (BSTree<Literal>, HashSet<char>) {
+    let mut todo_stack = vec![parse_tree];
+    let mut new_stack = Vec::new();
+    let mut literals = HashSet::new();
+    while let Some(node) = todo_stack.pop() {
+        if node.value.r#type == OpType::ID {
+        } else {
+            if let Some(right) = node.right {
+                todo_stack.push(*right);
+            }
+            if let Some(left) = node.left {
+                todo_stack.push(*left);
+            }
+        }
+    }
+    (new_stack.pop().unwrap(), literals)
+}
+
+pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -> BSTree<Literal> {
+    if literal == "." {
+        return BSTree {
+            value: Literal::AnyValue,
+            left: None,
+            right: None,
+        };
+    }
+    let mut charz = Vec::new();
+    let mut iter = literal.chars();
+    let start = iter.next().unwrap();
+    let end;
+    let mut set_op;
+    if start == '[' {
+        end = ']';
+        set_op = OpType::OR;
+    } else {
+        end = '\'';
+        set_op = OpType::AND;
+    }
+    while let Some(char) = iter.next() {
+        let mut pushme = char;
+        if char == '\\' {
+            //escaped char
+            pushme = unescape_character(iter.next().unwrap(), &mut iter);
+            char_set.insert(pushme);
+            charz.push(BSTree {
+                value: Literal::Value(pushme),
+                left: None,
+                right: None,
+            });
+        } else if set_op == OpType::OR && char == '-' {
+            //set in form a-z, A-Z, 0-9, etc..
+            let from = match charz.last().unwrap().value {
+                Literal::Value(x) => x as u32 + 1, //excluded, as already added
+                _ => 0,
+            };
+            let until = iter.next().unwrap() as u32 + 1; //included
+            for i in from..until {
+                pushme = std::char::from_u32(i).unwrap();
+                char_set.insert(pushme);
+                charz.push(BSTree {
+                    value: Literal::Value(pushme),
+                    left: None,
+                    right: None,
+                });
+            }
+        } else if char == end {
+            //end of sequence
+            break;
+        } else {
+            //normal char
+            char_set.insert(pushme);
+            charz.push(BSTree {
+                value: Literal::Value(pushme as char),
+                left: None,
+                right: None,
+            });
+        }
+    }
+    //check possible range in form 'a'..'z', at this point I ASSUME this can be a literal only
+    //and the syntax has already been checked.
+    if let Some(char @ '.') = iter.next() {
+        set_op = OpType::OR;
+        iter.next();
+        iter.next();
+        let mut until_char = iter.next().unwrap();
+        if until_char == '\\' {
+            until_char = unescape_character(iter.next().unwrap(), &mut iter);
+        }
+        let from = match charz.last().unwrap().value {
+            Literal::Value(x) => x as u32 + 1, //excluded, as already added
+            _ => 0,
+        };
+        let until = until_char as u32 + 1;
+        for i in from..until {
+            let pushme = std::char::from_u32(i).unwrap();
+            char_set.insert(pushme);
+            charz.push(BSTree {
+                value: Literal::Value(pushme),
+                left: None,
+                right: None,
+            });
+        }
+    }
+    while charz.len() > 2 {
+        let left = charz.pop().unwrap();
+        let right = charz.pop().unwrap();
+        let new = BSTree {
+            value: Literal::Operation(set_op),
+            left: Some(Box::new(left)),
+            right: Some(Box::new(right)),
+        };
+        charz.push(new);
+    }
+    charz.pop().unwrap()
+}
+
+fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> char {
+    match letter {
+        'n' => '\n',
+        'r' => '\r',
+        'b' => '\x08',
+        't' => '\t',
+        'f' => '\x0C',
+        'u' | 'U' => {
+            //FIXME: the ANTLR reference specifies that an unicode character should be encoded as
+            //       \uXXXX, however, an unicode char can have also 5 digits 🤔.
+            //       For example this emoji is U+1F914
+            let digit3 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit2 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit1 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit0 = iter.next().unwrap().to_digit(16).unwrap();
+            let code = digit3 << 12 | digit2 << 8 | digit1 << 4 | digit0;
+            std::char::from_u32(code).unwrap()
+        }
+        'x' | 'X' => {
+            let digit1 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit0 = iter.next().unwrap().to_digit(16).unwrap();
+            let code = digit1 << 4 | digit0;
+            std::char::from_u32(code).unwrap()
+        }
+        _ => letter,
+    }
 }
