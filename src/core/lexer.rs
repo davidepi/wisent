@@ -4,10 +4,27 @@ use std::str::Chars;
 
 use crate::error::ParseError;
 
+#[derive(Clone)]
 pub(super) struct BSTree<T> {
     value: T,
     left: Option<Box<BSTree<T>>>,
     right: Option<Box<BSTree<T>>>,
+}
+
+impl<T> std::fmt::Display for BSTree<T>
+where
+    T: std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{\"val\":\"{}\"", &self.value);
+        if let Some(left) = &self.left {
+            write!(f, ",\"left\":{}", *left);
+        }
+        if let Some(right) = &self.right {
+            write!(f, ",\"right\":{}", *right);
+        }
+        write!(f, "}}")
+    }
 }
 
 pub(super) struct RegexOperation<'a> {
@@ -16,10 +33,27 @@ pub(super) struct RegexOperation<'a> {
     priority: u8,
 }
 
+impl std::fmt::Display for RegexOperation<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+#[derive(Copy, Clone)]
 pub(super) enum Literal {
     Value(char),
     AnyValue,
     Operation(OpType),
+}
+
+impl std::fmt::Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Value(i) => write!(f, "VALUE({})", i),
+            Literal::AnyValue => write!(f, "ANY"),
+            Literal::Operation(tp) => write!(f, "OP({})", tp),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -33,6 +67,22 @@ pub(super) enum OpType {
     OR,
     AND,
     ID,
+}
+
+impl std::fmt::Display for OpType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpType::KLEENE => write!(f, "*"),
+            OpType::QM => write!(f, "?"),
+            OpType::PL => write!(f, "+"),
+            OpType::LP => write!(f, "("),
+            OpType::RP => write!(f, ")"),
+            OpType::NOT => write!(f, "~"),
+            OpType::OR => write!(f, "|"),
+            OpType::AND => write!(f, "&"),
+            OpType::ID => write!(f, "ID"),
+        }
+    }
 }
 
 fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> usize {
@@ -60,7 +110,7 @@ fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> u
 #[allow(clippy::useless_let_if_seq)]
 fn read_token<'a>(input: &'a str, first: char, it: &mut Enumerate<Peekable<Chars>>) -> &'a str {
     match first {
-        '.' => &input[..2],
+        '.' => &input[..1],
         '[' => {
             let counted = consume_counting_until(it, ']');
             &input[..counted + 2] //2 is to match [], plus all the bytes counted inside
@@ -228,36 +278,33 @@ pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOperation> {
     tree
 }
 
-pub(super) fn tree_json(node: &BSTree<RegexOperation>, stream: &mut String) {
-    stream.push('{');
-    stream.push_str(&format!("\"val\":\"{}\"", &node.value.value));
-    if let Some(left) = &node.left {
-        stream.push_str(",\"left\":");
-        tree_json(left, stream);
-    }
-    if let Some(right) = &node.right {
-        stream.push_str(",\"right\":");
-        tree_json(right, stream);
-    }
-    stream.push('}');
+pub(super) fn collect_alphabet(
+    parse_tree: BSTree<RegexOperation>,
+) -> (BSTree<Literal>, HashSet<char>) {
+    let mut literals = HashSet::new();
+    let new_tree = collect_alphabet_rec(parse_tree, &mut literals);
+    (new_tree, literals)
 }
 
-fn collect_alphabet(parse_tree: BSTree<RegexOperation>) -> (BSTree<Literal>, HashSet<char>) {
-    let mut todo_stack = vec![parse_tree];
-    let mut new_stack = Vec::new();
-    let mut literals = HashSet::new();
-    while let Some(node) = todo_stack.pop() {
-        if node.value.r#type == OpType::ID {
-        } else {
-            if let Some(right) = node.right {
-                todo_stack.push(*right);
-            }
-            if let Some(left) = node.left {
-                todo_stack.push(*left);
+fn collect_alphabet_rec(node: BSTree<RegexOperation>, alph: &mut HashSet<char>) -> BSTree<Literal> {
+    match node.value.r#type {
+        OpType::ID => expand_literal_node(node.value.value, alph),
+        n @ _ => {
+            let left = match node.left {
+                Some(l) => Some(Box::new(collect_alphabet_rec(*l, alph))),
+                None => None,
+            };
+            let right = match node.right {
+                Some(r) => Some(Box::new(collect_alphabet_rec(*r, alph))),
+                None => None,
+            };
+            BSTree {
+                value: Literal::Operation(n),
+                left,
+                right,
             }
         }
     }
-    (new_stack.pop().unwrap(), literals)
 }
 
 pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -> BSTree<Literal> {
@@ -342,9 +389,9 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
             });
         }
     }
-    while charz.len() > 2 {
-        let left = charz.pop().unwrap();
+    while charz.len() >= 2 {
         let right = charz.pop().unwrap();
+        let left = charz.pop().unwrap();
         let new = BSTree {
             value: Literal::Operation(set_op),
             left: Some(Box::new(left)),
@@ -353,6 +400,51 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
         charz.push(new);
     }
     charz.pop().unwrap()
+}
+
+pub(super) fn replace_dot_wildcard(
+    tree: BSTree<Literal>,
+    alphabet: HashSet<char>,
+) -> BSTree<Literal> {
+    let mut alph = Vec::new();
+    for i in alphabet {
+        alph.push(BSTree {
+            value: Literal::Value(i),
+            left: None,
+            right: None,
+        });
+    }
+    while alph.len() >= 2 {
+        let left = alph.pop().unwrap();
+        let right = alph.pop().unwrap();
+        let new = BSTree {
+            value: Literal::Operation(OpType::OR),
+            left: Some(Box::new(left)),
+            right: Some(Box::new(right)),
+        };
+        alph.push(new);
+    }
+    let root = alph.pop().unwrap();
+    replace_dot_rec(tree, &root)
+}
+
+fn replace_dot_rec(mut tree: BSTree<Literal>, replace_with: &BSTree<Literal>) -> BSTree<Literal> {
+    let is_wildcard = match tree.value {
+        Literal::AnyValue => true,
+        _ => false,
+    };
+    if is_wildcard {
+        //definitely a leaf
+        replace_with.clone()
+    } else {
+        if let Some(left) = tree.left {
+            tree.left = Some(Box::new(replace_dot_rec(*left, replace_with)));
+        }
+        if let Some(right) = tree.right {
+            tree.right = Some(Box::new(replace_dot_rec(*right, replace_with)));
+        }
+        tree
+    }
 }
 
 fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> char {
