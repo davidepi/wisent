@@ -35,10 +35,7 @@ pub(super) enum OpType {
     ID,
 }
 
-fn consume_counting_until(
-    it: &mut Enumerate<Peekable<Chars>>,
-    until: char,
-) -> Result<usize, ParseError> {
+fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> usize {
     let mut escapes = 0;
     let mut skipped = 0;
     let mut last_char = '\0';
@@ -56,30 +53,20 @@ fn consume_counting_until(
         }
         skipped += skip.1.len_utf8();
     }
-    if last_char == until {
-        Ok(skipped)
-    } else {
-        Err(ParseError::SyntaxError {
-            message: format!("Unmatched {}, reached end of file", until),
-        })
-    }
+    skipped
 }
 
 //No clippy, this is not more readable.
 #[allow(clippy::useless_let_if_seq)]
-fn read_token<'a>(
-    input: &'a str,
-    first: char,
-    it: &mut Enumerate<Peekable<Chars>>,
-) -> Result<&'a str, ParseError> {
+fn read_token<'a>(input: &'a str, first: char, it: &mut Enumerate<Peekable<Chars>>) -> &'a str {
     match first {
-        '.' => Ok(&input[..2]),
+        '.' => &input[..2],
         '[' => {
-            let counted = consume_counting_until(it, ']')?;
-            Ok(&input[..counted + 2]) //2 is to match [], plus all the bytes counted inside
+            let counted = consume_counting_until(it, ']');
+            &input[..counted + 2] //2 is to match [], plus all the bytes counted inside
         }
         '\'' => {
-            let mut counted = consume_counting_until(it, '\'')?;
+            let mut counted = consume_counting_until(it, '\'');
             let mut id = &input[..counted + 2]; //this is a valid literal. check for range ''..''
             if input.len() > counted + 5 && &input[(counted + 2)..(counted + 5)] == "..\'" {
                 //this is actually a range ''..'' so first advance the iterator by 3 pos
@@ -87,14 +74,12 @@ fn read_token<'a>(
                 it.next();
                 it.next();
                 //then update the counter for the literal length by accounting also the new lit.
-                counted += consume_counting_until(it, '\'')?;
+                counted += consume_counting_until(it, '\'');
                 id = &input[..counted + 6];
             }
-            Ok(id)
+            id
         }
-        _ => Err(ParseError::SyntaxError {
-            message: format!("Unsupported literal {}", input),
-        }),
+        _ => panic!("Unsupported literal {}", input),
     }
 }
 
@@ -122,9 +107,8 @@ fn combine_nodes<'a>(
     operands.push(ret);
 }
 
-fn tokenize(regex: &str) -> Result<Vec<RegexOperation>, ParseError> {
+fn tokenize(regex: &str) -> Vec<RegexOperation> {
     let mut tokenz = Vec::<RegexOperation>::new();
-    let mut balanced = 0;
     let mut iter = regex.chars().peekable().enumerate();
     while let Some((index, char)) = iter.next() {
         let tp;
@@ -160,18 +144,16 @@ fn tokenize(regex: &str) -> Result<Vec<RegexOperation>, ParseError> {
                 tp = OpType::LP;
                 val = &regex[index..index + 1];
                 priority = 5;
-                balanced += 1;
             }
             ')' => {
                 tp = OpType::RP;
                 val = &regex[index..index + 1];
                 priority = 5;
-                balanced -= 1;
             }
             _ => {
                 tp = OpType::ID;
                 priority = 0;
-                val = read_token(&regex[index..], char, &mut iter)?;
+                val = read_token(&regex[index..], char, &mut iter);
             }
         };
         if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().r#type, &tp) {
@@ -187,13 +169,7 @@ fn tokenize(regex: &str) -> Result<Vec<RegexOperation>, ParseError> {
             priority,
         });
     }
-    if balanced == 0 {
-        Ok(tokenz)
-    } else {
-        Err(ParseError::SyntaxError {
-            message: format!("Unmatched parentheses in {}", regex),
-        })
-    }
+    tokenz
 }
 
 fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
@@ -205,10 +181,10 @@ fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
         || (*last == OpType::ID && (*current == OpType::NOT || cur_is_lp_or_id))
 }
 
-pub(super) fn gen_parse_tree(regex: &str) -> Result<BSTree<RegexOperation>, ParseError> {
+pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOperation> {
     let mut operands = Vec::new();
     let mut operators: Vec<RegexOperation> = Vec::new();
-    let tokens = tokenize(&regex)?;
+    let tokens = tokenize(&regex);
     for operator in tokens {
         match operator.r#type {
             //operators after operand with highest priority -> solve immediately
@@ -249,7 +225,7 @@ pub(super) fn gen_parse_tree(regex: &str) -> Result<BSTree<RegexOperation>, Pars
         combine_nodes(&mut operands, &mut operators);
     }
     let tree = operands.pop().unwrap();
-    Ok(tree)
+    tree
 }
 
 pub(super) fn tree_json(node: &BSTree<RegexOperation>, stream: &mut String) {
@@ -296,6 +272,7 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
     let mut iter = literal.chars();
     let start = iter.next().unwrap();
     let end;
+    let mut last = '\x00';
     let mut set_op;
     if start == '[' {
         end = ']';
@@ -309,6 +286,7 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
         if char == '\\' {
             //escaped char
             pushme = unescape_character(iter.next().unwrap(), &mut iter);
+            last = pushme;
             char_set.insert(pushme);
             charz.push(BSTree {
                 value: Literal::Value(pushme),
@@ -317,10 +295,7 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
             });
         } else if set_op == OpType::OR && char == '-' {
             //set in form a-z, A-Z, 0-9, etc..
-            let from = match charz.last().unwrap().value {
-                Literal::Value(x) => x as u32 + 1, //excluded, as already added
-                _ => 0,
-            };
+            let from = last as u32 + 1;
             let until = iter.next().unwrap() as u32 + 1; //included
             for i in from..until {
                 pushme = std::char::from_u32(i).unwrap();
@@ -336,6 +311,7 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
             break;
         } else {
             //normal char
+            last = pushme;
             char_set.insert(pushme);
             charz.push(BSTree {
                 value: Literal::Value(pushme as char),
@@ -354,10 +330,7 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
         if until_char == '\\' {
             until_char = unescape_character(iter.next().unwrap(), &mut iter);
         }
-        let from = match charz.last().unwrap().value {
-            Literal::Value(x) => x as u32 + 1, //excluded, as already added
-            _ => 0,
-        };
+        let from = last as u32 + 1;
         let until = until_char as u32 + 1;
         for i in from..until {
             let pushme = std::char::from_u32(i).unwrap();
