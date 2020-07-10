@@ -1,6 +1,66 @@
 use crate::error::ParseError;
 use crate::lexer;
-use crate::lexer::{expand_literals, gen_parse_tree, BSTree, OpType, RegexOp};
+use crate::lexer::{
+    canonicalise, expand_literals, gen_parse_tree, get_alphabet, BSTree, OpType, RegexOp,
+};
+
+#[test]
+fn canonical_tree() {
+    let mut expr;
+    let mut tree;
+    let mut new_tree;
+    let mut alphabet;
+    let mut str;
+
+    expr = "('a'*.)*'a'";
+    tree = expand_literals(gen_parse_tree(expr));
+    alphabet = get_alphabet(&tree);
+    new_tree = canonicalise(tree, &alphabet);
+    str = format!("{}", new_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"&\",\"left\":{\"val\":\"*\",\"l\
+        eft\":{\"val\":\"a\"}},\"right\":{\"val\":\"|\",\"left\":{\"val\":\"\u{10a261}\"},\"right\"\
+        :{\"val\":\"a\"}}}},\"right\":{\"val\":\"a\"}}"
+    );
+
+    expr = "('a'*'b')+'a'";
+    tree = expand_literals(gen_parse_tree(expr));
+    alphabet = get_alphabet(&tree);
+    new_tree = canonicalise(tree, &alphabet);
+    str = format!("{}", new_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"&\",\"left\":{\"val\":\"&\",\"left\":{\"val\
+    \":\"*\",\"left\":{\"val\":\"a\"}},\"right\":{\"val\":\"b\"}},\"right\":{\"val\":\"*\",\"left\"\
+    :{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"a\"}},\"right\":{\"val\":\"b\"}}}},\
+    \"right\":{\"val\":\"a\"}}"
+    );
+
+    expr = "('a'*'b')?'a'";
+    tree = expand_literals(gen_parse_tree(expr));
+    alphabet = get_alphabet(&tree);
+    new_tree = canonicalise(tree, &alphabet);
+    str = format!("{}", new_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"\u{107fe1}\"},\"rig\
+    ht\":{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"a\"}},\"right\":{\"val\":\"b\"}\
+    }},\"right\":{\"val\":\"a\"}}"
+    );
+
+    expr = "~[ab]('a'|'c')";
+    tree = expand_literals(gen_parse_tree(expr));
+    alphabet = get_alphabet(&tree);
+    new_tree = canonicalise(tree, &alphabet);
+    str = format!("{}", new_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"c\"},\"right\":{\"val\":\"\
+        \u{10A261}\"}},\"right\":{\"val\":\"|\",\"left\":{\"val\":\"a\"},\"right\":{\"val\":\"c\
+    \"}}}"
+    );
+}
 
 #[test]
 fn identify_literal() {

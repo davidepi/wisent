@@ -4,6 +4,9 @@ use std::str::Chars;
 
 use crate::error::ParseError;
 
+const EPSILON_VALUE: char = '\u{107FE1}';
+const ANY_VALUE: char = '\u{10A261}';
+
 #[derive(Clone)]
 pub struct BSTree<T> {
     pub value: T,
@@ -26,6 +29,7 @@ where
         write!(f, "}}")
     }
 }
+
 #[derive(Copy, Clone)]
 pub(super) struct RegexOp<'a> {
     pub(super) r#type: OpType,
@@ -39,7 +43,7 @@ impl std::fmt::Display for RegexOp<'_> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub(super) enum ExLiteral {
     Value(char),
     AnyValue,
@@ -56,9 +60,9 @@ impl std::fmt::Display for ExLiteral {
     }
 }
 
-enum Literal {
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub(super) enum Literal {
     Value(char),
-    AnyValue,
     KLEENE,
     AND,
     OR,
@@ -68,7 +72,6 @@ impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Literal::Value(i) => write!(f, "{}", i),
-            Literal::AnyValue => write!(f, "ANY"),
             Literal::KLEENE => write!(f, "*"),
             Literal::AND => write!(f, "&"),
             Literal::OR => write!(f, "|"),
@@ -431,5 +434,171 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
             std::char::from_u32(code).unwrap()
         }
         _ => letter,
+    }
+}
+
+pub(super) fn get_alphabet(node: &BSTree<ExLiteral>) -> HashSet<char> {
+    let mut ret = HashSet::new();
+    let mut todo_nodes = vec![node];
+    while let Some(node) = todo_nodes.pop() {
+        match node.value {
+            ExLiteral::Value(i) => {
+                ret.insert(i);
+            }
+            ExLiteral::AnyValue => {}
+            ExLiteral::Operation(_) => {
+                //nothing to do with the "operation" itself, but this is the only non-leaf type node
+                if let Some(left) = &node.left {
+                    todo_nodes.push(&*left);
+                }
+                if let Some(right) = &node.right {
+                    todo_nodes.push(&*right);
+                }
+            }
+        }
+    }
+    ret
+}
+
+pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) -> BSTree<Literal> {
+    match node.value {
+        ExLiteral::Value(i) => BSTree {
+            value: Literal::Value(i),
+            left: None,
+            right: None,
+        },
+        ExLiteral::AnyValue => {
+            let mut chars = alphabet
+                .iter()
+                .chain(&[ANY_VALUE])
+                .into_iter()
+                .map(|c| BSTree {
+                    value: Literal::Value(*c),
+                    left: None,
+                    right: None,
+                })
+                .collect::<Vec<_>>();
+            while chars.len() >= 2 {
+                let left = Some(Box::new(chars.pop().unwrap()));
+                let right = Some(Box::new(chars.pop().unwrap()));
+                let tree = BSTree {
+                    value: Literal::OR,
+                    left,
+                    right,
+                };
+                chars.push(tree);
+            }
+            chars.pop().unwrap()
+        }
+        ExLiteral::Operation(op) => {
+            match op {
+                OpType::NOT => {
+                    //get the entire used alphabet for both nodes
+                    let mut subnode_alphabet = HashSet::new();
+                    if let Some(l) = node.left {
+                        subnode_alphabet.extend(get_alphabet(&*l));
+                    }
+                    if let Some(r) = node.right {
+                        subnode_alphabet.extend(get_alphabet(&*r));
+                    }
+                    let mut diff = alphabet
+                        .difference(&subnode_alphabet)
+                        .chain(&[ANY_VALUE])
+                        .into_iter()
+                        .map(|c| BSTree {
+                            value: Literal::Value(*c),
+                            left: None,
+                            right: None,
+                        })
+                        .collect::<Vec<_>>();
+                    while diff.len() >= 2 {
+                        let right = diff.pop().unwrap();
+                        let left = diff.pop().unwrap();
+                        let new_node = BSTree {
+                            value: Literal::OR,
+                            left: Some(Box::new(left)),
+                            right: Some(Box::new(right)),
+                        };
+                        diff.push(new_node);
+                    }
+                    //if this panics is probably some weird nonsense regexp such as ~.
+                    diff.pop().unwrap()
+                }
+                OpType::OR => {
+                    let left = match node.left {
+                        Some(l) => Some(Box::new(canonicalise(*l, alphabet))),
+                        None => None,
+                    };
+                    let right = match node.right {
+                        Some(r) => Some(Box::new(canonicalise(*r, alphabet))),
+                        None => None,
+                    };
+                    BSTree {
+                        value: Literal::OR,
+                        left,
+                        right,
+                    }
+                }
+                OpType::AND => {
+                    let left = match node.left {
+                        Some(l) => Some(Box::new(canonicalise(*l, alphabet))),
+                        None => None,
+                    };
+                    let right = match node.right {
+                        Some(r) => Some(Box::new(canonicalise(*r, alphabet))),
+                        None => None,
+                    };
+                    BSTree {
+                        value: Literal::AND,
+                        left,
+                        right,
+                    }
+                }
+                OpType::KLEENE => {
+                    let left = match node.left {
+                        Some(l) => Some(Box::new(canonicalise(*l, alphabet))),
+                        None => None,
+                    };
+                    let right = match node.right {
+                        Some(r) => Some(Box::new(canonicalise(*r, alphabet))),
+                        None => None,
+                    };
+                    BSTree {
+                        value: Literal::KLEENE,
+                        left,
+                        right,
+                    }
+                }
+                OpType::QM => {
+                    let left = Some(Box::new(BSTree {
+                        value: Literal::Value(EPSILON_VALUE),
+                        left: None,
+                        right: None,
+                    }));
+                    //it the node has a ? DEFINITELY it has only a left children
+                    let right = Some(Box::new(canonicalise(*node.left.unwrap(), alphabet)));
+                    BSTree {
+                        value: Literal::OR,
+                        left,
+                        right,
+                    }
+                }
+                OpType::PL => {
+                    //it the node has a + DEFINITELY it has only a left children
+                    let left = canonicalise(*node.left.unwrap(), alphabet);
+                    let right = BSTree {
+                        value: Literal::KLEENE,
+                        left: Some(Box::new(left.clone())),
+                        right: None,
+                    };
+                    BSTree {
+                        value: Literal::AND,
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                    }
+                }
+                n => panic!("Unexpected operation {}", n),
+            }
+        }
     }
 }
