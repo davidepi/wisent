@@ -1,56 +1,68 @@
 use crate::error::ParseError;
 use crate::lexer;
-use crate::lexer::{collect_alphabet, expand_literal_node, gen_parse_tree, replace_dot_wildcard};
-use std::collections::HashSet;
-
-#[test]
-fn replace_dot() {
-    // let mut alphabet = HashSet::new();
-    let expr = "'abc'|.*";
-    let mut tree = gen_parse_tree(expr);
-    let expanded = collect_alphabet(tree);
-    let replaced = replace_dot_wildcard(expanded.0, expanded.1);
-    println!("{}", replaced);
-}
+use crate::lexer::{expand_literals, gen_parse_tree, BSTree, OpType, RegexOp};
 
 #[test]
 fn identify_literal() {
+    let tree_sample = BSTree {
+        value: RegexOp {
+            r#type: OpType::ID,
+            value: "",
+            priority: 0,
+        },
+        left: None,
+        right: None,
+    };
     let mut tree;
-    let mut char_set = HashSet::new();
+    let mut ret_tree;
+    let mut str;
+
     let char_literal = "'a\\x24'";
-    tree = expand_literal_node(char_literal, &mut char_set);
-    assert_eq!(char_set.len(), 2);
-    assert!(char_set.contains(&'a'));
-    assert!(char_set.contains(&'$'));
-    char_set.clear();
+    tree = tree_sample.clone();
+    tree.value.value = char_literal;
+    ret_tree = expand_literals(tree);
+    str = format!("{}", &ret_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(a)\"},\"right\":{\"val\":\"VALUE($)\"}}"
+    );
 
-    let unicode_literal = "'დოლორ'";
-    tree = expand_literal_node(unicode_literal, &mut char_set);
-    assert_eq!(char_set.len(), 4);
-    assert!(char_set.contains(&'დ'));
-    assert!(char_set.contains(&'ო'));
-    assert!(char_set.contains(&'ლ'));
-    assert!(char_set.contains(&'ო'));
-    assert!(char_set.contains(&'რ'));
-    char_set.clear();
-    assert_eq!(format!("{}",tree), "{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(დ)\"},\"right\":{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(ო)\"},\"right\":{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(ლ)\"},\"right\":{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(ო)\"},\"right\":{\"val\":\"VALUE(რ)\"}}}}}");
+    let unicode_seq = "'დოლორ'";
+    tree = tree_sample.clone();
+    tree.value.value = unicode_seq;
+    ret_tree = expand_literals(tree);
+    str = format!("{}", &ret_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(დ)\"},\"right\":{\"val\":\"OP(&)\
+    \",\"left\":{\"val\":\"VALUE(ო)\"},\"right\":{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(ლ)\"}\
+    ,\"right\":{\"val\":\"OP(&)\",\"left\":{\"val\":\"VALUE(ო)\"},\"right\":{\"val\":\"VALUE(რ)\"}}\
+    }}}"
+    );
 
-    let square = "[\\-a-z\\]]";
-    tree = expand_literal_node(square, &mut char_set);
-    assert_eq!(char_set.len(), 28);
-    assert!(char_set.contains(&'c'));
-    assert!(!char_set.contains(&'9'));
-    assert!(char_set.contains(&']'));
-    assert!(char_set.contains(&'-'));
-    char_set.clear();
+    let square = "[\\-a-d\\]]";
+    tree = tree_sample.clone();
+    tree.value.value = square;
+    ret_tree = expand_literals(tree);
+    str = format!("{}", &ret_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"OP(|)\",\"left\":{\"val\":\"VALUE(-)\"},\"right\":{\"val\":\"OP(|)\
+    \",\"left\":{\"val\":\"VALUE(a)\"},\"right\":{\"val\":\"OP(|)\",\"left\":{\"val\":\"VALUE(b)\"}\
+    ,\"right\":{\"val\":\"OP(|)\",\"left\":{\"val\":\"VALUE(c)\"},\"right\":{\"val\":\"OP(|)\",\"le\
+    ft\":{\"val\":\"VALUE(d)\"},\"right\":{\"val\":\"VALUE(])\"}}}}}}"
+    );
 
     let range = "'\\U16C3'..'\\u16C5'";
-    tree = expand_literal_node(range, &mut char_set);
-    assert_eq!(char_set.len(), 3);
-    assert!(char_set.contains(&'ᛃ'));
-    assert!(char_set.contains(&'ᛄ'));
-    assert!(char_set.contains(&'ᛅ'));
-    char_set.clear();
+    tree = tree_sample.clone();
+    tree.value.value = range;
+    ret_tree = expand_literals(tree);
+    str = format!("{}", &ret_tree);
+    assert_eq!(
+        str,
+        "{\"val\":\"OP(|)\",\"left\":{\"val\":\"VALUE(ᛃ)\"},\"right\":{\"val\":\"OP(|)\
+    \",\"left\":{\"val\":\"VALUE(ᛄ)\"},\"right\":{\"val\":\"VALUE(ᛅ)\"}}}"
+    );
 }
 
 #[test]
@@ -63,25 +75,50 @@ fn regex_correct_precedence() {
     expr = "'a'|'b'*'c'";
     tree = gen_parse_tree(expr);
     str = format!("{}", &tree);
-    assert_eq!(str, "{\"val\":\"|\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"'c'\"}}}");
+    assert_eq!(
+        str,
+        "{\"val\":\"|\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\
+    \"val\":\"*\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"'c'\"}}}"
+    );
 
     expr = "'a'*('b'|'c')*'d'";
     tree = gen_parse_tree(expr);
     str = format!("{}", &tree);
-    assert_eq!(str, "{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'a'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"'b'\"},\"right\":{\"val\":\"'c'\"}}},\"right\":{\"val\":\"'d'\"}}}");
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'a'\"}},\"right\":\
+    {\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"'b'\"},\"rig\
+    ht\":{\"val\":\"'c'\"}}},\"right\":{\"val\":\"'d'\"}}}"
+    );
 
     expr = "('a')~'b'('c')('d')'e'";
     tree = gen_parse_tree(expr);
     str = format!("{}", &tree);
-    assert_eq!(str, "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'d'\"},\"right\":{\"val\":\"'e'\"}}}}}");
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\
+    \"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\
+    \"right\":{\"val\":\"&\",\"left\":{\"val\":\"'d'\"},\"right\":{\"val\":\"'e'\"}}}}}"
+    );
 
     expr = "'a'~'b''c'('d')";
     tree = gen_parse_tree(expr);
     str = format!("{}", &tree);
-    assert_eq!(str, "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\"right\":{\"val\":\"'d'\"}}}}");
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\
+    \"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\
+    \"right\":{\"val\":\"'d'\"}}}}"
+    );
 
     expr = "'a'?('b'*|'c'*)+'d'";
     tree = gen_parse_tree(expr);
     str = format!("{}", &tree);
-    assert_eq!(str,"{\"val\":\"&\",\"left\":{\"val\":\"?\",\"left\":{\"val\":\"'a'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"+\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"*\",\"left\":{\"val\":\"'c'\"}}}},\"right\":{\"val\":\"'d'\"}}}");
+    assert_eq!(
+        str,
+        "{\"val\":\"&\",\"left\":{\"val\":\"?\",\"left\":{\"val\":\"'a'\"}},\"right\":{\
+    \"val\":\"&\",\"left\":{\"val\":\"+\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"*\",\"left\":\
+    {\"val\":\"'b'\"}},\"right\":{\"val\":\"*\",\"left\":{\"val\":\"'c'\"}}}},\"right\":{\"val\":\"\
+    'd'\"}}}"
+    );
 }

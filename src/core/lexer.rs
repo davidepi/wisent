@@ -5,10 +5,10 @@ use std::str::Chars;
 use crate::error::ParseError;
 
 #[derive(Clone)]
-pub(super) struct BSTree<T> {
-    value: T,
-    left: Option<Box<BSTree<T>>>,
-    right: Option<Box<BSTree<T>>>,
+pub struct BSTree<T> {
+    pub value: T,
+    pub left: Option<Box<BSTree<T>>>,
+    pub right: Option<Box<BSTree<T>>>,
 }
 
 impl<T> std::fmt::Display for BSTree<T>
@@ -26,32 +26,52 @@ where
         write!(f, "}}")
     }
 }
-
-pub(super) struct RegexOperation<'a> {
-    r#type: OpType,
-    value: &'a str,
-    priority: u8,
+#[derive(Copy, Clone)]
+pub(super) struct RegexOp<'a> {
+    pub(super) r#type: OpType,
+    pub(super) value: &'a str,
+    pub(super) priority: u8,
 }
 
-impl std::fmt::Display for RegexOperation<'_> {
+impl std::fmt::Display for RegexOp<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.value)
     }
 }
 
 #[derive(Copy, Clone)]
-pub(super) enum Literal {
+pub(super) enum ExLiteral {
     Value(char),
     AnyValue,
     Operation(OpType),
 }
 
+impl std::fmt::Display for ExLiteral {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExLiteral::Value(i) => write!(f, "VALUE({})", i),
+            ExLiteral::AnyValue => write!(f, "ANY"),
+            ExLiteral::Operation(tp) => write!(f, "OP({})", tp),
+        }
+    }
+}
+
+enum Literal {
+    Value(char),
+    AnyValue,
+    KLEENE,
+    AND,
+    OR,
+}
+
 impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Value(i) => write!(f, "VALUE({})", i),
+            Literal::Value(i) => write!(f, "{}", i),
             Literal::AnyValue => write!(f, "ANY"),
-            Literal::Operation(tp) => write!(f, "OP({})", tp),
+            Literal::KLEENE => write!(f, "*"),
+            Literal::AND => write!(f, "&"),
+            Literal::OR => write!(f, "|"),
         }
     }
 }
@@ -133,10 +153,7 @@ fn read_token<'a>(input: &'a str, first: char, it: &mut Enumerate<Peekable<Chars
     }
 }
 
-fn combine_nodes<'a>(
-    operands: &mut Vec<BSTree<RegexOperation<'a>>>,
-    operators: &mut Vec<RegexOperation<'a>>,
-) {
+fn combine_nodes<'a>(operands: &mut Vec<BSTree<RegexOp<'a>>>, operators: &mut Vec<RegexOp<'a>>) {
     let operator = operators.pop().unwrap();
     let left;
     let right;
@@ -157,8 +174,8 @@ fn combine_nodes<'a>(
     operands.push(ret);
 }
 
-fn tokenize(regex: &str) -> Vec<RegexOperation> {
-    let mut tokenz = Vec::<RegexOperation>::new();
+fn tokenize(regex: &str) -> Vec<RegexOp> {
+    let mut tokenz = Vec::<RegexOp>::new();
     let mut iter = regex.chars().peekable().enumerate();
     while let Some((index, char)) = iter.next() {
         let tp;
@@ -207,13 +224,13 @@ fn tokenize(regex: &str) -> Vec<RegexOperation> {
             }
         };
         if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().r#type, &tp) {
-            tokenz.push(RegexOperation {
+            tokenz.push(RegexOp {
                 r#type: OpType::AND,
                 value: "&",
                 priority: 2,
             })
         }
-        tokenz.push(RegexOperation {
+        tokenz.push(RegexOp {
             r#type: tp,
             value: val,
             priority,
@@ -231,9 +248,9 @@ fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
         || (*last == OpType::ID && (*current == OpType::NOT || cur_is_lp_or_id))
 }
 
-pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOperation> {
+pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOp> {
     let mut operands = Vec::new();
-    let mut operators: Vec<RegexOperation> = Vec::new();
+    let mut operators: Vec<RegexOp> = Vec::new();
     let tokens = tokenize(&regex);
     for operator in tokens {
         match operator.r#type {
@@ -278,28 +295,20 @@ pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOperation> {
     tree
 }
 
-pub(super) fn collect_alphabet(
-    parse_tree: BSTree<RegexOperation>,
-) -> (BSTree<Literal>, HashSet<char>) {
-    let mut literals = HashSet::new();
-    let new_tree = collect_alphabet_rec(parse_tree, &mut literals);
-    (new_tree, literals)
-}
-
-fn collect_alphabet_rec(node: BSTree<RegexOperation>, alph: &mut HashSet<char>) -> BSTree<Literal> {
+pub(super) fn expand_literals(node: BSTree<RegexOp>) -> BSTree<ExLiteral> {
     match node.value.r#type {
-        OpType::ID => expand_literal_node(node.value.value, alph),
+        OpType::ID => expand_literal_node(node.value.value),
         n @ _ => {
             let left = match node.left {
-                Some(l) => Some(Box::new(collect_alphabet_rec(*l, alph))),
+                Some(l) => Some(Box::new(expand_literals(*l))),
                 None => None,
             };
             let right = match node.right {
-                Some(r) => Some(Box::new(collect_alphabet_rec(*r, alph))),
+                Some(r) => Some(Box::new(expand_literals(*r))),
                 None => None,
             };
             BSTree {
-                value: Literal::Operation(n),
+                value: ExLiteral::Operation(n),
                 left,
                 right,
             }
@@ -307,10 +316,10 @@ fn collect_alphabet_rec(node: BSTree<RegexOperation>, alph: &mut HashSet<char>) 
     }
 }
 
-pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -> BSTree<Literal> {
+fn expand_literal_node(literal: &str) -> BSTree<ExLiteral> {
     if literal == "." {
         return BSTree {
-            value: Literal::AnyValue,
+            value: ExLiteral::AnyValue,
             left: None,
             right: None,
         };
@@ -334,9 +343,8 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
             //escaped char
             pushme = unescape_character(iter.next().unwrap(), &mut iter);
             last = pushme;
-            char_set.insert(pushme);
             charz.push(BSTree {
-                value: Literal::Value(pushme),
+                value: ExLiteral::Value(pushme),
                 left: None,
                 right: None,
             });
@@ -346,9 +354,8 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
             let until = iter.next().unwrap() as u32 + 1; //included
             for i in from..until {
                 pushme = std::char::from_u32(i).unwrap();
-                char_set.insert(pushme);
                 charz.push(BSTree {
-                    value: Literal::Value(pushme),
+                    value: ExLiteral::Value(pushme),
                     left: None,
                     right: None,
                 });
@@ -359,9 +366,8 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
         } else {
             //normal char
             last = pushme;
-            char_set.insert(pushme);
             charz.push(BSTree {
-                value: Literal::Value(pushme as char),
+                value: ExLiteral::Value(pushme as char),
                 left: None,
                 right: None,
             });
@@ -381,9 +387,8 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
         let until = until_char as u32 + 1;
         for i in from..until {
             let pushme = std::char::from_u32(i).unwrap();
-            char_set.insert(pushme);
             charz.push(BSTree {
-                value: Literal::Value(pushme),
+                value: ExLiteral::Value(pushme),
                 left: None,
                 right: None,
             });
@@ -393,58 +398,13 @@ pub(super) fn expand_literal_node(literal: &str, char_set: &mut HashSet<char>) -
         let right = charz.pop().unwrap();
         let left = charz.pop().unwrap();
         let new = BSTree {
-            value: Literal::Operation(set_op),
+            value: ExLiteral::Operation(set_op),
             left: Some(Box::new(left)),
             right: Some(Box::new(right)),
         };
         charz.push(new);
     }
     charz.pop().unwrap()
-}
-
-pub(super) fn replace_dot_wildcard(
-    tree: BSTree<Literal>,
-    alphabet: HashSet<char>,
-) -> BSTree<Literal> {
-    let mut alph = Vec::new();
-    for i in alphabet {
-        alph.push(BSTree {
-            value: Literal::Value(i),
-            left: None,
-            right: None,
-        });
-    }
-    while alph.len() >= 2 {
-        let left = alph.pop().unwrap();
-        let right = alph.pop().unwrap();
-        let new = BSTree {
-            value: Literal::Operation(OpType::OR),
-            left: Some(Box::new(left)),
-            right: Some(Box::new(right)),
-        };
-        alph.push(new);
-    }
-    let root = alph.pop().unwrap();
-    replace_dot_rec(tree, &root)
-}
-
-fn replace_dot_rec(mut tree: BSTree<Literal>, replace_with: &BSTree<Literal>) -> BSTree<Literal> {
-    let is_wildcard = match tree.value {
-        Literal::AnyValue => true,
-        _ => false,
-    };
-    if is_wildcard {
-        //definitely a leaf
-        replace_with.clone()
-    } else {
-        if let Some(left) = tree.left {
-            tree.left = Some(Box::new(replace_dot_rec(*left, replace_with)));
-        }
-        if let Some(right) = tree.right {
-            tree.right = Some(Box::new(replace_dot_rec(*right, replace_with)));
-        }
-        tree
-    }
 }
 
 fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> char {
@@ -455,9 +415,8 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
         't' => '\t',
         'f' => '\x0C',
         'u' | 'U' => {
-            //FIXME: the ANTLR reference specifies that an unicode character should be encoded as
-            //       \uXXXX, however, an unicode char can have also 5 digits 🤔.
-            //       For example this emoji is U+1F914
+            //NOTE: ANTLR grammars support only the BMP(0th) plane. Max is \uXXXX
+            //      So no escaped emojis :'(
             let digit3 = iter.next().unwrap().to_digit(16).unwrap();
             let digit2 = iter.next().unwrap().to_digit(16).unwrap();
             let digit1 = iter.next().unwrap().to_digit(16).unwrap();
