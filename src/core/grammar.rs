@@ -36,28 +36,28 @@ impl Grammar {
     /// The newly created Grammar struct.
     /// # Examples
     /// ```
-    /// let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
+    /// let terminals = vec!["[a-z]", "[A-Z]"];
     /// let non_terminals = vec![
-    ///     "LETTER_UPPERCASE | LETTER_LOWERCASE".to_owned(),
-    ///     "word letter | letter".to_owned(),
+    ///     "LETTER_UPPERCASE | LETTER_LOWERCASE",
+    ///     "word letter | letter",
     /// ];
-    /// let names = vec![
-    ///     "LETTER_LOWERCASE".to_owned(),
-    ///     "LETTER_UPPERCASE".to_owned(),
-    ///     "letter".to_owned(),
-    ///     "word".to_owned(),
-    /// ];
+    /// let names = vec!["LETTER_LOWERCASE", "LETTER_UPPERCASE", "letter", "word"];
     /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
     /// ```
-    pub fn new(terminals: &[String], non_terminals: &[String], names: &[String]) -> Grammar {
+    pub fn new(terminals: &[&str], non_terminals: &[&str], names: &[&str]) -> Grammar {
+        let terms = terminals.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let nterms = non_terminals
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>();
         let mut map = HashMap::new();
         for (idx, item) in names.iter().enumerate() {
             let term = idx < terminals.len();
-            map.insert(item.to_owned(), (idx, term));
+            map.insert(item.to_string(), (idx, term));
         }
         Grammar {
-            terminals: terminals.to_vec(),
-            non_terminals: non_terminals.to_vec(),
+            terminals: terms,
+            non_terminals: nterms,
             actions: Vec::new(),
             names: map,
         }

@@ -12,17 +12,9 @@ fn grammar_len() {
         Vec::new().as_slice(),
     );
     assert_eq!(g.len(), 0);
-    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    let non_terminals = vec![
-        "LETTER_UP | LETTER_LO".to_owned(),
-        "word letter | letter".to_owned(),
-    ];
-    let names = vec![
-        "LETTER_LO".to_owned(),
-        "LETTER_UP".to_owned(),
-        "letter".to_owned(),
-        "word".to_owned(),
-    ];
+    let terminals = vec!["[a-z]", "[A-Z]"];
+    let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
+    let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
     let g = Grammar::new(&terminals, &non_terminals, &names);
     assert_eq!(g.len(), 4);
 }
@@ -36,17 +28,9 @@ fn grammar_len_term() {
         Vec::new().as_slice(),
     );
     assert_eq!(g.len(), 0);
-    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    let non_terminals = vec![
-        "LETTER_UP | LETTER_LO".to_owned(),
-        "word letter | letter".to_owned(),
-    ];
-    let names = vec![
-        "LETTER_LO".to_owned(),
-        "LETTER_UP".to_owned(),
-        "letter".to_owned(),
-        "word".to_owned(),
-    ];
+    let terminals = vec!["[a-z]", "[A-Z]"];
+    let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
+    let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
     let g = Grammar::new(&terminals, &non_terminals, &names);
     assert_eq!(g.len_term(), 2);
 }
@@ -60,13 +44,9 @@ fn grammar_len_nonterm() {
         Vec::new().as_slice(),
     );
     assert_eq!(g.len(), 0);
-    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    let non_terminals = vec!["LETTER_UP | LETTER_LO".to_owned()];
-    let names = vec![
-        "LETTER_LO".to_owned(),
-        "LETTER_UP".to_owned(),
-        "letter".to_owned(),
-    ];
+    let terminals = vec!["[a-z]", "[A-Z]"];
+    let non_terminals = vec!["LETTER_UP | LETTER_LO"];
+    let names = vec!["LETTER_LO", "LETTER_UP", "letter"];
     let g = Grammar::new(&terminals, &non_terminals, &names);
     assert_eq!(g.len_nonterm(), 1);
 }
@@ -80,17 +60,9 @@ fn grammar_is_empty() {
         Vec::new().as_slice(),
     );
     assert!(g.is_empty());
-    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    let non_terminals = vec![
-        "LETTER_UP | LETTER_LO".to_owned(),
-        "word letter | letter".to_owned(),
-    ];
-    let names = vec![
-        "LETTER_LO".to_owned(),
-        "LETTER_UP".to_owned(),
-        "letter".to_owned(),
-        "word".to_owned(),
-    ];
+    let terminals = vec!["[a-z]", "[A-Z]"];
+    let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
+    let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
     let g = Grammar::new(&terminals, &non_terminals, &names);
     assert!(!g.is_empty());
 }
@@ -98,17 +70,9 @@ fn grammar_is_empty() {
 #[test]
 //Asserts order and production correctness in a hand-crafted grammar
 fn grammar_crafted() {
-    let terminals = vec!["[a-z]".to_owned(), "[A-Z]".to_owned()];
-    let non_terminals = vec![
-        "LETTER_UP | LETTER_LO".to_owned(),
-        "word letter | letter".to_owned(),
-    ];
-    let names = vec![
-        "LETTER_LO".to_owned(),
-        "LETTER_UP".to_owned(),
-        "letter".to_owned(),
-        "word".to_owned(),
-    ];
+    let terminals = vec!["[a-z]", "[A-Z]"];
+    let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
+    let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
     let g = Grammar::new(&terminals, &non_terminals, &names);
     assert_eq!(g[0], "[a-z]");
     assert_eq!(g[1], "[A-Z]");
