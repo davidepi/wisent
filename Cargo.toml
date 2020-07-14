@@ -18,6 +18,7 @@ lto = "fat"
 
 [dependencies]
 regex = "1"
+maplit = "1"
 
 [dev-dependencies]
 criterion = "0.3"

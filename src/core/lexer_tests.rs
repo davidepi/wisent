@@ -1,8 +1,28 @@
-use crate::error::ParseError;
-use crate::lexer;
+use crate::grammar::Grammar;
 use crate::lexer::{
-    canonicalise, expand_literals, gen_parse_tree, get_alphabet, BSTree, OpType, RegexOp,
+    canonicalise, expand_literals, gen_parse_tree, get_alphabet, transition_table_nfa, BSTree,
+    OpType, RegexOp,
 };
+
+#[test]
+fn nfa_construction_single_production() {
+    let terminal = "(('a'*'b')|'c')?'c'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let nfa = transition_table_nfa(&grammar);
+    assert!(!nfa.is_empty());
+    assert_eq!(nfa.nodes(), 16);
+    assert_eq!(nfa.edges(), 15);
+}
+
+#[test]
+fn nfa_construction_multi_production() {
+    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    let nfa = transition_table_nfa(&grammar);
+    assert!(!nfa.is_empty());
+    assert_eq!(nfa.nodes(), 7);
+    assert_eq!(nfa.edges(), 5);
+}
 
 #[test]
 fn canonical_tree() {

@@ -9,3 +9,6 @@ mod grammar_tests;
 pub mod lexer;
 #[cfg(test)]
 mod lexer_tests;
+
+#[macro_use]
+extern crate maplit;
