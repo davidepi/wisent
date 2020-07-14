@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
-use crate::error::ParseError;
+use crate::grammar::Grammar;
 
 const EPSILON_VALUE: char = '\u{107FE1}';
 const ANY_VALUE: char = '\u{10A261}';
@@ -14,17 +14,34 @@ pub struct BSTree<T> {
     pub right: Option<Box<BSTree<T>>>,
 }
 
+pub fn transition_table(grammar: &Grammar) {
+    let parse_trees = grammar
+        .iter_term()
+        .map(|x| gen_parse_tree(x))
+        .map(expand_literals)
+        .collect::<Vec<_>>();
+    let alphabet = parse_trees
+        .iter()
+        .flat_map(get_alphabet)
+        .collect::<HashSet<char>>();
+    let _canonical_tree = parse_trees
+        .into_iter()
+        .map(|x| canonicalise(x, &alphabet))
+        .collect::<Vec<_>>();
+    todo!()
+}
+
 impl<T> std::fmt::Display for BSTree<T>
 where
     T: std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{\"val\":\"{}\"", &self.value);
+        write!(f, "{{\"val\":\"{}\"", &self.value)?;
         if let Some(left) = &self.left {
-            write!(f, ",\"left\":{}", *left);
+            write!(f, ",\"left\":{}", *left)?;
         }
         if let Some(right) = &self.right {
-            write!(f, ",\"right\":{}", *right);
+            write!(f, ",\"right\":{}", *right)?;
         }
         write!(f, "}}")
     }
@@ -111,9 +128,7 @@ impl std::fmt::Display for OpType {
 fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> usize {
     let mut escapes = 0;
     let mut skipped = 0;
-    let mut last_char = '\0';
     for skip in it {
-        last_char = skip.1;
         if skip.1 == until {
             if escapes % 2 == 0 {
                 break;
@@ -294,14 +309,13 @@ pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOp> {
     while !operators.is_empty() {
         combine_nodes(&mut operands, &mut operators);
     }
-    let tree = operands.pop().unwrap();
-    tree
+    operands.pop().unwrap()
 }
 
 pub(super) fn expand_literals(node: BSTree<RegexOp>) -> BSTree<ExLiteral> {
     match node.value.r#type {
         OpType::ID => expand_literal_node(node.value.value),
-        n @ _ => {
+        n => {
             let left = match node.left {
                 Some(l) => Some(Box::new(expand_literals(*l))),
                 None => None,
@@ -332,14 +346,13 @@ fn expand_literal_node(literal: &str) -> BSTree<ExLiteral> {
     let start = iter.next().unwrap();
     let end;
     let mut last = '\x00';
-    let mut set_op;
-    if start == '[' {
+    let mut set_op = if start == '[' {
         end = ']';
-        set_op = OpType::OR;
+        OpType::OR
     } else {
         end = '\'';
-        set_op = OpType::AND;
-    }
+        OpType::AND
+    };
     while let Some(char) = iter.next() {
         let mut pushme = char;
         if char == '\\' {
@@ -378,7 +391,7 @@ fn expand_literal_node(literal: &str) -> BSTree<ExLiteral> {
     }
     //check possible range in form 'a'..'z', at this point I ASSUME this can be a literal only
     //and the syntax has already been checked.
-    if let Some(char @ '.') = iter.next() {
+    if let Some(_c @ '.') = iter.next() {
         set_op = OpType::OR;
         iter.next();
         iter.next();
@@ -471,7 +484,6 @@ pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) ->
             let mut chars = alphabet
                 .iter()
                 .chain(&[ANY_VALUE])
-                .into_iter()
                 .map(|c| BSTree {
                     value: Literal::Value(*c),
                     left: None,
@@ -504,7 +516,6 @@ pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) ->
                     let mut diff = alphabet
                         .difference(&subnode_alphabet)
                         .chain(&[ANY_VALUE])
-                        .into_iter()
                         .map(|c| BSTree {
                             value: Literal::Value(*c),
                             left: None,
