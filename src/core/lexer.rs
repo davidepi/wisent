@@ -18,11 +18,34 @@ type NFANode = usize;
 pub struct NFA {
     states_no: usize,
     transition: HashMap<(NFANode, char), BTreeSet<NFANode>>,
+    alphabet: HashSet<char>,
     start: NFANode,
     accept: BTreeSet<(NFANode, usize)>,
 }
 
+type DFANode = usize;
+pub struct DFA {
+    states_no: usize,
+    transition: HashMap<(DFANode, char), DFANode>,
+    start: DFANode,
+    accept: BTreeSet<(DFANode, usize)>,
+}
+
 impl NFA {
+    pub fn is_empty(&self) -> bool {
+        self.states_no == 0
+    }
+
+    pub fn nodes(&self) -> usize {
+        self.states_no
+    }
+
+    pub fn edges(&self) -> usize {
+        self.transition.iter().fold(0, |acc, x| x.1.len() + acc)
+    }
+}
+
+impl DFA {
     pub fn is_empty(&self) -> bool {
         self.states_no == 0
     }
@@ -53,12 +76,134 @@ impl std::fmt::Display for NFA {
                 let mut symbol = (trans.0).1;
                 if symbol == EPSILON_VALUE {
                     symbol = '\u{03F5}';
+                } else if (symbol as usize) < 32 {
+                    symbol = '\u{FFFF}';
+                } else if symbol == '"' {
+                    symbol = '\u{2033}';
                 }
                 write!(f, "{}->{}[label=\"{}\"];", source, target, symbol)?;
             }
         }
         write!(f, "}}")
     }
+}
+
+impl std::fmt::Display for DFA {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "digraph{{start[shape=point];")?;
+        for state in &self.accept {
+            write!(
+                f,
+                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
+                state.0, state.1
+            )?;
+        }
+        write!(f, "start->{};", &self.start)?;
+        for trans in &self.transition {
+            let source = (trans.0).0;
+            let mut symbol = (trans.0).1;
+            if (symbol as usize) < 32 {
+                symbol = '\u{FFFF}';
+            } else if symbol == '"' {
+                symbol = '\u{2033}';
+            }
+            write!(f, "{}->{}[label=\"{}\"];", source, trans.1, symbol)?;
+        }
+        write!(f, "}}")
+    }
+}
+
+fn sc_epsilon_closure(
+    set: &BTreeSet<NFANode>,
+    tt: &HashMap<(NFANode, char), BTreeSet<NFANode>>,
+) -> BTreeSet<NFANode> {
+    let mut stack = set.iter().copied().collect::<Vec<_>>();
+    let mut closure = set.iter().copied().collect::<BTreeSet<_>>();
+    while let Some(t) = stack.pop() {
+        if let Some(eset) = tt.get(&(t, EPSILON_VALUE)) {
+            closure = closure.union(eset).cloned().collect::<BTreeSet<_>>();
+            stack.extend(eset.iter());
+        }
+    }
+    closure
+}
+
+pub fn subset_construction(nfa: &NFA) -> DFA {
+    let mut ds_marked = BTreeSet::new();
+    let mut ds_unmarked = Vec::new();
+    let mut indices = HashMap::new();
+    let mut index = 0 as usize;
+    let alpha = nfa
+        .alphabet
+        .iter()
+        .chain(&[ANY_VALUE])
+        .collect::<HashSet<_>>();
+    let mut transition = HashMap::new();
+    let mut accept = BTreeSet::new();
+
+    let s0 = sc_epsilon_closure(&btreeset! {nfa.start}, &nfa.transition);
+    indices.insert(s0.clone(), index);
+    ds_unmarked.push(s0);
+    index += 1;
+    while let Some(t) = ds_unmarked.pop() {
+        let t_idx = *indices.get(&t).unwrap();
+        ds_marked.insert(t.clone());
+        for symbol in alpha.iter() {
+            let sym = **symbol;
+            let mov = sc_move(&t, sym, &nfa.transition);
+            let u = sc_epsilon_closure(&mov, &nfa.transition);
+            let u_idx;
+            if !u.is_empty() {
+                //check if node has already been created
+                if !indices.contains_key(&u) {
+                    u_idx = index;
+                    indices.insert(u.clone(), u_idx);
+                    index += 1;
+                    if let Some(accepted_production) = sc_accepting(&u, &nfa.accept) {
+                        accept.insert((u_idx, accepted_production));
+                    }
+                    ds_unmarked.push(u);
+                } else {
+                    u_idx = *indices.get(&u).unwrap();
+                }
+                transition.insert((t_idx, sym), u_idx);
+            }
+        }
+    }
+    DFA {
+        states_no: index,
+        transition,
+        start: 0,
+        accept,
+    }
+}
+
+fn sc_accepting(set: &BTreeSet<NFANode>, accepting: &BTreeSet<(NFANode, usize)>) -> Option<usize> {
+    let mut productions = BTreeSet::new();
+    for node in accepting {
+        if set.contains(&node.0) {
+            productions.insert(node.1);
+        }
+    }
+    if !productions.is_empty() {
+        Some(*productions.iter().next().unwrap()) //get smallest value (production appearing first)
+    } else {
+        None
+    }
+}
+
+fn sc_move(
+    set: &BTreeSet<NFANode>,
+    symbol: char,
+    tt: &HashMap<(NFANode, char), BTreeSet<NFANode>>,
+) -> BTreeSet<NFANode> {
+    let mut ret = BTreeSet::new();
+    for node in set {
+        if let Some(t) = tt.get(&(*node, symbol)) {
+            ret = ret.union(t).cloned().collect::<BTreeSet<_>>();
+        }
+    }
+    ret
 }
 
 fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production: usize) -> NFA {
@@ -69,10 +214,10 @@ fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production:
     //first transform the parse tree into a stack, this will be the processing order
     while let Some(node) = visit.pop() {
         if let Some(l) = &node.left {
-            visit.push(*&l);
+            visit.push(l);
         }
         if let Some(r) = &node.right {
-            visit.push(*&r);
+            visit.push(r);
         }
         todo.push(node);
     }
@@ -86,6 +231,7 @@ fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production:
                     transition: hashmap! {
                         (index, val) => btreeset!{index+1},
                     },
+                    alphabet: hashset! {val},
                     start: index,
                     accept: btreeset! {(index+1, production)},
                 };
@@ -119,6 +265,7 @@ fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production:
                         .insert((acc.0, EPSILON_VALUE), btreeset! {second.start});
                 }
                 first.accept = second.accept;
+                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
                 first.states_no += second.states_no;
                 pushme = first;
             }
@@ -139,6 +286,7 @@ fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production:
                         .insert((acc.0, EPSILON_VALUE), btreeset! {new_end});
                 }
                 first.start = new_start;
+                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
                 first.accept = btreeset! {(new_end, production)};
                 first.states_no += second.states_no + 2;
                 pushme = first;
@@ -174,7 +322,6 @@ pub fn transition_table_nfa(grammar: &Grammar) -> NFA {
         })
         .collect::<Vec<_>>();
     //merge productions into a single NFA
-    let ret;
     if thompson_nfa.len() > 1 {
         let start_transition = thompson_nfa
             .iter()
@@ -190,16 +337,16 @@ pub fn transition_table_nfa(grammar: &Grammar) -> NFA {
             .flat_map(|x| x.transition)
             .collect::<HashMap<_, _>>();
         transition_table.insert((index, EPSILON_VALUE), start_transition);
-        ret = NFA {
+        NFA {
             states_no: index + 1,
             transition: transition_table,
+            alphabet,
             start: index,
             accept,
         }
     } else {
-        ret = thompson_nfa.pop().unwrap();
+        thompson_nfa.pop().unwrap()
     }
-    ret
 }
 
 impl<T> std::fmt::Display for BSTree<T>

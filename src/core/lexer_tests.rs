@@ -1,8 +1,22 @@
 use crate::grammar::Grammar;
 use crate::lexer::{
-    canonicalise, expand_literals, gen_parse_tree, get_alphabet, transition_table_nfa, BSTree,
-    OpType, RegexOp,
+    canonicalise, expand_literals, gen_parse_tree, get_alphabet, subset_construction,
+    transition_table_nfa, BSTree, OpType, RegexOp,
 };
+use std::fs;
+
+#[test]
+fn dfa_construction_single_acc() {
+    let terminal = "('a'|'b')*'abb'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let nfa = transition_table_nfa(&grammar);
+    let dfa = subset_construction(&nfa);
+    assert_eq!(nfa.nodes(), 14);
+    assert_eq!(nfa.edges(), 16);
+    assert_eq!(dfa.nodes(), 5);
+    assert_eq!(dfa.edges(), 10);
+}
 
 #[test]
 fn nfa_construction_single_production() {
@@ -12,7 +26,7 @@ fn nfa_construction_single_production() {
     let nfa = transition_table_nfa(&grammar);
     assert!(!nfa.is_empty());
     assert_eq!(nfa.nodes(), 16);
-    assert_eq!(nfa.edges(), 15);
+    assert_eq!(nfa.edges(), 19);
 }
 
 #[test]
@@ -21,7 +35,7 @@ fn nfa_construction_multi_production() {
     let nfa = transition_table_nfa(&grammar);
     assert!(!nfa.is_empty());
     assert_eq!(nfa.nodes(), 7);
-    assert_eq!(nfa.edges(), 5);
+    assert_eq!(nfa.edges(), 8);
 }
 
 #[test]
