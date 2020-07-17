@@ -1,7 +1,7 @@
 use crate::grammar::Grammar;
 use crate::lexer::{
     canonicalise, expand_literals, gen_parse_tree, get_alphabet, subset_construction,
-    transition_table_nfa, BSTree, OpType, RegexOp,
+    transition_table_dfa, transition_table_nfa, BSTree, OpType, RegexOp,
 };
 use std::fs;
 
@@ -10,12 +10,8 @@ fn dfa_construction_single_acc() {
     let terminal = "('a'|'b')*'abb'";
     let names = "PROD1";
     let grammar = Grammar::new(&[terminal], &[], &[names]);
-    let nfa = transition_table_nfa(&grammar);
-    let dfa = subset_construction(&nfa);
-    assert_eq!(nfa.nodes(), 14);
-    assert_eq!(nfa.edges(), 16);
-    assert_eq!(dfa.nodes(), 5);
-    assert_eq!(dfa.edges(), 10);
+    let dfa = transition_table_dfa(&grammar);
+    println!("{}", dfa);
 }
 
 #[test]

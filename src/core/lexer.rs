@@ -6,6 +6,7 @@ use crate::grammar::Grammar;
 
 const EPSILON_VALUE: char = '\u{107FE1}';
 const ANY_VALUE: char = '\u{10A261}';
+const PLACEHOLDER_CHAR: char = '\u{10AFF0}';
 
 #[derive(Clone)]
 pub struct BSTree<T> {
@@ -27,7 +28,6 @@ type DFANode = usize;
 pub struct DFA {
     states_no: usize,
     transition: HashMap<(DFANode, char), DFANode>,
-    start: DFANode,
     accept: BTreeSet<(DFANode, usize)>,
 }
 
@@ -98,7 +98,7 @@ impl std::fmt::Display for DFA {
                 state.0, state.1
             )?;
         }
-        write!(f, "start->{};", &self.start)?;
+        write!(f, "start->0;")?;
         for trans in &self.transition {
             let source = (trans.0).0;
             let mut symbol = (trans.0).1;
@@ -173,7 +173,6 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
     DFA {
         states_no: index,
         transition,
-        start: 0,
         accept,
     }
 }
@@ -291,6 +290,7 @@ fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production:
                 first.states_no += second.states_no + 2;
                 pushme = first;
             }
+            Literal::Acc(_) => panic!("Accept state not allowed in thompson construction!"),
         }
         done.push(pushme);
     }
@@ -349,6 +349,23 @@ pub fn transition_table_nfa(grammar: &Grammar) -> NFA {
     }
 }
 
+pub fn transition_table_dfa(grammar: &Grammar) -> DFA {
+    let parse_trees = grammar
+        .iter_term()
+        .map(|x| gen_parse_tree(x))
+        .map(expand_literals)
+        .collect::<Vec<_>>();
+    let alphabet = parse_trees
+        .iter()
+        .flat_map(get_alphabet)
+        .collect::<HashSet<char>>();
+    let mut canonical_tree = parse_trees
+        .into_iter()
+        .map(|x| canonicalise(x, &alphabet))
+        .collect::<Vec<_>>();
+    direct_construction(canonical_tree.pop().unwrap(), 0, 0)
+}
+
 impl<T> std::fmt::Display for BSTree<T>
 where
     T: std::fmt::Display,
@@ -398,6 +415,7 @@ impl std::fmt::Display for ExLiteral {
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub(super) enum Literal {
     Value(char),
+    Acc(usize),
     KLEENE,
     AND,
     OR,
@@ -407,6 +425,7 @@ impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Literal::Value(i) => write!(f, "{}", i),
+            Literal::Acc(i) => write!(f, "ACC({})", i),
             Literal::KLEENE => write!(f, "*"),
             Literal::AND => write!(f, "&"),
             Literal::OR => write!(f, "|"),
@@ -930,4 +949,205 @@ pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) ->
             }
         }
     }
+}
+
+struct DCHelper {
+    ttype: Literal,
+    index: usize,
+    nullable: bool,
+    firstpos: BTreeSet<usize>,
+    lastpos: BTreeSet<usize>,
+}
+
+fn build_dc_helper(node: &BSTree<Literal>, start_index: usize) -> BSTree<DCHelper> {
+    //postorder because I need to build it bottom up
+    let mut index = start_index;
+    let mut children = [&node.left, &node.right]
+        .iter()
+        .map(|x| match x {
+            Some(c) => {
+                let helper = build_dc_helper(&*c, index);
+                index = helper.value.index + 1;
+                Some(Box::new(helper))
+            }
+            None => None,
+        })
+        .collect::<Vec<_>>();
+    let right = children.pop().unwrap();
+    let left = children.pop().unwrap();
+    let nullable;
+    let firstpos;
+    let lastpos;
+    match &node.value {
+        Literal::Value(val) => {
+            if *val == EPSILON_VALUE {
+                nullable = true;
+                firstpos = BTreeSet::new();
+                lastpos = BTreeSet::new();
+            } else {
+                nullable = false;
+                firstpos = btreeset! {index};
+                lastpos = btreeset! {index};
+            }
+        }
+        Literal::KLEENE => {
+            let c1 = &left.as_ref().unwrap().value;
+            nullable = true;
+            firstpos = c1.firstpos.clone();
+            lastpos = c1.lastpos.clone();
+        }
+        Literal::AND => {
+            let c1 = &left.as_ref().unwrap().value;
+            let c2 = &right.as_ref().unwrap().value;
+            nullable = c1.nullable && c2.nullable;
+            firstpos = if c1.nullable {
+                c1.firstpos.union(&c2.firstpos).cloned().collect()
+            } else {
+                c1.firstpos.clone()
+            };
+            lastpos = if c2.nullable {
+                c1.lastpos.union(&c2.lastpos).cloned().collect()
+            } else {
+                c2.lastpos.clone()
+            };
+        }
+        Literal::OR => {
+            let c1 = &left.as_ref().unwrap().value;
+            let c2 = &right.as_ref().unwrap().value;
+            nullable = c1.nullable || c2.nullable;
+            firstpos = c1.firstpos.union(&c2.firstpos).cloned().collect();
+            lastpos = c1.lastpos.union(&c2.lastpos).cloned().collect();
+        }
+        Literal::Acc(_) => {
+            nullable = false;
+            firstpos = btreeset! {index};
+            lastpos = btreeset! {index};
+        }
+    }
+    BSTree {
+        value: DCHelper {
+            ttype: node.value,
+            index,
+            nullable,
+            firstpos,
+            lastpos,
+        },
+        left,
+        right,
+    }
+}
+fn compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<usize>>) {
+    if let Some(l) = &node.left {
+        compute_followpos(&*l, graph);
+    }
+    if let Some(r) = &node.right {
+        compute_followpos(&*r, graph);
+    }
+    match &node.value.ttype {
+        Literal::Value(_) => {}
+        Literal::Acc(_) => {}
+        Literal::OR => {}
+        Literal::AND => {
+            let c1 = &**node.left.as_ref().unwrap();
+            let c2 = &**node.right.as_ref().unwrap();
+            for i in &c1.value.lastpos {
+                graph[*i] = graph[*i].union(&c2.value.firstpos).cloned().collect();
+            }
+        }
+        Literal::KLEENE => {
+            for i in &node.value.lastpos {
+                graph[*i] = graph[*i].union(&node.value.firstpos).cloned().collect();
+            }
+        }
+    }
+}
+
+fn retrieve_idx_and_acc(
+    node: &BSTree<DCHelper>,
+    indices: &mut Vec<char>,
+    acc: &mut HashMap<usize, usize>,
+) {
+    if let Some(l) = &node.left {
+        retrieve_idx_and_acc(&*l, indices, acc);
+    }
+    if let Some(r) = &node.right {
+        retrieve_idx_and_acc(&*r, indices, acc);
+    }
+    match &node.value.ttype {
+        Literal::Value(val) => indices[node.value.index] = *val,
+        Literal::Acc(prod) => {
+            acc.insert(node.value.index, *prod);
+        }
+        _ => {}
+    }
+}
+
+fn direct_sc(
+    start: BTreeSet<usize>,
+    followpos: &[BTreeSet<usize>],
+    indices: &[char],
+    accepting: &HashMap<usize, usize>,
+) -> DFA {
+    let mut done = hashmap! {
+        start.clone() => 0
+    };
+    let mut index = 1 as usize;
+    let mut unmarked = vec![start];
+    let mut tran = HashMap::new();
+    let mut accept = BTreeSet::new();
+    let alphabet = indices
+        .iter()
+        .filter(|x| **x != PLACEHOLDER_CHAR)
+        .copied()
+        .collect::<HashSet<char>>();
+    while let Some(node_set) = unmarked.pop() {
+        for letter in &alphabet {
+            let u = node_set
+                .iter()
+                .filter(|x| indices[**x] == *letter)
+                .flat_map(|x| &followpos[*x])
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let u_idx;
+            if let Some(got) = done.get(&u) {
+                u_idx = *got;
+            } else {
+                u_idx = index;
+                index += 1;
+                if let Some(acc_prod) = u.iter().flat_map(|x| accepting.get(x)).min() {
+                    accept.insert((u_idx, *acc_prod));
+                }
+                unmarked.push(u.clone());
+                done.insert(u, u_idx);
+            }
+            let set_idx = *done.get(&node_set).unwrap();
+            tran.insert((set_idx, *letter), u_idx);
+        }
+    }
+    DFA {
+        states_no: index + 1,
+        transition: tran,
+        accept,
+    }
+}
+
+fn direct_construction(node: BSTree<Literal>, start_index: usize, production: usize) -> DFA {
+    //build the accepting state
+    let right = BSTree {
+        value: Literal::Acc(production),
+        left: None,
+        right: None,
+    };
+    let root = BSTree {
+        value: Literal::AND,
+        left: Some(Box::new(node)),
+        right: Some(Box::new(right)),
+    };
+    let helper = build_dc_helper(&root, start_index);
+    let mut indices = vec![PLACEHOLDER_CHAR; helper.value.index + 1];
+    let mut followpos = vec![BTreeSet::new(); helper.value.index + 1];
+    let mut accepting = HashMap::new();
+    retrieve_idx_and_acc(&helper, &mut indices, &mut accepting);
+    compute_followpos(&helper, &mut followpos);
+    direct_sc(helper.value.firstpos, &followpos, &indices, &accepting)
 }
