@@ -6,7 +6,6 @@ use crate::grammar::Grammar;
 
 const EPSILON_VALUE: char = '\u{107FE1}';
 const ANY_VALUE: char = '\u{10A261}';
-const PLACEHOLDER_CHAR: char = '\u{10AFF0}';
 
 #[derive(Clone)]
 pub struct BSTree<T> {
@@ -102,10 +101,12 @@ impl std::fmt::Display for DFA {
         for trans in &self.transition {
             let source = (trans.0).0;
             let mut symbol = (trans.0).1;
-            if (symbol as usize) < 32 {
+            if (symbol as usize) < 32 || (symbol as usize) > 126 {
                 symbol = '\u{FFFF}';
             } else if symbol == '"' {
                 symbol = '\u{2033}';
+            } else if symbol == '\\' {
+                symbol = '\u{2216}';
             }
             write!(f, "{}->{}[label=\"{}\"];", source, trans.1, symbol)?;
         }
@@ -359,11 +360,12 @@ pub fn transition_table_dfa(grammar: &Grammar) -> DFA {
         .iter()
         .flat_map(get_alphabet)
         .collect::<HashSet<char>>();
-    let mut canonical_tree = parse_trees
+    let canonical_tree = parse_trees
         .into_iter()
         .map(|x| canonicalise(x, &alphabet))
         .collect::<Vec<_>>();
-    direct_construction(canonical_tree.pop().unwrap(), 0, 0)
+    let merged_tree = collect_productions(canonical_tree);
+    direct_construction(merged_tree)
 }
 
 impl<T> std::fmt::Display for BSTree<T>
@@ -1097,7 +1099,7 @@ fn direct_sc(
     let mut accept = BTreeSet::new();
     let alphabet = indices
         .iter()
-        .filter(|x| **x != PLACEHOLDER_CHAR)
+        .filter(|x| **x != EPSILON_VALUE)
         .copied()
         .collect::<HashSet<char>>();
     while let Some(node_set) = unmarked.pop() {
@@ -1131,23 +1133,53 @@ fn direct_sc(
     }
 }
 
-fn direct_construction(node: BSTree<Literal>, start_index: usize, production: usize) -> DFA {
-    //build the accepting state
-    let right = BSTree {
-        value: Literal::Acc(production),
-        left: None,
-        right: None,
-    };
-    let root = BSTree {
-        value: Literal::AND,
-        left: Some(Box::new(node)),
-        right: Some(Box::new(right)),
-    };
-    let helper = build_dc_helper(&root, start_index);
-    let mut indices = vec![PLACEHOLDER_CHAR; helper.value.index + 1];
+fn direct_construction(node: BSTree<Literal>) -> DFA {
+    let helper = build_dc_helper(&node, 0);
+    let mut indices = vec![EPSILON_VALUE; helper.value.index + 1];
     let mut followpos = vec![BTreeSet::new(); helper.value.index + 1];
     let mut accepting = HashMap::new();
     retrieve_idx_and_acc(&helper, &mut indices, &mut accepting);
     compute_followpos(&helper, &mut followpos);
     direct_sc(helper.value.firstpos, &followpos, &indices, &accepting)
 }
+
+fn collect_productions(nodes: Vec<BSTree<Literal>>) -> BSTree<Literal> {
+    let mut roots = Vec::new();
+    for node in nodes.into_iter().enumerate() {
+        let right = BSTree {
+            value: Literal::Acc(node.0),
+            left: None,
+            right: None,
+        };
+        let root = BSTree {
+            value: Literal::AND,
+            left: Some(Box::new(node.1)),
+            right: Some(Box::new(right)),
+        };
+        roots.push(root);
+    }
+    while roots.len() > 1 {
+        let right = roots.pop().unwrap();
+        let left = roots.pop().unwrap();
+        let new_root = BSTree {
+            value: Literal::OR,
+            left: Some(Box::new(left)),
+            right: Some(Box::new(right)),
+        };
+        roots.push(new_root);
+    }
+    roots.pop().unwrap()
+}
+
+// fn min_dfa(dfa: DFA) -> DFA {
+//     let acc = dfa.accept.iter().map(|x| x.0).collect::<BTreeSet<_>>();
+//     let non_acc = (0 as usize..)
+//         .take(dfa.states_no)
+//         .difference(&accepting)
+//         .collect::<BTreeSet<_>>();
+//     let mut partitions = btreeset! {acc, non_acc};
+//     let mut new_partitions;
+//     loop {
+//
+//     }
+// }

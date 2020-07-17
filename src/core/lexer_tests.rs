@@ -6,11 +6,27 @@ use crate::lexer::{
 use std::fs;
 
 #[test]
+fn lex_c_grammar() {
+    let g = Grammar::parse_grammar("./resources/c_grammar.txt").unwrap();
+    let dfa = transition_table_dfa(&g);
+    let str = format!("{}", dfa);
+    fs::write("/home/davide/Desktop/prova.dot", str).expect("Unable to write file");
+}
+
+#[test]
 fn dfa_construction_single_acc() {
     let terminal = "('a'|'b')*'abb'";
     let names = "PROD1";
     let grammar = Grammar::new(&[terminal], &[], &[names]);
     let dfa = transition_table_dfa(&grammar);
+    println!("{}", dfa);
+}
+
+#[test]
+fn dfa_construction_multi_production() {
+    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    let dfa = transition_table_dfa(&grammar);
+    assert!(!dfa.is_empty());
     println!("{}", dfa);
 }
 
