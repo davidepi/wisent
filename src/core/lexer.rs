@@ -3,6 +3,7 @@ use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
 use crate::grammar::Grammar;
+use std::usize::MAX;
 
 const EPSILON_VALUE: char = '\u{107FE1}';
 const ANY_VALUE: char = '\u{10A261}';
@@ -27,7 +28,8 @@ type DFANode = usize;
 pub struct DFA {
     states_no: usize,
     transition: HashMap<(DFANode, char), DFANode>,
-    accept: BTreeSet<(DFANode, usize)>,
+    start: DFANode,
+    accept: HashMap<DFANode, usize>,
 }
 
 impl NFA {
@@ -97,7 +99,7 @@ impl std::fmt::Display for DFA {
                 state.0, state.1
             )?;
         }
-        write!(f, "start->0;")?;
+        write!(f, "start->{};", &self.start)?;
         for trans in &self.transition {
             let source = (trans.0).0;
             let mut symbol = (trans.0).1;
@@ -140,7 +142,7 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
         .chain(&[ANY_VALUE])
         .collect::<HashSet<_>>();
     let mut transition = HashMap::new();
-    let mut accept = BTreeSet::new();
+    let mut accept = HashMap::new();
 
     let s0 = sc_epsilon_closure(&btreeset! {nfa.start}, &nfa.transition);
     indices.insert(s0.clone(), index);
@@ -161,7 +163,7 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
                     indices.insert(u.clone(), u_idx);
                     index += 1;
                     if let Some(accepted_production) = sc_accepting(&u, &nfa.accept) {
-                        accept.insert((u_idx, accepted_production));
+                        accept.insert(u_idx, accepted_production);
                     }
                     ds_unmarked.push(u);
                 } else {
@@ -175,6 +177,7 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
         states_no: index,
         transition,
         accept,
+        start: 0,
     }
 }
 
@@ -365,7 +368,9 @@ pub fn transition_table_dfa(grammar: &Grammar) -> DFA {
         .map(|x| canonicalise(x, &alphabet))
         .collect::<Vec<_>>();
     let merged_tree = collect_productions(canonical_tree);
-    direct_construction(merged_tree)
+    let dfa = direct_construction(merged_tree);
+    min_dfa(dfa, &alphabet)
+    // dfa
 }
 
 impl<T> std::fmt::Display for BSTree<T>
@@ -1096,7 +1101,7 @@ fn direct_sc(
     let mut index = 1 as usize;
     let mut unmarked = vec![start];
     let mut tran = HashMap::new();
-    let mut accept = BTreeSet::new();
+    let mut accept = HashMap::new();
     let alphabet = indices
         .iter()
         .filter(|x| **x != EPSILON_VALUE)
@@ -1117,7 +1122,7 @@ fn direct_sc(
                 u_idx = index;
                 index += 1;
                 if let Some(acc_prod) = u.iter().flat_map(|x| accepting.get(x)).min() {
-                    accept.insert((u_idx, *acc_prod));
+                    accept.insert(u_idx, *acc_prod);
                 }
                 unmarked.push(u.clone());
                 done.insert(u, u_idx);
@@ -1128,6 +1133,7 @@ fn direct_sc(
     }
     DFA {
         states_no: index + 1,
+        start: 0,
         transition: tran,
         accept,
     }
@@ -1171,15 +1177,99 @@ fn collect_productions(nodes: Vec<BSTree<Literal>>) -> BSTree<Literal> {
     roots.pop().unwrap()
 }
 
-// fn min_dfa(dfa: DFA) -> DFA {
-//     let acc = dfa.accept.iter().map(|x| x.0).collect::<BTreeSet<_>>();
-//     let non_acc = (0 as usize..)
-//         .take(dfa.states_no)
-//         .difference(&accepting)
-//         .collect::<BTreeSet<_>>();
-//     let mut partitions = btreeset! {acc, non_acc};
-//     let mut new_partitions;
-//     loop {
-//
-//     }
-// }
+fn min_dfa(dfa: DFA, alphabet: &HashSet<char>) -> DFA {
+    let acc = dfa.accept.iter().map(|x| *x.0).collect::<BTreeSet<_>>();
+    let non_acc = (0 as usize..)
+        .take(dfa.states_no - 1)
+        .collect::<BTreeSet<_>>()
+        .difference(&acc)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut partitions = vec![acc, non_acc];
+    loop {
+        let size = partitions.len();
+        partitions = partitions
+            .into_iter()
+            .flat_map(|x| split_partition(x, &dfa.transition, alphabet))
+            .collect::<Vec<_>>();
+        if size == partitions.len() {
+            break;
+        }
+    }
+    reconstruct(partitions, dfa)
+}
+
+fn reconstruct(partitions: Vec<BTreeSet<usize>>, dfa: DFA) -> DFA {
+    //first record in which partitions is every node
+    let mut position = HashMap::new();
+    let mut new_trans = HashMap::new();
+    let mut acc = HashMap::new();
+    let mut self_loop = vec![0; partitions.len()];
+    for (i, partition) in partitions.iter().enumerate() {
+        let mut acc_node = MAX;
+        for node in partition {
+            if let Some(t) = dfa.accept.get(node) {
+                acc_node = std::cmp::min(*t, acc_node);
+            }
+            position.insert(*node, i);
+        }
+        if acc_node != MAX {
+            acc.insert(i, acc_node);
+        }
+    }
+    //then remap everything
+    for transition in dfa.transition {
+        let old_source = (transition.0).0;
+        let new_source = *position.get(&old_source).unwrap();
+        let letter = (transition.0).1;
+        let old_target = transition.1;
+        let new_target = *position.get(&old_target).unwrap();
+        if new_source == new_target {
+            self_loop[new_source] = self_loop[new_source] + 1;
+        }
+        new_trans.insert((new_source, letter), new_target);
+    }
+    // remove the sink (assuming it always exists)
+    let sink = self_loop
+        .iter()
+        .enumerate()
+        .map(|(x, y)| (y, x))
+        .max()
+        .unwrap()
+        .1;
+    new_trans = new_trans.into_iter().filter(|x| x.1 != sink).collect();
+    DFA {
+        states_no: partitions.len(), //-1 is the removed sink
+        transition: new_trans,
+        accept: acc,
+        start: *position.get(&(0 as usize)).unwrap(),
+    }
+}
+
+fn split_partition(
+    partition: BTreeSet<usize>,
+    transition: &HashMap<(usize, char), usize>,
+    alphabet: &HashSet<char>,
+) -> Vec<BTreeSet<usize>> {
+    if partition.len() > 1 {
+        for symbol in alphabet {
+            let mut iter = partition.iter();
+            let first = *iter.next().unwrap();
+            let target = transition.get(&(first, *symbol)).unwrap();
+            for node in iter {
+                let cur_target = transition.get(&(*node, *symbol)).unwrap();
+                if target != cur_target {
+                    let single_set = btreeset![*node];
+                    let new_partition = partition
+                        .difference(&single_set)
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    return vec![new_partition, single_set];
+                }
+            }
+        }
+        vec![partition]
+    } else {
+        vec![partition]
+    }
+}

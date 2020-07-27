@@ -14,6 +14,25 @@ fn lex_c_grammar() {
 }
 
 #[test]
+fn dfa_construction_conflicts() {
+    //they should be different: the second accept abb as a*b+ (appearing first in the productions)
+    let grammar1 = Grammar::new(
+        &["'a'", "'abb'", "'a'*'b'+"],
+        &[],
+        &["A", "ABB", "ASTARBPLUS"],
+    );
+    let dfa1 = transition_table_dfa(&grammar1);
+    let grammar2 = Grammar::new(
+        &["'a'*'b'+", "'abb'", "'a'"],
+        &[],
+        &["ASTARBPLUS", "ABB", "A"],
+    );
+    let dfa2 = transition_table_dfa(&grammar2);
+    println!("{}", dfa1);
+    println!("{}", dfa2);
+}
+
+#[test]
 fn dfa_construction_single_acc() {
     let terminal = "('a'|'b')*'abb'";
     let names = "PROD1";
