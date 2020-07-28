@@ -3,7 +3,6 @@ use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
 use crate::grammar::Grammar;
-use std::usize::MAX;
 
 const EPSILON_VALUE: char = '\u{107FE1}';
 const ANY_VALUE: char = '\u{10A261}';
@@ -28,6 +27,7 @@ type DFANode = usize;
 pub struct DFA {
     states_no: usize,
     transition: HashMap<(DFANode, char), DFANode>,
+    alphabet: HashSet<char>,
     start: DFANode,
     accept: HashMap<DFANode, usize>,
 }
@@ -136,11 +136,6 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
     let mut ds_unmarked = Vec::new();
     let mut indices = HashMap::new();
     let mut index = 0 as usize;
-    let alpha = nfa
-        .alphabet
-        .iter()
-        .chain(&[ANY_VALUE])
-        .collect::<HashSet<_>>();
     let mut transition = HashMap::new();
     let mut accept = HashMap::new();
 
@@ -151,8 +146,8 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
     while let Some(t) = ds_unmarked.pop() {
         let t_idx = *indices.get(&t).unwrap();
         ds_marked.insert(t.clone());
-        for symbol in alpha.iter() {
-            let sym = **symbol;
+        for symbol in nfa.alphabet.iter() {
+            let sym = *symbol;
             let mov = sc_move(&t, sym, &nfa.transition);
             let u = sc_epsilon_closure(&mov, &nfa.transition);
             let u_idx;
@@ -173,12 +168,23 @@ pub fn subset_construction(nfa: &NFA) -> DFA {
             }
         }
     }
-    DFA {
+    //add sink (it's not guaranteed to have a sink and REQUIRED by the min_dfa function)
+    //accidentally adding a second sink is no problem: it will be removed by min_dfa function
+    let sink = index;
+    index += 1;
+    for node in 0..index {
+        for symbol in nfa.alphabet.iter() {
+            transition.entry((node, *symbol)).or_insert(sink);
+        }
+    }
+    let non_min_dfa = DFA {
         states_no: index,
+        alphabet: nfa.alphabet.clone(),
         transition,
         accept,
         start: 0,
-    }
+    };
+    min_dfa(non_min_dfa)
 }
 
 fn sc_accepting(set: &BTreeSet<NFANode>, accepting: &BTreeSet<(NFANode, usize)>) -> Option<usize> {
@@ -229,12 +235,16 @@ fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production:
         let pushme;
         match node.value {
             Literal::Value(val) => {
+                let mut alphabet = HashSet::new();
+                if val != EPSILON_VALUE {
+                    alphabet.insert(val);
+                }
                 pushme = NFA {
                     states_no: 2,
                     transition: hashmap! {
                         (index, val) => btreeset!{index+1},
                     },
-                    alphabet: hashset! {val},
+                    alphabet,
                     start: index,
                     accept: btreeset! {(index+1, production)},
                 };
@@ -369,8 +379,7 @@ pub fn transition_table_dfa(grammar: &Grammar) -> DFA {
         .collect::<Vec<_>>();
     let merged_tree = collect_productions(canonical_tree);
     let dfa = direct_construction(merged_tree);
-    min_dfa(dfa, &alphabet)
-    // dfa
+    min_dfa(dfa)
 }
 
 impl<T> std::fmt::Display for BSTree<T>
@@ -857,6 +866,7 @@ pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) ->
                     if let Some(r) = node.right {
                         subnode_alphabet.extend(get_alphabet(&*r));
                     }
+                    // this creates problems in ~. but this statement is stupid so I don't care
                     let mut diff = alphabet
                         .difference(&subnode_alphabet)
                         .chain(&[ANY_VALUE])
@@ -876,7 +886,6 @@ pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) ->
                         };
                         diff.push(new_node);
                     }
-                    //if this panics is probably some weird nonsense regexp such as ~.
                     diff.pop().unwrap()
                 }
                 OpType::OR => {
@@ -1132,7 +1141,8 @@ fn direct_sc(
         }
     }
     DFA {
-        states_no: index + 1,
+        alphabet,
+        states_no: index,
         start: 0,
         transition: tran,
         accept,
@@ -1177,99 +1187,139 @@ fn collect_productions(nodes: Vec<BSTree<Literal>>) -> BSTree<Literal> {
     roots.pop().unwrap()
 }
 
-fn min_dfa(dfa: DFA, alphabet: &HashSet<char>) -> DFA {
-    let acc = dfa.accept.iter().map(|x| *x.0).collect::<BTreeSet<_>>();
-    let non_acc = (0 as usize..)
-        .take(dfa.states_no - 1)
-        .collect::<BTreeSet<_>>()
-        .difference(&acc)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut partitions = vec![acc, non_acc];
-    loop {
-        let size = partitions.len();
-        partitions = partitions
-            .into_iter()
-            .flat_map(|x| split_partition(x, &dfa.transition, alphabet))
-            .collect::<Vec<_>>();
-        if size == partitions.len() {
-            break;
+fn min_dfa(dfa: DFA) -> DFA {
+    let mut partitions = init_partitions(&dfa);
+    let mut positions = HashMap::new();
+    for (partition_index, partition) in partitions.iter().enumerate() {
+        for node in partition {
+            positions.insert(*node, partition_index);
         }
     }
-    reconstruct(partitions, dfa)
+    while partitions.len() < dfa.states_no {
+        let mut old_partitions = Vec::new();
+        let mut new_partitions = Vec::new();
+        for partition in partitions {
+            let split = split_partition(partition, &positions, &dfa);
+            old_partitions.push(split.0);
+            if !split.1.is_empty() {
+                new_partitions.push(split.1);
+            }
+        }
+        if new_partitions.is_empty() {
+            partitions = old_partitions;
+            break;
+        } else {
+            //reindex positions
+            for (new_idx, partition) in new_partitions.iter().enumerate() {
+                for node in partition {
+                    positions.remove(node);
+                    positions.insert(*node, old_partitions.len() + new_idx);
+                }
+            }
+            old_partitions.append(&mut new_partitions);
+            partitions = old_partitions;
+        }
+    }
+    remap(partitions, positions, dfa)
 }
 
-fn reconstruct(partitions: Vec<BTreeSet<usize>>, dfa: DFA) -> DFA {
-    //first record in which partitions is every node
-    let mut position = HashMap::new();
-    let mut new_trans = HashMap::new();
-    let mut acc = HashMap::new();
-    let mut self_loop = vec![0; partitions.len()];
-    for (i, partition) in partitions.iter().enumerate() {
-        let mut acc_node = MAX;
-        for node in partition {
-            if let Some(t) = dfa.accept.get(node) {
-                acc_node = std::cmp::min(*t, acc_node);
-            }
-            position.insert(*node, i);
-        }
-        if acc_node != MAX {
-            acc.insert(i, acc_node);
-        }
+fn init_partitions(dfa: &DFA) -> Vec<HashSet<usize>> {
+    let mut announced_max = std::usize::MIN;
+    let mut acc = HashSet::new();
+    for announced in &dfa.accept {
+        acc.insert(*announced.0);
+        announced_max = announced_max.max(*announced.1);
     }
-    //then remap everything
+    let accepting_no = announced_max + 1;
+    let nacc = (0 as usize..)
+        .take(dfa.states_no)
+        .collect::<HashSet<_>>()
+        .difference(&acc)
+        .cloned()
+        .collect::<HashSet<_>>();
+    // this is a DFA for lexical analysis so I need to further split acc by announced rule
+    let mut ret = vec![HashSet::new(); accepting_no];
+    for announced in &dfa.accept {
+        ret[(*announced.1)].insert(*announced.0);
+    }
+    ret.push(nacc); //add the non_accepting partition to the end
+    ret
+}
+
+fn remap(partitions: Vec<HashSet<usize>>, positions: HashMap<usize, usize>, dfa: DFA) -> DFA {
+    //first record in which partitions is every node
+    let mut new_trans = HashMap::new();
+    let mut accept = HashMap::new();
+    let mut in_degree = vec![0 as usize; partitions.len()];
+    let mut out_degree = vec![0 as usize; partitions.len()];
+    //remap accepting nodes
+    for acc_node in dfa.accept {
+        accept.insert(*positions.get(&acc_node.0).unwrap(), acc_node.1);
+    }
+    //remap transitions
     for transition in dfa.transition {
         let old_source = (transition.0).0;
-        let new_source = *position.get(&old_source).unwrap();
+        let new_source = *positions.get(&old_source).unwrap();
         let letter = (transition.0).1;
         let old_target = transition.1;
-        let new_target = *position.get(&old_target).unwrap();
-        if new_source == new_target {
-            self_loop[new_source] = self_loop[new_source] + 1;
+        let new_target = *positions.get(&old_target).unwrap();
+        if new_source != new_target {
+            out_degree[new_source] += 1;
+            in_degree[new_target] += 1;
         }
         new_trans.insert((new_source, letter), new_target);
     }
-    // remove the sink (assuming it always exists)
-    let sink = self_loop
-        .iter()
-        .enumerate()
-        .map(|(x, y)| (y, x))
-        .max()
-        .unwrap()
-        .1;
-    new_trans = new_trans.into_iter().filter(|x| x.1 != sink).collect();
+    // start = partition of previous start
+    let start = *positions.get(&(0 as usize)).unwrap();
+    // remove unreachable states (and non-accepting sinks)
+    //broken: no in-edges and no start state OR no out-edges and not accepting, excluding self-loops
+    let broken_states = (0 as usize..)
+        .take(partitions.len())
+        .filter(|x| {
+            (in_degree[*x] == 0 && *x != start) || (out_degree[*x] == 0 && !accept.contains_key(x))
+        })
+        .collect::<BTreeSet<_>>();
+    new_trans = new_trans
+        .into_iter()
+        .filter(|x| !broken_states.contains(&(x.0).0) && !broken_states.contains(&x.1))
+        .collect();
     DFA {
-        states_no: partitions.len(), //-1 is the removed sink
+        states_no: partitions.len() - broken_states.len(),
         transition: new_trans,
-        accept: acc,
-        start: *position.get(&(0 as usize)).unwrap(),
+        alphabet: dfa.alphabet,
+        accept,
+        start,
     }
 }
 
+//assuming partition.size()>1, but works also for 1
 fn split_partition(
-    partition: BTreeSet<usize>,
-    transition: &HashMap<(usize, char), usize>,
-    alphabet: &HashSet<char>,
-) -> Vec<BTreeSet<usize>> {
+    partition: HashSet<usize>,
+    position: &HashMap<usize, usize>,
+    dfa: &DFA,
+) -> (HashSet<usize>, HashSet<usize>) {
+    let mut split = HashSet::new();
     if partition.len() > 1 {
-        for symbol in alphabet {
+        for symbol in &dfa.alphabet {
             let mut iter = partition.iter();
             let first = *iter.next().unwrap();
-            let target = transition.get(&(first, *symbol)).unwrap();
+            let expected_target = *position
+                .get(dfa.transition.get(&(first, *symbol)).unwrap())
+                .unwrap();
             for node in iter {
-                let cur_target = transition.get(&(*node, *symbol)).unwrap();
-                if target != cur_target {
-                    let single_set = btreeset![*node];
-                    let new_partition = partition
-                        .difference(&single_set)
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
-                    return vec![new_partition, single_set];
+                let target = *position
+                    .get(dfa.transition.get(&(*node, *symbol)).unwrap())
+                    .unwrap();
+                if target != expected_target {
+                    split.insert(*node);
                 }
             }
+            if !split.is_empty() {
+                break;
+            }
         }
-        vec![partition]
+        (partition.difference(&split).cloned().collect(), split)
     } else {
-        vec![partition]
+        (partition, split)
     }
 }
