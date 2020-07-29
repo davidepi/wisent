@@ -752,7 +752,7 @@ fn match_action(act: &str) -> Result<Action, ParseError> {
 /// # Returns
 /// * `Some(value)` - a Vec containing the ordered indices if graph was a DAG.
 /// * `None` - if the graph was not acyclic.
-pub(super) fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
+fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
     //The idea is is the one described by Cormen et al. (2001), Mark record
     //if the DFS can reach node of the current branch and thus there is a cycle
     //In addition, being this function iterative, the `toprocess` array is used
@@ -948,3 +948,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/grammar.rs"]
+mod tests;

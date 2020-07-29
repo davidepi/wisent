@@ -1,7 +1,45 @@
+use crate::grammar::{topological_sort, Action, Grammar};
 use std::collections::BTreeSet;
 
-use crate::grammar;
-use crate::grammar::{Action, Grammar};
+#[test]
+//Asserts that a DAG return correctly a topological sort
+fn topological_sort_dag() {
+    let n0: BTreeSet<usize> = vec![1, 4].into_iter().collect();
+    let n1: BTreeSet<usize> = vec![2].into_iter().collect();
+    let n2: BTreeSet<usize> = vec![3].into_iter().collect();
+    let n3: BTreeSet<usize> = vec![].into_iter().collect();
+    let n4: BTreeSet<usize> = vec![3].into_iter().collect();
+    let n5: BTreeSet<usize> = vec![].into_iter().collect();
+
+    let graph = vec![n0, n1, n2, n3, n4, n5];
+    match topological_sort(&graph) {
+        Some(order) => {
+            let expected = vec![3, 4, 2, 1, 0, 5];
+            assert_eq!(order, expected, "Wrong topological order");
+        }
+        None => assert!(false, "A DAG should return a topological sort"),
+    }
+}
+
+#[test]
+//Asserts that a graph with cycles cannot have a topological sort
+fn topological_sort_cycles() {
+    let n0: BTreeSet<usize> = vec![1, 4].into_iter().collect();
+    let n1: BTreeSet<usize> = vec![2].into_iter().collect();
+    let n2: BTreeSet<usize> = vec![3].into_iter().collect();
+    let n3: BTreeSet<usize> = vec![3].into_iter().collect();
+    let n4: BTreeSet<usize> = vec![3].into_iter().collect();
+    let n5: BTreeSet<usize> = vec![].into_iter().collect();
+
+    let graph = vec![n0, n1, n2, n3, n4, n5];
+    match topological_sort(&graph) {
+        Some(_) => assert!(
+            false,
+            "A graph with cycles should not have a topological order"
+        ),
+        None => assert!(true, "A DAG should return a topological sort"),
+    }
+}
 
 #[test]
 //Asserts the method len() returns the sum of terminal and non terminals
@@ -364,45 +402,5 @@ fn lexer_rules_cycles_err() {
             e.to_string(),
             "SyntaxError: Lexer contains cyclic productions!"
         ),
-    }
-}
-
-#[test]
-//Asserts that a DAG return correctly a topological sort
-fn topological_sort_dag() {
-    let n0: BTreeSet<usize> = vec![1, 4].into_iter().collect();
-    let n1: BTreeSet<usize> = vec![2].into_iter().collect();
-    let n2: BTreeSet<usize> = vec![3].into_iter().collect();
-    let n3: BTreeSet<usize> = vec![].into_iter().collect();
-    let n4: BTreeSet<usize> = vec![3].into_iter().collect();
-    let n5: BTreeSet<usize> = vec![].into_iter().collect();
-
-    let graph = vec![n0, n1, n2, n3, n4, n5];
-    match grammar::topological_sort(&graph) {
-        Some(order) => {
-            let expected = vec![3, 4, 2, 1, 0, 5];
-            assert_eq!(order, expected, "Wrong topological order");
-        }
-        None => assert!(false, "A DAG should return a topological sort"),
-    }
-}
-
-#[test]
-//Asserts that a graph with cycles cannot have a topological sort
-fn topological_sort_cycles() {
-    let n0: BTreeSet<usize> = vec![1, 4].into_iter().collect();
-    let n1: BTreeSet<usize> = vec![2].into_iter().collect();
-    let n2: BTreeSet<usize> = vec![3].into_iter().collect();
-    let n3: BTreeSet<usize> = vec![3].into_iter().collect();
-    let n4: BTreeSet<usize> = vec![3].into_iter().collect();
-    let n5: BTreeSet<usize> = vec![].into_iter().collect();
-
-    let graph = vec![n0, n1, n2, n3, n4, n5];
-    match grammar::topological_sort(&graph) {
-        Some(_) => assert!(
-            false,
-            "A graph with cycles should not have a topological order"
-        ),
-        None => assert!(true, "A DAG should return a topological sort"),
     }
 }

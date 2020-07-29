@@ -1,147 +1,8 @@
 use crate::grammar::Grammar;
 use crate::lexer::{
-    canonicalise, expand_literals, gen_parse_tree, get_alphabet, subset_construction,
-    transition_table_dfa, transition_table_nfa, BSTree, OpType, RegexOp,
+    canonicalise, expand_literals, gen_parse_tree, get_alphabet, Automata, BSTree, OpType, RegexOp,
+    DFA, NFA,
 };
-
-#[test]
-fn dfa_conflicts_resolution() {
-    //they should be different: the second accept abb as a*b+ (appearing first in the productions)
-    let grammar1 = Grammar::new(
-        &["'a'", "'abb'", "'a'*'b'+"],
-        &[],
-        &["A", "ABB", "ASTARBPLUS"],
-    );
-    let dfa1 = transition_table_dfa(&grammar1);
-    let grammar2 = Grammar::new(
-        &["'a'*'b'+", "'abb'", "'a'"],
-        &[],
-        &["ASTARBPLUS", "ABB", "A"],
-    );
-    let dfa2 = transition_table_dfa(&grammar2);
-    assert!(!dfa1.is_empty());
-    assert_eq!(dfa1.nodes(), 6);
-    assert_eq!(dfa1.edges(), 9);
-    assert!(!dfa2.is_empty());
-    assert_eq!(dfa2.nodes(), 4);
-    assert_eq!(dfa2.edges(), 7);
-}
-
-#[test]
-fn dfa_direct_construction_no_sink() {
-    let terminal = "('a'|'b')*'abb'";
-    let names = "PROD1";
-    let grammar = Grammar::new(&[terminal], &[], &[names]);
-    let dfa = transition_table_dfa(&grammar);
-    assert!(!dfa.is_empty());
-    assert_eq!(dfa.nodes(), 4);
-    assert_eq!(dfa.edges(), 8);
-}
-
-#[test]
-fn dfa_direct_construction_sink_accepting() {
-    let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digits", "more_digits"]);
-    let dfa = transition_table_dfa(&grammar);
-    println!("{}", dfa);
-    assert!(!dfa.is_empty());
-    assert_eq!(dfa.nodes(), 3);
-    assert_eq!(dfa.edges(), 30);
-}
-
-#[test]
-fn dfa_subset_construction_no_sink() {
-    let terminal = "('a'|'b')*'abb'";
-    let names = "PROD1";
-    let grammar = Grammar::new(&[terminal], &[], &[names]);
-    let nfa = transition_table_nfa(&grammar);
-    let dfa_direct = transition_table_dfa(&grammar);
-    let dfa_subset = subset_construction(&nfa);
-    assert_eq!(dfa_subset.nodes(), 4);
-    assert_eq!(dfa_subset.edges(), 8);
-    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
-    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
-}
-
-#[test]
-fn dfa_subset_construction_sink_accepting() {
-    let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digits", "more_digits"]);
-    let nfa = transition_table_nfa(&grammar);
-    let dfa_direct = transition_table_dfa(&grammar);
-    let dfa_subset = subset_construction(&nfa);
-    println!("{}", dfa_subset);
-    assert_eq!(dfa_subset.nodes(), 3);
-    assert_eq!(dfa_subset.edges(), 30);
-    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
-    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
-}
-
-#[test]
-fn dfa_direct_construction_single_acc() {
-    let terminal = "(('a'*'b')|'c')?'c'";
-    let names = "PROD1";
-    let grammar = Grammar::new(&[terminal], &[], &[names]);
-    let dfa = transition_table_dfa(&grammar);
-    println!("{}", dfa);
-    assert!(!dfa.is_empty());
-    assert_eq!(dfa.nodes(), 5);
-    assert_eq!(dfa.edges(), 7);
-}
-
-#[test]
-fn dfa_direct_construction_multi_production() {
-    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    let dfa = transition_table_dfa(&grammar);
-    println!("{}", dfa);
-    assert!(!dfa.is_empty());
-    assert_eq!(dfa.nodes(), 3);
-    assert_eq!(dfa.edges(), 3);
-}
-
-#[test]
-fn dfa_subset_construction_multi_production() {
-    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    let nfa = transition_table_nfa(&grammar);
-    let dfa_direct = transition_table_dfa(&grammar);
-    let dfa_subset = subset_construction(&nfa);
-    assert_eq!(dfa_subset.nodes(), 3);
-    assert_eq!(dfa_subset.edges(), 3);
-    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
-    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
-}
-
-#[test]
-fn dfa_subset_construction_single_production() {
-    let terminal = "(('a'*'b')|'c')?'c'";
-    let names = "PROD1";
-    let grammar = Grammar::new(&[terminal], &[], &[names]);
-    let nfa = transition_table_nfa(&grammar);
-    let dfa_direct = transition_table_dfa(&grammar);
-    let dfa_subset = subset_construction(&nfa);
-    assert_eq!(dfa_subset.nodes(), 5);
-    assert_eq!(dfa_subset.edges(), 7);
-    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
-    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
-}
-
-#[test]
-fn nfa_construction_single_production() {
-    let terminal = "(('a'*'b')|'c')?'c'";
-    let names = "PROD1";
-    let grammar = Grammar::new(&[terminal], &[], &[names]);
-    let nfa = transition_table_nfa(&grammar);
-    assert!(!nfa.is_empty());
-    assert_eq!(nfa.nodes(), 16);
-    assert_eq!(nfa.edges(), 19);
-}
-
-#[test]
-fn nfa_construction_multi_production() {
-    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    let nfa = transition_table_nfa(&grammar);
-    assert!(!nfa.is_empty());
-    assert_eq!(nfa.nodes(), 7);
-    assert_eq!(nfa.edges(), 8);
-}
 
 #[test]
 fn canonical_tree() {
@@ -320,4 +181,141 @@ fn regex_correct_precedence() {
     {\"val\":\"'b'\"}},\"right\":{\"val\":\"*\",\"left\":{\"val\":\"'c'\"}}}},\"right\":{\"val\":\"\
     'd'\"}}}"
     );
+}
+
+#[test]
+fn dfa_conflicts_resolution() {
+    //they should be different: the second accept abb as a*b+ (appearing first in the productions)
+    let grammar1 = Grammar::new(
+        &["'a'", "'abb'", "'a'*'b'+"],
+        &[],
+        &["A", "ABB", "ASTARBPLUS"],
+    );
+    let dfa1 = DFA::new(&grammar1);
+    let grammar2 = Grammar::new(
+        &["'a'*'b'+", "'abb'", "'a'"],
+        &[],
+        &["ASTARBPLUS", "ABB", "A"],
+    );
+    let dfa2 = DFA::new(&grammar2);
+    assert!(!dfa1.is_empty());
+    assert_eq!(dfa1.nodes(), 6);
+    assert_eq!(dfa1.edges(), 9);
+    assert!(!dfa2.is_empty());
+    assert_eq!(dfa2.nodes(), 4);
+    assert_eq!(dfa2.edges(), 7);
+    dfa1.save_dot("/home/davide/Desktop/prova.dot");
+}
+
+#[test]
+fn dfa_direct_construction_no_sink() {
+    let terminal = "('a'|'b')*'abb'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let dfa = DFA::new(&grammar);
+    assert!(!dfa.is_empty());
+    assert_eq!(dfa.nodes(), 4);
+    assert_eq!(dfa.edges(), 8);
+}
+
+#[test]
+fn dfa_direct_construction_sink_accepting() {
+    let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digits", "more_digits"]);
+    let dfa = DFA::new(&grammar);
+    assert!(!dfa.is_empty());
+    assert_eq!(dfa.nodes(), 3);
+    assert_eq!(dfa.edges(), 30);
+}
+
+#[test]
+fn dfa_subset_construction_no_sink() {
+    let terminal = "('a'|'b')*'abb'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let nfa = NFA::new(&grammar);
+    let dfa_direct = DFA::new(&grammar);
+    let dfa_subset = nfa.to_dfa();
+    assert_eq!(dfa_subset.nodes(), 4);
+    assert_eq!(dfa_subset.edges(), 8);
+    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
+    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
+}
+
+#[test]
+fn dfa_subset_construction_sink_accepting() {
+    let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digits", "more_digits"]);
+    let nfa = NFA::new(&grammar);
+    let dfa_direct = DFA::new(&grammar);
+    let dfa_subset = nfa.to_dfa();
+    assert_eq!(dfa_subset.nodes(), 3);
+    assert_eq!(dfa_subset.edges(), 30);
+    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
+    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
+}
+
+#[test]
+fn dfa_direct_construction_single_acc() {
+    let terminal = "(('a'*'b')|'c')?'c'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let dfa = DFA::new(&grammar);
+    assert!(!dfa.is_empty());
+    assert_eq!(dfa.nodes(), 5);
+    assert_eq!(dfa.edges(), 7);
+}
+
+#[test]
+fn dfa_direct_construction_multi_production() {
+    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    let dfa = DFA::new(&grammar);
+    assert!(!dfa.is_empty());
+    assert_eq!(dfa.nodes(), 3);
+    assert_eq!(dfa.edges(), 3);
+}
+
+#[test]
+fn dfa_subset_construction_multi_production() {
+    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    let nfa = NFA::new(&grammar);
+    let dfa_direct = DFA::new(&grammar);
+    let dfa_subset = nfa.to_dfa();
+    assert_eq!(dfa_subset.nodes(), 3);
+    assert_eq!(dfa_subset.edges(), 3);
+    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
+    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
+}
+
+#[test]
+fn dfa_subset_construction_single_production() {
+    let terminal = "(('a'*'b')|'c')?'c'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let nfa = NFA::new(&grammar);
+    let dfa_direct = DFA::new(&grammar);
+    let dfa_subset = nfa.to_dfa();
+    assert_eq!(dfa_subset.nodes(), 5);
+    assert_eq!(dfa_subset.edges(), 7);
+    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
+    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
+}
+
+#[test]
+fn nfa_construction_single_production() {
+    let terminal = "(('a'*'b')|'c')?'c'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let nfa = NFA::new(&grammar);
+    assert!(!nfa.is_empty());
+    assert_eq!(nfa.nodes(), 16);
+    assert_eq!(nfa.edges(), 19);
+}
+
+#[test]
+fn nfa_construction_multi_production() {
+    let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    let nfa = NFA::new(&grammar);
+    println!("{}", nfa);
+    assert!(!nfa.is_empty());
+    assert_eq!(nfa.nodes(), 7);
+    assert_eq!(nfa.edges(), 8);
 }

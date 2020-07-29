@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
@@ -12,374 +13,6 @@ pub struct BSTree<T> {
     pub value: T,
     pub left: Option<Box<BSTree<T>>>,
     pub right: Option<Box<BSTree<T>>>,
-}
-
-type NFANode = usize;
-pub struct NFA {
-    states_no: usize,
-    transition: HashMap<(NFANode, char), BTreeSet<NFANode>>,
-    alphabet: HashSet<char>,
-    start: NFANode,
-    accept: BTreeSet<(NFANode, usize)>,
-}
-
-type DFANode = usize;
-pub struct DFA {
-    states_no: usize,
-    transition: HashMap<(DFANode, char), DFANode>,
-    alphabet: HashSet<char>,
-    start: DFANode,
-    accept: HashMap<DFANode, usize>,
-}
-
-impl NFA {
-    pub fn is_empty(&self) -> bool {
-        self.states_no == 0
-    }
-
-    pub fn nodes(&self) -> usize {
-        self.states_no
-    }
-
-    pub fn edges(&self) -> usize {
-        self.transition.iter().fold(0, |acc, x| x.1.len() + acc)
-    }
-}
-
-impl DFA {
-    pub fn is_empty(&self) -> bool {
-        self.states_no == 0
-    }
-
-    pub fn nodes(&self) -> usize {
-        self.states_no
-    }
-
-    pub fn edges(&self) -> usize {
-        self.transition.len()
-    }
-}
-
-impl std::fmt::Display for NFA {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "digraph{{start[shape=point];")?;
-        for state in &self.accept {
-            write!(
-                f,
-                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
-                state.0, state.1
-            )?;
-        }
-        write!(f, "start->{};", &self.start)?;
-        for trans in &self.transition {
-            for target in trans.1 {
-                let source = (trans.0).0;
-                let mut symbol = (trans.0).1;
-                if symbol == EPSILON_VALUE {
-                    symbol = '\u{03F5}';
-                } else if (symbol as usize) < 32 {
-                    symbol = '\u{FFFF}';
-                } else if symbol == '"' {
-                    symbol = '\u{2033}';
-                }
-                write!(f, "{}->{}[label=\"{}\"];", source, target, symbol)?;
-            }
-        }
-        write!(f, "}}")
-    }
-}
-
-impl std::fmt::Display for DFA {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "digraph{{start[shape=point];")?;
-        for state in &self.accept {
-            write!(
-                f,
-                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
-                state.0, state.1
-            )?;
-        }
-        write!(f, "start->{};", &self.start)?;
-        for trans in &self.transition {
-            let source = (trans.0).0;
-            let mut symbol = (trans.0).1;
-            if (symbol as usize) < 32 || (symbol as usize) > 126 {
-                symbol = '\u{FFFF}';
-            } else if symbol == '"' {
-                symbol = '\u{2033}';
-            } else if symbol == '\\' {
-                symbol = '\u{2216}';
-            }
-            write!(f, "{}->{}[label=\"{}\"];", source, trans.1, symbol)?;
-        }
-        write!(f, "}}")
-    }
-}
-
-fn sc_epsilon_closure(
-    set: &BTreeSet<NFANode>,
-    tt: &HashMap<(NFANode, char), BTreeSet<NFANode>>,
-) -> BTreeSet<NFANode> {
-    let mut stack = set.iter().copied().collect::<Vec<_>>();
-    let mut closure = set.iter().copied().collect::<BTreeSet<_>>();
-    while let Some(t) = stack.pop() {
-        if let Some(eset) = tt.get(&(t, EPSILON_VALUE)) {
-            closure = closure.union(eset).cloned().collect::<BTreeSet<_>>();
-            stack.extend(eset.iter());
-        }
-    }
-    closure
-}
-
-pub fn subset_construction(nfa: &NFA) -> DFA {
-    let mut ds_marked = BTreeSet::new();
-    let mut ds_unmarked = Vec::new();
-    let mut indices = HashMap::new();
-    let mut index = 0 as usize;
-    let mut transition = HashMap::new();
-    let mut accept = HashMap::new();
-
-    let s0 = sc_epsilon_closure(&btreeset! {nfa.start}, &nfa.transition);
-    indices.insert(s0.clone(), index);
-    ds_unmarked.push(s0);
-    index += 1;
-    while let Some(t) = ds_unmarked.pop() {
-        let t_idx = *indices.get(&t).unwrap();
-        ds_marked.insert(t.clone());
-        for symbol in nfa.alphabet.iter() {
-            let sym = *symbol;
-            let mov = sc_move(&t, sym, &nfa.transition);
-            let u = sc_epsilon_closure(&mov, &nfa.transition);
-            let u_idx;
-            if !u.is_empty() {
-                //check if node has already been created
-                if !indices.contains_key(&u) {
-                    u_idx = index;
-                    indices.insert(u.clone(), u_idx);
-                    index += 1;
-                    if let Some(accepted_production) = sc_accepting(&u, &nfa.accept) {
-                        accept.insert(u_idx, accepted_production);
-                    }
-                    ds_unmarked.push(u);
-                } else {
-                    u_idx = *indices.get(&u).unwrap();
-                }
-                transition.insert((t_idx, sym), u_idx);
-            }
-        }
-    }
-    //add sink (it's not guaranteed to have a sink and REQUIRED by the min_dfa function)
-    //accidentally adding a second sink is no problem: it will be removed by min_dfa function
-    let sink = index;
-    index += 1;
-    for node in 0..index {
-        for symbol in nfa.alphabet.iter() {
-            transition.entry((node, *symbol)).or_insert(sink);
-        }
-    }
-    let non_min_dfa = DFA {
-        states_no: index,
-        alphabet: nfa.alphabet.clone(),
-        transition,
-        accept,
-        start: 0,
-    };
-    min_dfa(non_min_dfa)
-}
-
-fn sc_accepting(set: &BTreeSet<NFANode>, accepting: &BTreeSet<(NFANode, usize)>) -> Option<usize> {
-    let mut productions = BTreeSet::new();
-    for node in accepting {
-        if set.contains(&node.0) {
-            productions.insert(node.1);
-        }
-    }
-    if !productions.is_empty() {
-        Some(*productions.iter().next().unwrap()) //get smallest value (production appearing first)
-    } else {
-        None
-    }
-}
-
-fn sc_move(
-    set: &BTreeSet<NFANode>,
-    symbol: char,
-    tt: &HashMap<(NFANode, char), BTreeSet<NFANode>>,
-) -> BTreeSet<NFANode> {
-    let mut ret = BTreeSet::new();
-    for node in set {
-        if let Some(t) = tt.get(&(*node, symbol)) {
-            ret = ret.union(t).cloned().collect::<BTreeSet<_>>();
-        }
-    }
-    ret
-}
-
-fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production: usize) -> NFA {
-    let mut index = start_index;
-    let mut visit = vec![prod];
-    let mut todo = Vec::new();
-    let mut done = Vec::<NFA>::new();
-    //first transform the parse tree into a stack, this will be the processing order
-    while let Some(node) = visit.pop() {
-        if let Some(l) = &node.left {
-            visit.push(l);
-        }
-        if let Some(r) = &node.right {
-            visit.push(r);
-        }
-        todo.push(node);
-    }
-    //now process every node in order, depending on its type
-    while let Some(node) = todo.pop() {
-        let pushme;
-        match node.value {
-            Literal::Value(val) => {
-                let mut alphabet = HashSet::new();
-                if val != EPSILON_VALUE {
-                    alphabet.insert(val);
-                }
-                pushme = NFA {
-                    states_no: 2,
-                    transition: hashmap! {
-                        (index, val) => btreeset!{index+1},
-                    },
-                    alphabet,
-                    start: index,
-                    accept: btreeset! {(index+1, production)},
-                };
-                index += 2;
-            }
-            Literal::KLEENE => {
-                let new_start = index;
-                let new_end = index + 1;
-                index += 2;
-                let mut first = done.pop().unwrap();
-                for acc in first.accept {
-                    first
-                        .transition
-                        .insert((acc.0, EPSILON_VALUE), btreeset! {first.start, new_end});
-                }
-                first
-                    .transition
-                    .insert((new_start, EPSILON_VALUE), btreeset! {first.start, new_end});
-                first.start = new_start;
-                first.accept = btreeset! {(new_end, production)};
-                first.states_no += 2;
-                pushme = first;
-            }
-            Literal::AND => {
-                let second = done.pop().unwrap();
-                let mut first = done.pop().unwrap();
-                first.transition.extend(second.transition);
-                for acc in first.accept {
-                    first
-                        .transition
-                        .insert((acc.0, EPSILON_VALUE), btreeset! {second.start});
-                }
-                first.accept = second.accept;
-                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
-                first.states_no += second.states_no;
-                pushme = first;
-            }
-            Literal::OR => {
-                let new_start = index;
-                let new_end = index + 1;
-                index += 2;
-                let second = done.pop().unwrap();
-                let mut first = done.pop().unwrap();
-                first.transition.extend(second.transition);
-                first.transition.insert(
-                    (new_start, EPSILON_VALUE),
-                    btreeset! {first.start, second.start},
-                );
-                for acc in first.accept.into_iter().chain(second.accept.into_iter()) {
-                    first
-                        .transition
-                        .insert((acc.0, EPSILON_VALUE), btreeset! {new_end});
-                }
-                first.start = new_start;
-                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
-                first.accept = btreeset! {(new_end, production)};
-                first.states_no += second.states_no + 2;
-                pushme = first;
-            }
-            Literal::Acc(_) => panic!("Accept state not allowed in thompson construction!"),
-        }
-        done.push(pushme);
-    }
-    done.pop().unwrap()
-}
-
-pub fn transition_table_nfa(grammar: &Grammar) -> NFA {
-    let parse_trees = grammar
-        .iter_term()
-        .map(|x| gen_parse_tree(x))
-        .map(expand_literals)
-        .collect::<Vec<_>>();
-    let alphabet = parse_trees
-        .iter()
-        .flat_map(get_alphabet)
-        .collect::<HashSet<char>>();
-    let canonical_tree = parse_trees
-        .into_iter()
-        .map(|x| canonicalise(x, &alphabet))
-        .collect::<Vec<_>>();
-    let mut index = 0 as usize; //used to keep unique node indices
-    let mut thompson_nfa = canonical_tree
-        .iter()
-        .enumerate()
-        .map(|x| {
-            let nfa = thompson_construction(x.1, index, x.0);
-            index += nfa.nodes();
-            nfa
-        })
-        .collect::<Vec<_>>();
-    //merge productions into a single NFA
-    if thompson_nfa.len() > 1 {
-        let start_transition = thompson_nfa
-            .iter()
-            .map(|x| x.start)
-            .collect::<BTreeSet<_>>();
-        //FIXME: this clone is not particularly efficient (even though I expect nodes in the order of hundredth)
-        let accept = thompson_nfa
-            .iter()
-            .flat_map(|x| x.accept.clone())
-            .collect::<BTreeSet<_>>();
-        let mut transition_table = thompson_nfa
-            .into_iter()
-            .flat_map(|x| x.transition)
-            .collect::<HashMap<_, _>>();
-        transition_table.insert((index, EPSILON_VALUE), start_transition);
-        NFA {
-            states_no: index + 1,
-            transition: transition_table,
-            alphabet,
-            start: index,
-            accept,
-        }
-    } else {
-        thompson_nfa.pop().unwrap()
-    }
-}
-
-pub fn transition_table_dfa(grammar: &Grammar) -> DFA {
-    let parse_trees = grammar
-        .iter_term()
-        .map(|x| gen_parse_tree(x))
-        .map(expand_literals)
-        .collect::<Vec<_>>();
-    let alphabet = parse_trees
-        .iter()
-        .flat_map(get_alphabet)
-        .collect::<HashSet<char>>();
-    let canonical_tree = parse_trees
-        .into_iter()
-        .map(|x| canonicalise(x, &alphabet))
-        .collect::<Vec<_>>();
-    let merged_tree = collect_productions(canonical_tree);
-    let dfa = direct_construction(merged_tree);
-    min_dfa(dfa)
 }
 
 impl<T> std::fmt::Display for BSTree<T>
@@ -398,11 +31,216 @@ where
     }
 }
 
+pub trait Automata {
+    fn new(grammar: &Grammar) -> Self;
+    fn is_empty(&self) -> bool;
+    fn nodes(&self) -> usize;
+    fn edges(&self) -> usize;
+    fn to_dot(&self) -> String;
+    fn save_dot(&self, path: &str) {
+        std::fs::write(path, self.to_dot())
+            .unwrap_or_else(|_| panic!("Unable to write file {}", path));
+    }
+}
+
+pub struct NFA {
+    states_no: usize,
+    transition: HashMap<(usize, char), HashSet<usize>>,
+    alphabet: HashSet<char>,
+    start: usize,
+    accept: HashMap<usize, usize>,
+}
+
+impl NFA {
+    pub fn to_dfa(&self) -> DFA {
+        let big_dfa = subset_construction(&self);
+        min_dfa(big_dfa)
+    }
+}
+
+impl std::fmt::Display for NFA {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NFA({},{})", self.nodes(), self.edges())
+    }
+}
+
+impl Automata for NFA {
+    fn new(grammar: &Grammar) -> Self {
+        let parse_trees = grammar
+            .iter_term()
+            .map(|x| gen_parse_tree(x))
+            .map(expand_literals)
+            .collect::<Vec<_>>();
+        let alphabet = parse_trees
+            .iter()
+            .flat_map(get_alphabet)
+            .collect::<HashSet<char>>();
+        let canonical_tree = parse_trees
+            .into_iter()
+            .map(|x| canonicalise(x, &alphabet))
+            .collect::<Vec<_>>();
+        let mut index = 0 as usize; //used to keep unique node indices
+        let mut thompson_nfas = canonical_tree
+            .iter()
+            .enumerate()
+            .map(|x| {
+                let nfa = thompson_construction(x.1, index, x.0);
+                index += nfa.nodes();
+                nfa
+            })
+            .collect::<Vec<_>>();
+        //merge productions into a single NFA
+        if thompson_nfas.len() > 1 {
+            let start_transition = thompson_nfas
+                .iter()
+                .map(|x| x.start)
+                .collect::<HashSet<_>>();
+            //FIXME: this clone is not particularly efficient (even though I expect nodes in the order of hundredth)
+            let accept = thompson_nfas
+                .iter()
+                .flat_map(|x| x.accept.clone())
+                .collect::<HashMap<_, _>>();
+            let mut transition_table = thompson_nfas
+                .into_iter()
+                .flat_map(|x| x.transition)
+                .collect::<HashMap<_, _>>();
+            transition_table.insert((index, EPSILON_VALUE), start_transition);
+            index += 1;
+            NFA {
+                states_no: index,
+                transition: transition_table,
+                alphabet,
+                start: index - 1,
+                accept,
+            }
+        } else {
+            thompson_nfas.pop().unwrap()
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.states_no == 0
+    }
+
+    fn nodes(&self) -> usize {
+        self.states_no
+    }
+
+    fn edges(&self) -> usize {
+        self.transition.iter().fold(0, |acc, x| x.1.len() + acc)
+    }
+
+    fn to_dot(&self) -> String {
+        let mut f = String::new();
+        write!(&mut f, "digraph{{start[shape=point];").unwrap();
+        for state in &self.accept {
+            write!(
+                &mut f,
+                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
+                state.0, state.1
+            )
+            .unwrap();
+        }
+        write!(&mut f, "start->{};", &self.start).unwrap();
+        for trans in &self.transition {
+            for target in trans.1 {
+                let source = (trans.0).0;
+                let mut symbol = (trans.0).1;
+                if symbol == EPSILON_VALUE {
+                    symbol = '\u{03F5}';
+                } else if (symbol as usize) < 32 {
+                    symbol = '\u{FFFF}';
+                } else if symbol == '"' {
+                    symbol = '\u{2033}';
+                }
+                write!(&mut f, "{}->{}[label=\"{}\"];", source, target, symbol).unwrap();
+            }
+        }
+        write!(&mut f, "}}").unwrap();
+        f
+    }
+}
+
+pub struct DFA {
+    states_no: usize,
+    transition: HashMap<(usize, char), usize>,
+    alphabet: HashSet<char>,
+    start: usize,
+    accept: HashMap<usize, usize>,
+}
+
+impl std::fmt::Display for DFA {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DFA({},{})", self.nodes(), self.edges())
+    }
+}
+
+impl Automata for DFA {
+    fn new(grammar: &Grammar) -> Self {
+        let parse_trees = grammar
+            .iter_term()
+            .map(|x| gen_parse_tree(x))
+            .map(expand_literals)
+            .collect::<Vec<_>>();
+        let alphabet = parse_trees
+            .iter()
+            .flat_map(get_alphabet)
+            .collect::<HashSet<char>>();
+        let canonical_tree = parse_trees
+            .into_iter()
+            .map(|x| canonicalise(x, &alphabet))
+            .collect::<Vec<_>>();
+        let merged_tree = collect_productions(canonical_tree);
+        let dfa = direct_construction(merged_tree);
+        min_dfa(dfa)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.states_no == 0
+    }
+
+    fn nodes(&self) -> usize {
+        self.states_no
+    }
+
+    fn edges(&self) -> usize {
+        self.transition.len()
+    }
+
+    fn to_dot(&self) -> String {
+        let mut f = String::new();
+        write!(&mut f, "digraph{{start[shape=point];").unwrap();
+        for state in &self.accept {
+            write!(
+                &mut f,
+                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
+                state.0, state.1
+            )
+            .unwrap();
+        }
+        write!(&mut f, "start->{};", &self.start).unwrap();
+        for trans in &self.transition {
+            let source = (trans.0).0;
+            let mut symbol = (trans.0).1;
+            if (symbol as usize) < 32 || (symbol as usize) > 126 {
+                symbol = '\u{FFFF}';
+            } else if symbol == '"' {
+                symbol = '\u{2033}';
+            } else if symbol == '\\' {
+                symbol = '\u{2216}';
+            }
+            write!(&mut f, "{}->{}[label=\"{}\"];", source, trans.1, symbol).unwrap();
+        }
+        write!(&mut f, "}}").unwrap();
+        f
+    }
+}
+
 #[derive(Copy, Clone)]
-pub(super) struct RegexOp<'a> {
-    pub(super) r#type: OpType,
-    pub(super) value: &'a str,
-    pub(super) priority: u8,
+struct RegexOp<'a> {
+    r#type: OpType,
+    value: &'a str,
+    priority: u8,
 }
 
 impl std::fmt::Display for RegexOp<'_> {
@@ -412,7 +250,7 @@ impl std::fmt::Display for RegexOp<'_> {
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub(super) enum ExLiteral {
+enum ExLiteral {
     Value(char),
     AnyValue,
     Operation(OpType),
@@ -429,7 +267,7 @@ impl std::fmt::Display for ExLiteral {
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub(super) enum Literal {
+enum Literal {
     Value(char),
     Acc(usize),
     KLEENE,
@@ -450,7 +288,7 @@ impl std::fmt::Display for Literal {
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub(super) enum OpType {
+enum OpType {
     KLEENE,
     QM,
     PL,
@@ -476,6 +314,14 @@ impl std::fmt::Display for OpType {
             OpType::ID => write!(f, "ID"),
         }
     }
+}
+
+struct DCHelper {
+    ttype: Literal,
+    index: usize,
+    nullable: bool,
+    firstpos: BTreeSet<usize>,
+    lastpos: BTreeSet<usize>,
 }
 
 fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> usize {
@@ -619,7 +465,7 @@ fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
         || (*last == OpType::ID && (*current == OpType::NOT || cur_is_lp_or_id))
 }
 
-pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOp> {
+fn gen_parse_tree(regex: &str) -> BSTree<RegexOp> {
     let mut operands = Vec::new();
     let mut operators: Vec<RegexOp> = Vec::new();
     let tokens = tokenize(&regex);
@@ -665,7 +511,7 @@ pub(super) fn gen_parse_tree(regex: &str) -> BSTree<RegexOp> {
     operands.pop().unwrap()
 }
 
-pub(super) fn expand_literals(node: BSTree<RegexOp>) -> BSTree<ExLiteral> {
+fn expand_literals(node: BSTree<RegexOp>) -> BSTree<ExLiteral> {
     match node.value.r#type {
         OpType::ID => expand_literal_node(node.value.value),
         n => {
@@ -803,7 +649,7 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
     }
 }
 
-pub(super) fn get_alphabet(node: &BSTree<ExLiteral>) -> HashSet<char> {
+fn get_alphabet(node: &BSTree<ExLiteral>) -> HashSet<char> {
     let mut ret = HashSet::new();
     let mut todo_nodes = vec![node];
     while let Some(node) = todo_nodes.pop() {
@@ -826,7 +672,7 @@ pub(super) fn get_alphabet(node: &BSTree<ExLiteral>) -> HashSet<char> {
     ret
 }
 
-pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) -> BSTree<Literal> {
+fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) -> BSTree<Literal> {
     match node.value {
         ExLiteral::Value(i) => BSTree {
             value: Literal::Value(i),
@@ -967,12 +813,198 @@ pub(super) fn canonicalise(node: BSTree<ExLiteral>, alphabet: &HashSet<char>) ->
     }
 }
 
-struct DCHelper {
-    ttype: Literal,
-    index: usize,
-    nullable: bool,
-    firstpos: BTreeSet<usize>,
-    lastpos: BTreeSet<usize>,
+fn thompson_construction(prod: &BSTree<Literal>, start_index: usize, production: usize) -> NFA {
+    let mut index = start_index;
+    let mut visit = vec![prod];
+    let mut todo = Vec::new();
+    let mut done = Vec::<NFA>::new();
+    //first transform the parse tree into a stack, this will be the processing order
+    while let Some(node) = visit.pop() {
+        if let Some(l) = &node.left {
+            visit.push(l);
+        }
+        if let Some(r) = &node.right {
+            visit.push(r);
+        }
+        todo.push(node);
+    }
+    //now process every node in order, depending on its type
+    while let Some(node) = todo.pop() {
+        let pushme;
+        match node.value {
+            Literal::Value(val) => {
+                let mut alphabet = HashSet::new();
+                if val != EPSILON_VALUE {
+                    alphabet.insert(val);
+                }
+                pushme = NFA {
+                    states_no: 2,
+                    transition: hashmap! {
+                        (index, val) => hashset!{index+1},
+                    },
+                    alphabet,
+                    start: index,
+                    accept: hashmap! {index+1 => production},
+                };
+                index += 2;
+            }
+            Literal::KLEENE => {
+                let new_start = index;
+                let new_end = index + 1;
+                index += 2;
+                let mut first = done.pop().unwrap();
+                for acc in first.accept {
+                    first
+                        .transition
+                        .insert((acc.0, EPSILON_VALUE), hashset! {first.start, new_end});
+                }
+                first
+                    .transition
+                    .insert((new_start, EPSILON_VALUE), hashset! {first.start, new_end});
+                first.start = new_start;
+                first.accept = hashmap! {new_end => production};
+                first.states_no += 2;
+                pushme = first;
+            }
+            Literal::AND => {
+                let second = done.pop().unwrap();
+                let mut first = done.pop().unwrap();
+                first.transition.extend(second.transition);
+                for acc in first.accept {
+                    first
+                        .transition
+                        .insert((acc.0, EPSILON_VALUE), hashset! {second.start});
+                }
+                first.accept = second.accept;
+                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
+                first.states_no += second.states_no;
+                pushme = first;
+            }
+            Literal::OR => {
+                let new_start = index;
+                let new_end = index + 1;
+                index += 2;
+                let second = done.pop().unwrap();
+                let mut first = done.pop().unwrap();
+                first.transition.extend(second.transition);
+                first.transition.insert(
+                    (new_start, EPSILON_VALUE),
+                    hashset! {first.start, second.start},
+                );
+                for acc in first.accept.into_iter().chain(second.accept.into_iter()) {
+                    first
+                        .transition
+                        .insert((acc.0, EPSILON_VALUE), hashset! {new_end});
+                }
+                first.start = new_start;
+                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
+                first.accept = hashmap! {new_end => production};
+                first.states_no += second.states_no + 2;
+                pushme = first;
+            }
+            Literal::Acc(_) => panic!("Accept state not allowed in thompson construction!"),
+        }
+        done.push(pushme);
+    }
+    done.pop().unwrap()
+}
+
+fn subset_construction(nfa: &NFA) -> DFA {
+    let mut ds_marked = BTreeSet::new();
+    let mut ds_unmarked = Vec::new();
+    let mut indices = HashMap::new();
+    let mut index = 0 as usize;
+    let mut transition = HashMap::new();
+    let mut accept = HashMap::new();
+
+    let s0 = sc_epsilon_closure(hashset! {nfa.start}, &nfa.transition);
+    indices.insert(s0.clone(), index);
+    ds_unmarked.push(s0);
+    index += 1;
+    while let Some(t) = ds_unmarked.pop() {
+        let t_idx = *indices.get(&t).unwrap();
+        ds_marked.insert(t.clone());
+        for symbol in nfa.alphabet.iter() {
+            let sym = *symbol;
+            let mov = sc_move(&t, sym, &nfa.transition);
+            let u = sc_epsilon_closure(mov, &nfa.transition);
+            let u_idx;
+            if !u.is_empty() {
+                //check if node has already been created
+                if !indices.contains_key(&u) {
+                    u_idx = index;
+                    indices.insert(u.clone(), u_idx);
+                    index += 1;
+                    if let Some(accepted_production) = sc_accepting(&u, &nfa.accept) {
+                        accept.insert(u_idx, accepted_production);
+                    }
+                    ds_unmarked.push(u);
+                } else {
+                    u_idx = *indices.get(&u).unwrap();
+                }
+                transition.insert((t_idx, sym), u_idx);
+            }
+        }
+    }
+    //add sink (it's not guaranteed to have a sink and REQUIRED by the min_dfa function)
+    //accidentally adding a second sink is no problem: it will be removed by min_dfa function
+    let sink = index;
+    index += 1;
+    for node in 0..index {
+        for symbol in nfa.alphabet.iter() {
+            transition.entry((node, *symbol)).or_insert(sink);
+        }
+    }
+    DFA {
+        states_no: index,
+        alphabet: nfa.alphabet.clone(),
+        transition,
+        accept,
+        start: 0,
+    }
+}
+
+fn sc_epsilon_closure(
+    set: HashSet<usize>,
+    tt: &HashMap<(usize, char), HashSet<usize>>,
+) -> BTreeSet<usize> {
+    let mut stack = set.iter().copied().collect::<Vec<_>>();
+    let mut closure = set;
+    while let Some(t) = stack.pop() {
+        if let Some(eset) = tt.get(&(t, EPSILON_VALUE)) {
+            closure = closure.union(eset).cloned().collect();
+            stack.extend(eset.iter());
+        }
+    }
+    closure.into_iter().collect::<BTreeSet<_>>()
+}
+
+fn sc_accepting(set: &BTreeSet<usize>, accepting: &HashMap<usize, usize>) -> Option<usize> {
+    let mut productions = BTreeSet::new();
+    for node in accepting {
+        if set.contains(&node.0) {
+            productions.insert(node.1);
+        }
+    }
+    if !productions.is_empty() {
+        Some(**productions.iter().next().unwrap()) //get smallest value (production appearing first)
+    } else {
+        None
+    }
+}
+
+fn sc_move(
+    set: &BTreeSet<usize>,
+    symbol: char,
+    tt: &HashMap<(usize, char), HashSet<usize>>,
+) -> HashSet<usize> {
+    let mut ret = HashSet::new();
+    for node in set {
+        if let Some(t) = tt.get(&(*node, symbol)) {
+            ret = ret.union(t).cloned().collect::<HashSet<_>>();
+        }
+    }
+    ret
 }
 
 fn build_dc_helper(node: &BSTree<Literal>, start_index: usize) -> BSTree<DCHelper> {
@@ -1292,7 +1324,6 @@ fn remap(partitions: Vec<HashSet<usize>>, positions: HashMap<usize, usize>, dfa:
     }
 }
 
-//assuming partition.size()>1, but works also for 1
 fn split_partition(
     partition: HashSet<usize>,
     position: &HashMap<usize, usize>,
@@ -1323,3 +1354,7 @@ fn split_partition(
         (partition, split)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/lexer.rs"]
+mod tests;
