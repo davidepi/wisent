@@ -1,0 +1,1 @@
+digraph{rankdir=LR;start[shape=point];5[shape=doublecircle;xlabel="ACC(1)"];1[shape=doublecircle;xlabel="ACC(0)"];start->6;2->3[label="b"];0->1[label="a"];3->2[label="ϵ"];3->5[label="ϵ"];6->0[label="ϵ"];6->4[label="ϵ"];4->2[label="ϵ"];4->5[label="ϵ"];}

@@ -1,7 +1,7 @@
 use crate::grammar::Grammar;
 use crate::lexer::{
-    canonicalise, expand_literals, gen_parse_tree, get_alphabet, Automata, BSTree, OpType, RegexOp,
-    DFA, NFA,
+    canonicalise, expand_literals, gen_precedence_tree, get_alphabet, Automaton, BSTree, OpType,
+    RegexOp, DFA, NFA,
 };
 
 #[test]
@@ -13,7 +13,7 @@ fn canonical_tree() {
     let mut str;
 
     expr = "('a'*.)*'a'";
-    tree = expand_literals(gen_parse_tree(expr));
+    tree = expand_literals(gen_precedence_tree(expr));
     alphabet = get_alphabet(&tree);
     new_tree = canonicalise(tree, &alphabet);
     str = format!("{}", new_tree);
@@ -25,7 +25,7 @@ fn canonical_tree() {
     );
 
     expr = "('a'*'b')+'a'";
-    tree = expand_literals(gen_parse_tree(expr));
+    tree = expand_literals(gen_precedence_tree(expr));
     alphabet = get_alphabet(&tree);
     new_tree = canonicalise(tree, &alphabet);
     str = format!("{}", new_tree);
@@ -38,7 +38,7 @@ fn canonical_tree() {
     );
 
     expr = "('a'*'b')?'a'";
-    tree = expand_literals(gen_parse_tree(expr));
+    tree = expand_literals(gen_precedence_tree(expr));
     alphabet = get_alphabet(&tree);
     new_tree = canonicalise(tree, &alphabet);
     str = format!("{}", new_tree);
@@ -50,7 +50,7 @@ fn canonical_tree() {
     );
 
     expr = "~[ab]('a'|'c')";
-    tree = expand_literals(gen_parse_tree(expr));
+    tree = expand_literals(gen_precedence_tree(expr));
     alphabet = get_alphabet(&tree);
     new_tree = canonicalise(tree, &alphabet);
     str = format!("{}", new_tree);
@@ -133,7 +133,7 @@ fn regex_correct_precedence() {
     let mut str;
 
     expr = "'a'|'b'*'c'";
-    tree = gen_parse_tree(expr);
+    tree = gen_precedence_tree(expr);
     str = format!("{}", &tree);
     assert_eq!(
         str,
@@ -142,7 +142,7 @@ fn regex_correct_precedence() {
     );
 
     expr = "'a'*('b'|'c')*'d'";
-    tree = gen_parse_tree(expr);
+    tree = gen_precedence_tree(expr);
     str = format!("{}", &tree);
     assert_eq!(
         str,
@@ -152,7 +152,7 @@ fn regex_correct_precedence() {
     );
 
     expr = "('a')~'b'('c')('d')'e'";
-    tree = gen_parse_tree(expr);
+    tree = gen_precedence_tree(expr);
     str = format!("{}", &tree);
     assert_eq!(
         str,
@@ -162,7 +162,7 @@ fn regex_correct_precedence() {
     );
 
     expr = "'a'~'b''c'('d')";
-    tree = gen_parse_tree(expr);
+    tree = gen_precedence_tree(expr);
     str = format!("{}", &tree);
     assert_eq!(
         str,
@@ -172,7 +172,7 @@ fn regex_correct_precedence() {
     );
 
     expr = "'a'?('b'*|'c'*)+'d'";
-    tree = gen_parse_tree(expr);
+    tree = gen_precedence_tree(expr);
     str = format!("{}", &tree);
     assert_eq!(
         str,
@@ -204,7 +204,6 @@ fn dfa_conflicts_resolution() {
     assert!(!dfa2.is_empty());
     assert_eq!(dfa2.nodes(), 4);
     assert_eq!(dfa2.edges(), 7);
-    dfa1.save_dot("/home/davide/Desktop/prova.dot");
 }
 
 #[test]
@@ -274,6 +273,13 @@ fn dfa_direct_construction_multi_production() {
 }
 
 #[test]
+fn dfa_direct_construction_empty() {
+    let grammar = Grammar::new(&[], &[], &[]);
+    let dfa = DFA::new(&grammar);
+    assert!(dfa.is_empty());
+}
+
+#[test]
 fn dfa_subset_construction_multi_production() {
     let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     let nfa = NFA::new(&grammar);
@@ -300,6 +306,15 @@ fn dfa_subset_construction_single_production() {
 }
 
 #[test]
+fn dfa_subset_construction_empty() {
+    let grammar = Grammar::new(&[], &[], &[]);
+    let nfa = NFA::new(&grammar);
+    let dfa = nfa.to_dfa();
+    assert!(nfa.is_empty());
+    assert!(dfa.is_empty());
+}
+
+#[test]
 fn nfa_construction_single_production() {
     let terminal = "(('a'*'b')|'c')?'c'";
     let names = "PROD1";
@@ -314,8 +329,14 @@ fn nfa_construction_single_production() {
 fn nfa_construction_multi_production() {
     let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     let nfa = NFA::new(&grammar);
-    println!("{}", nfa);
     assert!(!nfa.is_empty());
     assert_eq!(nfa.nodes(), 7);
     assert_eq!(nfa.edges(), 8);
+}
+
+#[test]
+fn nfa_empty() {
+    let grammar = Grammar::new(&[], &[], &[]);
+    let nfa = NFA::new(&grammar);
+    assert!(nfa.is_empty());
 }
