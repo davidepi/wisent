@@ -1,9 +1,10 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
 use crate::grammar::Grammar;
+use fnv::{FnvHashMap, FnvHashSet};
 
 /// The epsilon value for NFAs.
 const EPSILON_VALUE: char = '\u{107FE1}';
@@ -36,6 +37,88 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
             write!(f, ",\"right\":{}", *right)?;
         }
         write!(f, "}}")
+    }
+}
+
+/// Table assigning unique indices to symbols.
+///
+/// Symbols are grouped by productions: if two or more symbols are **always** found in the same
+/// set (or subset) in every production, they are assigned the same index. This effectively reduces
+/// the amount of edges required to build the NFA/DFA.
+pub struct SymbolTable {
+    //TODO: make private
+    pub table: FnvHashMap<char, usize>,
+}
+
+impl SymbolTable {
+    /// This method builds the symbol table. The symbol table is a table assigning an unique integer
+    /// to every production rule merging together the one that will **never** be alone.
+    /// As an example, the productions `'a'` and `[a-z]` can be splitted into `'a'` and `[b-z]`
+    /// because the symbols from `b` to `z` can be processed as a single grouped transaction.
+    ///
+    /// This algorithm takes as input a set of sets, `symbols` and iteratively refines them.
+    /// The algorithm stops when, given any two sets `A` and `B`, `A∩B` returns ∅.
+    ///
+    /// # Examples
+    /// Basic example:
+    /// ```ignore
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let abc = btreeset! {'a', 'b', 'c'};
+    /// let bcd = btreeset! {'b', 'c', 'd'};
+    /// let set = btreeset! {abc, bcd};
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// assert_ne!(
+    ///     symbol.table.get(&'a').unwrap(),
+    ///     symbol.table.get(&'d').unwrap()
+    /// );
+    /// assert_ne!(
+    ///     symbol.table.get(&'b').unwrap(),
+    ///     symbol.table.get(&'c').unwrap()
+    /// );
+    /// ```
+    pub fn new(symbols: BTreeSet<BTreeSet<char>>) -> SymbolTable {
+        // Refinement is done by taking a set `A` and comparing against all others (called `B`).
+        // Three new sets are created: `A/(A∩B)`, `B/(A∩B)` and `A∩B`. If  `A/(A∩B)` = `A∩B`
+        // (so the original is unmodified) only the new B set is added to the next processing list
+        // and current processing continues unmodified. Otherwise also the intersection is added to
+        // the next processing list BUT the current processing continues with the new A set.
+        // when the current list is emptied, A is pushed to the done set, and the algorithm restarts
+        // with the next processing list.
+        let mut todo = symbols.into_iter().collect::<Vec<_>>();
+        let mut done = BTreeSet::new();
+        while !todo.is_empty() {
+            let mut set_a = todo.pop().unwrap();
+            let mut new_todo = Vec::new();
+            while let Some(set_b) = todo.pop() {
+                let intersection = set_a.intersection(&set_b).cloned().collect::<BTreeSet<_>>();
+                let new_a = set_a
+                    .difference(&intersection)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let new_b = set_b
+                    .difference(&intersection)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                new_todo.push(new_b);
+                if new_a != intersection {
+                    // need to split the current set: I can do one comparison at time so I continue
+                    // with the unique part and push the intersection inside the `to do`
+                    set_a = new_a;
+                    new_todo.push(intersection);
+                }
+            }
+            done.insert(set_a);
+            todo = new_todo;
+        }
+        let mut table = FnvHashMap::default();
+        for (index, set) in done.into_iter().enumerate() {
+            for symbol in set {
+                table.insert(symbol, index);
+            }
+        }
+        SymbolTable { table }
     }
 }
 
@@ -130,13 +213,13 @@ pub struct NFA {
     /// Number of states.
     states_no: usize,
     /// Transition map. (node index, symbol) -> Set(node index).
-    transition: HashMap<(usize, char), HashSet<usize>>,
+    transition: HashMap<(usize, char), FnvHashSet<usize>>,
     /// All the symbols recognized by the NFA, except EPSILON and ANY_VALUE.
-    alphabet: HashSet<char>,
+    alphabet: FnvHashSet<char>,
     /// Starting node of the NFA.
     start: usize,
     /// Accepting states. (node index) -> (production index)
-    accept: HashMap<usize, usize>,
+    accept: FnvHashMap<usize, usize>,
 }
 
 impl NFA {
@@ -165,16 +248,16 @@ impl NFA {
             NFA {
                 states_no: 1,
                 transition: HashMap::new(),
-                alphabet: HashSet::new(),
+                alphabet: FnvHashSet::default(),
                 start: 0,
-                accept: HashMap::new(),
+                accept: FnvHashMap::default(),
             }
         } else {
             // collect the alphabet for DFA
             let alphabet = parse_trees
                 .iter()
                 .flat_map(get_alphabet)
-                .collect::<HashSet<char>>();
+                .collect::<FnvHashSet<char>>();
             // convert the parse tree into a canonical one (not ? or +, only *)
             let canonical_tree = parse_trees
                 .into_iter()
@@ -197,12 +280,12 @@ impl NFA {
                 let start_transition = thompson_nfas
                     .iter()
                     .map(|x| x.start)
-                    .collect::<HashSet<_>>();
+                    .collect::<FnvHashSet<_>>();
                 //FIXME: this clone is not particularly efficient (even though I expect nodes in the order of hundredth)
                 let accept = thompson_nfas
                     .iter()
                     .flat_map(|x| x.accept.clone())
-                    .collect::<HashMap<_, _>>();
+                    .collect::<FnvHashMap<_, _>>();
                 let mut transition_table = thompson_nfas
                     .into_iter()
                     .flat_map(|x| x.transition)
@@ -311,11 +394,11 @@ pub struct DFA {
     /// Transition function: (node index, symbol) -> (node).
     transition: HashMap<(usize, char), usize>,
     /// Set of symbols in the language.
-    alphabet: HashSet<char>,
+    alphabet: FnvHashSet<char>,
     /// Starting node.
     start: usize,
     /// Accepting states: (node index) -> (accepted production).
-    accept: HashMap<usize, usize>,
+    accept: FnvHashMap<usize, usize>,
 }
 
 impl std::fmt::Display for DFA {
@@ -352,16 +435,16 @@ impl DFA {
             DFA {
                 states_no: 1,
                 transition: HashMap::new(),
-                alphabet: HashSet::new(),
+                alphabet: FnvHashSet::default(),
                 start: 0,
-                accept: HashMap::new(),
+                accept: FnvHashMap::default(),
             }
         } else {
             // collect the alphabet for DFA
             let alphabet = parse_trees
                 .iter()
                 .flat_map(get_alphabet)
-                .collect::<HashSet<char>>();
+                .collect::<FnvHashSet<char>>();
             // convert the parse tree into a canonical one (not ? or +, only *)
             let canonical_tree = parse_trees
                 .into_iter()
@@ -920,8 +1003,8 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
 }
 
 /// Returns a set containing all the characters used in the regexp extended tree.
-fn get_alphabet(node: &ExpandedPrecedenceTree) -> HashSet<char> {
-    let mut ret = HashSet::new();
+fn get_alphabet(node: &ExpandedPrecedenceTree) -> FnvHashSet<char> {
+    let mut ret = FnvHashSet::default();
     let mut todo_nodes = vec![node];
     while let Some(node) = todo_nodes.pop() {
         match node.value {
@@ -945,7 +1028,7 @@ fn get_alphabet(node: &ExpandedPrecedenceTree) -> HashSet<char> {
 
 /// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
-fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &HashSet<char>) -> CanonicalTree {
+fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &FnvHashSet<char>) -> CanonicalTree {
     match node.value {
         ExLiteral::Value(i) => BSTree {
             value: Literal::Symbol(i),
@@ -978,7 +1061,7 @@ fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &HashSet<char>) -> Canon
             match op {
                 OpType::NOT => {
                     //get the entire used alphabet for both nodes
-                    let mut subnode_alphabet = HashSet::new();
+                    let mut subnode_alphabet = FnvHashSet::default();
                     if let Some(l) = node.left {
                         subnode_alphabet.extend(get_alphabet(&*l));
                     }
@@ -1110,18 +1193,22 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
         let pushme;
         match node.value {
             Literal::Symbol(val) => {
-                let mut alphabet = HashSet::new();
+                let mut alphabet = FnvHashSet::default();
                 if val != EPSILON_VALUE {
                     alphabet.insert(val);
                 }
+                let mut target_set = FnvHashSet::default();
+                target_set.insert(index + 1);
+                let mut accept = FnvHashMap::default();
+                accept.insert(index + 1, production);
                 pushme = NFA {
                     states_no: 2,
                     transition: hashmap! {
-                        (index, val) => hashset!{index+1},
+                        (index, val) => target_set,
                     },
                     alphabet,
                     start: index,
-                    accept: hashmap! {index+1 => production},
+                    accept,
                 };
                 index += 2;
             }
@@ -1130,16 +1217,21 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                 let new_end = index + 1;
                 index += 2;
                 let mut first = done.pop().unwrap();
+                let mut target_set = FnvHashSet::default();
+                target_set.insert(first.start);
+                target_set.insert(new_end);
                 for acc in first.accept {
                     first
                         .transition
-                        .insert((acc.0, EPSILON_VALUE), hashset! {first.start, new_end});
+                        .insert((acc.0, EPSILON_VALUE), target_set.clone());
                 }
                 first
                     .transition
-                    .insert((new_start, EPSILON_VALUE), hashset! {first.start, new_end});
+                    .insert((new_start, EPSILON_VALUE), target_set.clone());
                 first.start = new_start;
-                first.accept = hashmap! {new_end => production};
+                let mut accept = FnvHashMap::default();
+                accept.insert(new_end, production);
+                first.accept = accept;
                 first.states_no += 2;
                 pushme = first;
             }
@@ -1147,10 +1239,12 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                 let second = done.pop().unwrap();
                 let mut first = done.pop().unwrap();
                 first.transition.extend(second.transition);
+                let mut target_set = FnvHashSet::default();
+                target_set.insert(second.start);
                 for acc in first.accept {
                     first
                         .transition
-                        .insert((acc.0, EPSILON_VALUE), hashset! {second.start});
+                        .insert((acc.0, EPSILON_VALUE), target_set.clone());
                 }
                 first.accept = second.accept;
                 first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
@@ -1163,19 +1257,28 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                 index += 2;
                 let second = done.pop().unwrap();
                 let mut first = done.pop().unwrap();
+                let mut target_set = FnvHashSet::default();
+                target_set.insert(first.start);
+                target_set.insert(second.start);
+                let mut accept = FnvHashMap::default();
+                accept.insert(new_end, production);
+                let mut target_set = FnvHashSet::default();
+                target_set.insert(first.start);
+                target_set.insert(second.start);
                 first.transition.extend(second.transition);
-                first.transition.insert(
-                    (new_start, EPSILON_VALUE),
-                    hashset! {first.start, second.start},
-                );
+                first
+                    .transition
+                    .insert((new_start, EPSILON_VALUE), target_set);
+                target_set = FnvHashSet::default();
+                target_set.insert(new_end);
                 for acc in first.accept.into_iter().chain(second.accept.into_iter()) {
                     first
                         .transition
-                        .insert((acc.0, EPSILON_VALUE), hashset! {new_end});
+                        .insert((acc.0, EPSILON_VALUE), target_set.clone());
                 }
                 first.start = new_start;
                 first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
-                first.accept = hashmap! {new_end => production};
+                first.accept = accept;
                 first.states_no += second.states_no + 2;
                 pushme = first;
             }
@@ -1195,10 +1298,16 @@ fn subset_construction(nfa: &NFA) -> DFA {
     let mut indices = HashMap::new();
     let mut index = 0 as usize;
     let mut transition = HashMap::new();
-    let mut accept = HashMap::new();
+    let mut accept = FnvHashMap::default();
 
-    let s0 = sc_epsilon_closure(hashset! {nfa.start}, &nfa.transition);
+    let mut start_set = FnvHashSet::default();
+    start_set.insert(nfa.start);
+    let s0 = sc_epsilon_closure(start_set, &nfa.transition);
     indices.insert(s0.clone(), index);
+    // possible acceptance check is done at creation time
+    if let Some(accepted_production) = sc_accepting(&s0, &nfa.accept) {
+        accept.insert(index, accepted_production);
+    }
     ds_unmarked.push(s0);
     index += 1;
     while let Some(t) = ds_unmarked.pop() {
@@ -1215,6 +1324,7 @@ fn subset_construction(nfa: &NFA) -> DFA {
                     u_idx = index;
                     indices.insert(u.clone(), u_idx);
                     index += 1;
+                    // check if state is accepting
                     if let Some(accepted_production) = sc_accepting(&u, &nfa.accept) {
                         accept.insert(u_idx, accepted_production);
                     }
@@ -1251,8 +1361,8 @@ fn subset_construction(nfa: &NFA) -> DFA {
 /// - `set`: the input set where to start the epsilon move
 /// - `transition`: transition table of the NFA
 fn sc_epsilon_closure(
-    set: HashSet<usize>,
-    transition_table: &HashMap<(usize, char), HashSet<usize>>,
+    set: FnvHashSet<usize>,
+    transition_table: &HashMap<(usize, char), FnvHashSet<usize>>,
 ) -> BTreeSet<usize> {
     let mut stack = set.iter().copied().collect::<Vec<_>>();
     let mut closure = set;
@@ -1269,8 +1379,8 @@ fn sc_epsilon_closure(
 ///
 /// Returns Some(production index) if the current set is accepting, None otherwise. Will return
 /// the lowest production index possible (production appearing first).
-fn sc_accepting(set: &BTreeSet<usize>, accepting: &HashMap<usize, usize>) -> Option<usize> {
-    let mut productions = BTreeSet::new();
+fn sc_accepting(set: &BTreeSet<usize>, accepting: &FnvHashMap<usize, usize>) -> Option<usize> {
+    let mut productions = BTreeSet::new(); //so I can easily get the min()
     for node in accepting {
         if set.contains(&node.0) {
             productions.insert(node.1);
@@ -1293,12 +1403,12 @@ fn sc_accepting(set: &BTreeSet<usize>, accepting: &HashMap<usize, usize>) -> Opt
 fn sc_move(
     set: &BTreeSet<usize>,
     symbol: char,
-    transition: &HashMap<(usize, char), HashSet<usize>>,
-) -> HashSet<usize> {
-    let mut ret = HashSet::new();
+    transition: &HashMap<(usize, char), FnvHashSet<usize>>,
+) -> FnvHashSet<usize> {
+    let mut ret = FnvHashSet::default();
     for node in set {
         if let Some(t) = transition.get(&(*node, symbol)) {
-            ret = ret.union(t).cloned().collect::<HashSet<_>>();
+            ret = ret.union(t).cloned().collect::<FnvHashSet<_>>();
         }
     }
     ret
@@ -1342,10 +1452,65 @@ fn direct_construction(node: CanonicalTree) -> DFA {
     let helper = build_dc_helper(&node, 0);
     let mut indices = vec![EPSILON_VALUE; helper.value.index + 1];
     let mut followpos = vec![BTreeSet::new(); helper.value.index + 1];
-    let mut accepting = HashMap::new();
-    dc_assign_index_to_literal(&helper, &mut indices, &mut accepting);
+    //retrieve accepting nodes (they are embedded in the helper tree, we don't have NFA here)
+    let mut accepting_nodes = FnvHashMap::default();
+    dc_assign_index_to_literal(&helper, &mut indices, &mut accepting_nodes);
     dc_compute_followpos(&helper, &mut followpos);
-    dc_build_graph(helper.value.firstpos, &followpos, &indices, &accepting)
+    let mut accept = FnvHashMap::default();
+    let mut done = HashMap::new();
+    done.insert(helper.value.firstpos.clone(), 0);
+    // check the first node if it can be accepting, this is done in the loop at creation time.
+    // pick the production with the lowest index in the same group.
+    if let Some(acc_prod) = helper
+        .value
+        .firstpos
+        .iter()
+        .flat_map(|x| accepting_nodes.get(x))
+        .min()
+    {
+        accept.insert(0, *acc_prod);
+    }
+    let mut index = 1 as usize;
+    let mut unmarked = vec![helper.value.firstpos];
+    let mut tran = HashMap::new();
+    let alphabet = indices
+        .iter()
+        .filter(|x| **x != EPSILON_VALUE)
+        .copied()
+        .collect::<FnvHashSet<char>>();
+    // loop, conceptually similar to subset construction, but uses followpos instead of NFA
+    // (followpos is essentially an NFA withouth epsilon moves)
+    while let Some(node_set) = unmarked.pop() {
+        for letter in &alphabet {
+            let u = node_set
+                .iter()
+                .filter(|x| indices[**x] == *letter)
+                .flat_map(|x| &followpos[*x])
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let u_idx;
+            if let Some(got) = done.get(&u) {
+                u_idx = *got;
+            } else {
+                u_idx = index;
+                index += 1;
+                if let Some(acc_prod) = u.iter().flat_map(|x| accepting_nodes.get(x)).min() {
+                    accept.insert(u_idx, *acc_prod);
+                }
+                unmarked.push(u.clone());
+                done.insert(u, u_idx);
+            }
+            let set_idx = *done.get(&node_set).unwrap();
+            tran.insert((set_idx, *letter), u_idx);
+        }
+    }
+    DFA {
+        alphabet,
+        states_no: index,
+        start: 0,
+        transition: tran,
+        accept,
+    }
 }
 
 /// Part of the direct DFA construction:
@@ -1468,7 +1633,7 @@ fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<usize>
 fn dc_assign_index_to_literal(
     node: &BSTree<DCHelper>,
     indices: &mut Vec<char>,
-    acc: &mut HashMap<usize, usize>,
+    acc: &mut FnvHashMap<usize, usize>,
 ) {
     if let Some(l) = &node.left {
         dc_assign_index_to_literal(&*l, indices, acc);
@@ -1485,61 +1650,6 @@ fn dc_assign_index_to_literal(
     }
 }
 
-/// Part of the direct DFA construction:
-///
-/// Performs the actual DFA construction given the starting set, followpos set, the assigned indices
-/// and the accepting nodes.
-fn dc_build_graph(
-    start: BTreeSet<usize>,
-    followpos: &[BTreeSet<usize>],
-    indices: &[char],
-    accepting: &HashMap<usize, usize>,
-) -> DFA {
-    let mut done = hashmap! {
-        start.clone() => 0
-    };
-    let mut index = 1 as usize;
-    let mut unmarked = vec![start];
-    let mut tran = HashMap::new();
-    let mut accept = HashMap::new();
-    let alphabet = indices
-        .iter()
-        .filter(|x| **x != EPSILON_VALUE)
-        .copied()
-        .collect::<HashSet<char>>();
-    while let Some(node_set) = unmarked.pop() {
-        for letter in &alphabet {
-            let u = node_set
-                .iter()
-                .filter(|x| indices[**x] == *letter)
-                .flat_map(|x| &followpos[*x])
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            let u_idx;
-            if let Some(got) = done.get(&u) {
-                u_idx = *got;
-            } else {
-                u_idx = index;
-                index += 1;
-                if let Some(acc_prod) = u.iter().flat_map(|x| accepting.get(x)).min() {
-                    accept.insert(u_idx, *acc_prod);
-                }
-                unmarked.push(u.clone());
-                done.insert(u, u_idx);
-            }
-            let set_idx = *done.get(&node_set).unwrap();
-            tran.insert((set_idx, *letter), u_idx);
-        }
-    }
-    DFA {
-        alphabet,
-        states_no: index,
-        start: 0,
-        transition: tran,
-        accept,
-    }
-}
-
 /// Given a DFA returns the DFA with the minimum number of nodes.
 ///
 /// **REQUIRED** to have a move on every symbol for every node.
@@ -1548,7 +1658,7 @@ fn dc_build_graph(
 /// A.Aho et al. (p.180 on 2nd edition).
 fn min_dfa(dfa: DFA) -> DFA {
     let mut partitions = init_partitions(&dfa);
-    let mut positions = HashMap::new();
+    let mut positions = FnvHashMap::default();
     for (partition_index, partition) in partitions.iter().enumerate() {
         for node in partition {
             positions.insert(*node, partition_index);
@@ -1586,9 +1696,9 @@ fn min_dfa(dfa: DFA) -> DFA {
 ///
 /// Creates the initial partitions: non accepting nodes, and a partition for each group of accepting
 /// nodes announcing the same rule.
-fn init_partitions(dfa: &DFA) -> Vec<HashSet<usize>> {
+fn init_partitions(dfa: &DFA) -> Vec<FnvHashSet<usize>> {
     let mut announced_max = std::usize::MIN;
-    let mut acc = HashSet::new();
+    let mut acc = FnvHashSet::default();
     for announced in &dfa.accept {
         acc.insert(*announced.0);
         announced_max = announced_max.max(*announced.1);
@@ -1596,12 +1706,12 @@ fn init_partitions(dfa: &DFA) -> Vec<HashSet<usize>> {
     let accepting_no = announced_max + 1;
     let nacc = (0 as usize..)
         .take(dfa.states_no)
-        .collect::<HashSet<_>>()
+        .collect::<FnvHashSet<_>>()
         .difference(&acc)
         .cloned()
-        .collect::<HashSet<_>>();
+        .collect::<FnvHashSet<_>>();
     // this is a DFA for lexical analysis so I need to further split acc by announced rule
-    let mut ret = vec![HashSet::new(); accepting_no];
+    let mut ret = vec![FnvHashSet::default(); accepting_no];
     for announced in &dfa.accept {
         ret[(*announced.1)].insert(*announced.0);
     }
@@ -1613,11 +1723,11 @@ fn init_partitions(dfa: &DFA) -> Vec<HashSet<usize>> {
 ///
 /// Splits a partition if two nodes goes to different partitions on the same symbol.
 fn split_partition(
-    partition: HashSet<usize>,
-    position: &HashMap<usize, usize>,
+    partition: FnvHashSet<usize>,
+    position: &FnvHashMap<usize, usize>,
     dfa: &DFA,
-) -> (HashSet<usize>, HashSet<usize>) {
-    let mut split = HashSet::new();
+) -> (FnvHashSet<usize>, FnvHashSet<usize>) {
+    let mut split = FnvHashSet::default();
     if partition.len() > 1 {
         for symbol in &dfa.alphabet {
             let mut iter = partition.iter();
@@ -1647,10 +1757,10 @@ fn split_partition(
 /// one.
 ///
 /// Also, removes the sink, if any and not accepting.
-fn remap(partitions: Vec<HashSet<usize>>, positions: HashMap<usize, usize>, dfa: DFA) -> DFA {
+fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>, dfa: DFA) -> DFA {
     //first record in which partitions is every node
     let mut new_trans = HashMap::new();
-    let mut accept = HashMap::new();
+    let mut accept = FnvHashMap::default();
     let mut in_degree = vec![0 as usize; partitions.len()];
     let mut out_degree = vec![0 as usize; partitions.len()];
     //remap accepting nodes

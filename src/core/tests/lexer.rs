@@ -1,7 +1,7 @@
 use crate::grammar::Grammar;
 use crate::lexer::{
     canonicalise, expand_literals, gen_precedence_tree, get_alphabet, Automaton, BSTree, OpType,
-    RegexOp, DFA, NFA,
+    RegexOp, SymbolTable, DFA, NFA,
 };
 
 #[test]
@@ -253,6 +253,15 @@ fn dfa_subset_construction_sink_accepting() {
 }
 
 #[test]
+fn dfa_direct_construction_start_accepting() {
+    let grammar = Grammar::new(&["'a'*"], &[], &["ASTAR"]);
+    let dfa_direct = DFA::new(&grammar);
+    assert!(!dfa_direct.is_empty());
+    assert_eq!(dfa_direct.nodes(), 1);
+    assert_eq!(dfa_direct.edges(), 1);
+}
+
+#[test]
 fn dfa_direct_construction_single_acc() {
     let terminal = "(('a'*'b')|'c')?'c'";
     let names = "PROD1";
@@ -283,12 +292,19 @@ fn dfa_direct_construction_empty() {
 fn dfa_subset_construction_multi_production() {
     let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     let nfa = NFA::new(&grammar);
-    let dfa_direct = DFA::new(&grammar);
     let dfa_subset = nfa.to_dfa();
     assert_eq!(dfa_subset.nodes(), 3);
     assert_eq!(dfa_subset.edges(), 3);
-    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
-    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
+}
+
+#[test]
+fn dfa_subset_construction_start_accepting() {
+    let grammar = Grammar::new(&["'a'*"], &[], &["ASTAR"]);
+    let nfa = NFA::new(&grammar);
+    let dfa_subset = nfa.to_dfa();
+    assert!(!dfa_subset.is_empty());
+    assert_eq!(dfa_subset.nodes(), 1);
+    assert_eq!(dfa_subset.edges(), 1);
 }
 
 #[test]
@@ -297,12 +313,9 @@ fn dfa_subset_construction_single_production() {
     let names = "PROD1";
     let grammar = Grammar::new(&[terminal], &[], &[names]);
     let nfa = NFA::new(&grammar);
-    let dfa_direct = DFA::new(&grammar);
     let dfa_subset = nfa.to_dfa();
     assert_eq!(dfa_subset.nodes(), 5);
     assert_eq!(dfa_subset.edges(), 7);
-    assert_eq!(dfa_subset.nodes(), dfa_direct.nodes());
-    assert_eq!(dfa_subset.edges(), dfa_direct.edges());
 }
 
 #[test]
@@ -312,6 +325,15 @@ fn dfa_subset_construction_empty() {
     let dfa = nfa.to_dfa();
     assert!(nfa.is_empty());
     assert!(dfa.is_empty());
+}
+
+#[test]
+fn nfa_start_accepting() {
+    let grammar = Grammar::new(&["'a'*"], &[], &["ASTAR"]);
+    let nfa = NFA::new(&grammar);
+    assert!(!nfa.is_empty());
+    assert_eq!(nfa.nodes(), 4);
+    assert_eq!(nfa.edges(), 5);
 }
 
 #[test]
@@ -339,4 +361,32 @@ fn nfa_empty() {
     let grammar = Grammar::new(&[], &[], &[]);
     let nfa = NFA::new(&grammar);
     assert!(nfa.is_empty());
+}
+
+#[test]
+fn symbol_table_single_set() {
+    let set1 = btreeset! {'a'};
+    let set = btreeset! {set1};
+    let symbol = SymbolTable::new(set);
+    assert_eq!(*symbol.table.get(&'a').unwrap(), 0 as usize);
+}
+
+#[test]
+fn symbol_table_construction() {
+    let set1 = btreeset! {'a', 'b', 'c'};
+    let set2 = btreeset! {'b', 'c', 'd'};
+    let set3 = btreeset! {'d', 'e'};
+    let set4 = btreeset! {'e', 'f', 'g', 'h'};
+    let set5 = btreeset! {'h', 'a'};
+    let set6 = btreeset! {'h', 'c'};
+    let set = btreeset! {set1, set2, set3, set4, set5, set6};
+    let symbol = SymbolTable::new(set);
+    assert_eq!(
+        *symbol.table.get(&'f').unwrap(),
+        *symbol.table.get(&'g').unwrap()
+    );
+    assert_ne!(
+        *symbol.table.get(&'a').unwrap(),
+        *symbol.table.get(&'b').unwrap()
+    );
 }
