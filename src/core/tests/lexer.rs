@@ -3,6 +3,7 @@ use crate::lexer::{
     canonicalise, expand_literals, gen_precedence_tree, get_alphabet, Automaton, BSTree, OpType,
     RegexOp, SymbolTable, DFA, NFA,
 };
+use std::collections::BTreeSet;
 
 #[test]
 fn canonical_tree() {
@@ -369,6 +370,7 @@ fn symbol_table_single_set() {
     let set = btreeset! {set1};
     let symbol = SymbolTable::new(set);
     assert_eq!(*symbol.table.get(&'a').unwrap(), 0 as usize);
+    assert_eq!(symbol.ids(), 2);
 }
 
 #[test]
@@ -381,12 +383,45 @@ fn symbol_table_construction() {
     let set6 = btreeset! {'h', 'c'};
     let set = btreeset! {set1, set2, set3, set4, set5, set6};
     let symbol = SymbolTable::new(set);
-    assert_eq!(
-        *symbol.table.get(&'f').unwrap(),
-        *symbol.table.get(&'g').unwrap()
-    );
-    assert_ne!(
-        *symbol.table.get(&'a').unwrap(),
-        *symbol.table.get(&'b').unwrap()
-    );
+    assert_eq!(symbol.get('f'), symbol.get('g'));
+    assert_ne!(symbol.get('a'), symbol.get('b'));
+}
+
+#[test]
+fn symbol_table_character_outside_alphabet() {
+    let set1 = btreeset! {'a', 'b', 'c'};
+    let set2 = btreeset! {'b', 'c', 'd'};
+    let symbol = SymbolTable::new(btreeset! {set1, set2});
+    assert_eq!(symbol.get('e'), symbol.ids() - 1);
+}
+
+#[test]
+fn symbol_table_get_set() {
+    let set1 = btreeset! {'a', 'b', 'c', 'd', 'e', 'f', 'g',};
+    let set2 = btreeset! {'d', 'e', 'f'};
+    let set3 = btreeset! {'f','g','h'};
+    let set = btreeset! {set1, set2, set3};
+    let symbol = SymbolTable::new(set);
+    assert_ne!(symbol.get('f'), symbol.get('g'));
+    assert_eq!(symbol.get('d'), symbol.get('e'));
+
+    let retrieve1 = symbol.get_set(&btreeset! {'a', 'b', 'c'});
+    assert_eq!(retrieve1.len(), 1); //[a, b, c] have the same value
+    let retrieve2 = symbol.get_set(&btreeset! {'d', 'e', 'f'});
+    assert_eq!(retrieve2.len(), 2); //[d, e] [f] are the sets
+}
+
+#[test]
+fn symbol_table_get_negated() {
+    let set1 = btreeset! {'a', 'b', 'c'};
+    let set2 = btreeset! {'b', 'c', 'd'};
+    let symbol = SymbolTable::new(btreeset! {set1, set2});
+
+    let negate_me = btreeset! {'b','c'};
+    let negated = symbol.get_negated(&negate_me);
+    assert!(negated.contains(&symbol.get('a')));
+    assert!(negated.contains(&symbol.get('d')));
+    assert!(negated.contains(&symbol.get('㊈')));
+    assert!(!negated.contains(&symbol.get('b')));
+    assert!(!negated.contains(&symbol.get('c')));
 }

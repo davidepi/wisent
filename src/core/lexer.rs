@@ -5,6 +5,7 @@ use std::str::Chars;
 
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
+use std::collections::hash_map::Iter;
 
 /// The epsilon value for NFAs.
 const EPSILON_VALUE: char = '\u{107FE1}';
@@ -40,43 +41,48 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
     }
 }
 
-/// Table assigning unique indices to symbols.
+/// Table assigning unique numerical values to symbols.
 ///
 /// Symbols are grouped by productions: if two or more symbols are **always** found in the same
 /// set (or subset) in every production, they are assigned the same index. This effectively reduces
 /// the amount of edges required to build the NFA/DFA.
+///
+/// As an example, the productions `'a'` and `[a-z]` can be split into `'a'` and `[b-z]`
+/// because the symbols from `b` to `z` will result in the same move in the NFA/DFA (as there are
+/// no other productions). So, each letter `'a'` in the input can be converted to a number,
+/// let's say `0`, and each letter from `'b'` to `'z'` can be converted to `1`, effectively reducing
+/// the possible inputs to two single values instead of 26.
 pub struct SymbolTable {
-    //TODO: make private
-    pub table: FnvHashMap<char, usize>,
+    // table (char, assigned number). table.len() is the number for ANY char not in table.
+    table: FnvHashMap<char, usize>,
+    // number of unique ids inside the table
+    ids: usize,
 }
 
 impl SymbolTable {
-    /// This method builds the symbol table. The symbol table is a table assigning an unique integer
-    /// to every production rule merging together the one that will **never** be alone.
-    /// As an example, the productions `'a'` and `[a-z]` can be splitted into `'a'` and `[b-z]`
-    /// because the symbols from `b` to `z` can be processed as a single grouped transaction.
+    /// Builds the symbol table given a set of sets.
     ///
-    /// This algorithm takes as input a set of sets, `symbols` and iteratively refines them.
-    /// The algorithm stops when, given any two sets `A` and `B`, `A∩B` returns ∅.
+    /// This function takes as input a set of sets, `symbols`.
+    /// Each set represents a possible input for a production, for example the production
+    /// `[a-z]*[a-zA-Z0-9]` will have two sets `[a-z]` and `[a-zA-Z0-9]` whereas the production `a`*
+    /// will have only `[a]`.
     ///
+    /// The construction works by refining the input sets: given two sets `A` and `B` the
+    /// intersection `A∩B` is removed from them and added as extra set. This continues until every
+    /// intersection between every pair yields ∅.
     /// # Examples
-    /// Basic example:
-    /// ```ignore
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
     /// use wisent::lexer::SymbolTable;
     ///
-    /// let abc = btreeset! {'a', 'b', 'c'};
-    /// let bcd = btreeset! {'b', 'c', 'd'};
-    /// let set = btreeset! {abc, bcd};
+    /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
+    /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
     ///
-    /// assert_ne!(
-    ///     symbol.table.get(&'a').unwrap(),
-    ///     symbol.table.get(&'d').unwrap()
-    /// );
-    /// assert_ne!(
-    ///     symbol.table.get(&'b').unwrap(),
-    ///     symbol.table.get(&'c').unwrap()
-    /// );
+    /// assert_ne!(symbol.get('a'), symbol.get('d'));
+    /// assert_eq!(symbol.get('b'), symbol.get('c'));
     /// ```
     pub fn new(symbols: BTreeSet<BTreeSet<char>>) -> SymbolTable {
         // Refinement is done by taking a set `A` and comparing against all others (called `B`).
@@ -93,16 +99,16 @@ impl SymbolTable {
             let mut new_todo = Vec::new();
             while let Some(set_b) = todo.pop() {
                 let intersection = set_a.intersection(&set_b).cloned().collect::<BTreeSet<_>>();
-                let new_a = set_a
-                    .difference(&intersection)
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
                 let new_b = set_b
                     .difference(&intersection)
                     .cloned()
                     .collect::<BTreeSet<_>>();
                 new_todo.push(new_b);
-                if new_a != intersection {
+                if set_a != intersection {
+                    let new_a = set_a
+                        .difference(&intersection)
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
                     // need to split the current set: I can do one comparison at time so I continue
                     // with the unique part and push the intersection inside the `to do`
                     set_a = new_a;
@@ -112,13 +118,156 @@ impl SymbolTable {
             done.insert(set_a);
             todo = new_todo;
         }
+        // assign indices: unique to the same and increase only if something has been inserted
         let mut table = FnvHashMap::default();
-        for (index, set) in done.into_iter().enumerate() {
+        let mut uniques = 0 as usize;
+        for set in done.into_iter() {
+            let mut inserted = false;
             for symbol in set {
-                table.insert(symbol, index);
+                inserted |= table.insert(symbol, uniques).is_none();
+            }
+            if inserted {
+                uniques += 1;
             }
         }
-        SymbolTable { table }
+        SymbolTable {
+            table,
+            ids: uniques,
+        }
+    }
+
+    /// Returns the number of unique ids assigned to the symbols.
+    ///
+    /// IDs are progressive, so this is also the size required for the transition table of any
+    /// NFA/DFA. This ALWAYS includes the unique ID assigned to any char not in the table.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// assert_eq!(symbol.ids(), 2);
+    /// ```
+    pub fn ids(&self) -> usize {
+        self.ids + 1
+    }
+
+    /// Returns the value associated for a specific char.
+    ///
+    /// If the char is not inside the symbol table, a value is returned anyway: this value
+    /// represents any the transaction to be applied to any character not in the table.
+    /// This value is also equal to the number of the symbols inside the table (hence the reason
+    /// why the table is immutable after construction)
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
+    /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// let index_a = symbol.get('a');
+    /// let index_not_in_table = symbol.get('ダ');
+    ///
+    /// assert!(index_a < 3);
+    /// assert_eq!(index_not_in_table, 3);
+    /// ```
+    pub fn get(&self, symbol: char) -> usize {
+        match self.table.get(&symbol) {
+            Some(val) => *val,
+            None => self.ids,
+        }
+    }
+
+    /// Returns the value(s) associated with a specific set.
+    ///
+    /// A set can be associated to a single val up to a number of vals equal to the input set
+    /// size.
+    ///
+    /// Also in this case, a special number will be assigned to those symbols not in the symbol
+    /// table.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
+    /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// let input_set = vec!['b', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let mut encoded = symbol.get_set(&input_set).into_iter();
+    ///
+    /// assert!(encoded.next().is_some()); // [b, c] (or [d])
+    /// assert!(encoded.next().is_some()); // [d] (or [b, c])
+    /// assert!(encoded.next().is_none());
+    /// ```
+    /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
+    /// A set of `[b, d]` will return two values: the one for `[b, c]` and the one for `[d]`.
+    pub fn get_set(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
+        let mut ret = BTreeSet::new();
+        for symbol in symbols {
+            match self.table.get(symbol) {
+                Some(val) => ret.insert(*val),
+                None => ret.insert(self.ids),
+            };
+        }
+        ret
+    }
+
+    /// Returns all the values NOT associated with a specific set.
+    ///
+    /// This method returns values associated for negated sets, simulating cases like `[^a-z]`, or,
+    /// in ANTLR syntax, `~[a-z]`.
+    ///
+    /// **NOTE**: It is expected the input set to contain only symbols included in the table, so the
+    /// special number for all the symbols not in the table will always be returned.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
+    /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// let input_set = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let mut negated = symbol.get_negated(&input_set).into_iter();
+    ///
+    /// assert!(negated.next().is_some()); //a
+    /// assert!(negated.next().is_some()); // IDs of "any other char"
+    /// assert!(negated.next().is_none());
+    /// ```
+    /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
+    /// A set of `[b, c, d]`, corresponding to `[^bcd]` in regexp syntax, will return two
+    /// values, the one for `[a]` and the one for any other char not in table.
+    pub fn get_negated(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
+        let mut accept = BTreeSet::new();
+        for symbol in &self.table {
+            // this fails if negating only "partial sets". however in a normal execution should
+            // NEVER happen (the same set passed as construction time should be passed here)
+            if !symbols.contains(&symbol.0) {
+                accept.insert(*symbol.1);
+            }
+        }
+        accept.insert(self.ids);
+        accept
+    }
+
+    /// Returns an iterator over the underlying table
+    pub fn iter(&self) -> Iter<char, usize> {
+        self.table.iter()
     }
 }
 
@@ -380,7 +529,7 @@ impl Automaton for NFA {
     }
 }
 
-/// A Deterministic Finite Automaton.
+/// A Deterministic Finite Automaton for lexical analysis.
 ///
 /// A DFA is an automaton where each state has a single transaction for a given input symbol, and
 /// no transactions on empty symbols (ϵ-moves).
