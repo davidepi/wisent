@@ -6,11 +6,9 @@ use std::str::Chars;
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
 use std::collections::hash_map::Iter;
+use crate::lexer::ExLiteral::Operation;
 
-/// The epsilon value for NFAs.
-const EPSILON_VALUE: char = '\u{107FE1}';
-/// Placeholder for any character not in the alphabet.
-const ANY_VALUE: char = '\u{10A261}';
+const EPSILON_VALUE: usize = 0;
 
 /// A Binary Search Tree.
 #[derive(Clone)]
@@ -50,16 +48,27 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
 /// As an example, the productions `'a'` and `[a-z]` can be split into `'a'` and `[b-z]`
 /// because the symbols from `b` to `z` will result in the same move in the NFA/DFA (as there are
 /// no other productions). So, each letter `'a'` in the input can be converted to a number,
-/// let's say `0`, and each letter from `'b'` to `'z'` can be converted to `1`, effectively reducing
+/// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively reducing
 /// the possible inputs to two single values instead of 26.
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
     table: FnvHashMap<char, usize>,
-    // number of unique ids inside the table
-    ids: usize,
+    // table for reverse lookup, given an ID prints the transition set (useful only for debug)
+    reverse: FnvHashMap<usize, BTreeSet<char>>,
 }
 
 impl SymbolTable {
+    /// Builds an empty symbol table.
+    pub fn empty() -> SymbolTable {
+        let mut reverse = FnvHashMap::default();
+        reverse.insert(0, btreeset!['\u{03F5}']);
+        reverse.insert(1, btreeset!['\u{233A}']); //any char not in alphabet
+        SymbolTable {
+            table: FnvHashMap::default(),
+            reverse,
+        }
+    }
+
     /// Builds the symbol table given a set of sets.
     ///
     /// This function takes as input a set of sets, `symbols`.
@@ -103,8 +112,11 @@ impl SymbolTable {
                     .difference(&intersection)
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                new_todo.push(new_b);
-                if set_a != intersection {
+                // always push `b` because it must be processed with other sets
+                if !new_b.is_empty() {
+                    new_todo.push(new_b);
+                }
+                if set_a != intersection && !intersection.is_empty() {
                     let new_a = set_a
                         .difference(&intersection)
                         .cloned()
@@ -120,26 +132,28 @@ impl SymbolTable {
         }
         // assign indices: unique to the same and increase only if something has been inserted
         let mut table = FnvHashMap::default();
-        let mut uniques = 0 as usize;
+        let mut uniques = 1 as usize; // 0 reserved for epsilon
+        let mut reverse = FnvHashMap::default();
         for set in done.into_iter() {
             let mut inserted = false;
-            for symbol in set {
-                inserted |= table.insert(symbol, uniques).is_none();
+            for symbol in &set {
+                inserted |= table.insert(*symbol, uniques).is_none();
             }
+            reverse.insert(uniques, set);
             if inserted {
                 uniques += 1;
             }
         }
-        SymbolTable {
-            table,
-            ids: uniques,
-        }
+        reverse.insert(0, btreeset!['\u{03F5}']);
+        reverse.insert(uniques, btreeset!['\u{233A}']); //any char not in alphabet
+        SymbolTable { table, reverse }
     }
 
     /// Returns the number of unique ids assigned to the symbols.
     ///
     /// IDs are progressive, so this is also the size required for the transition table of any
-    /// NFA/DFA. This ALWAYS includes the unique ID assigned to any char not in the table.
+    /// NFA/DFA. This ALWAYS includes the two reserved ids: "epsilon" and "any char not in the
+    /// table".
     /// # Examples
     /// Basic usage:
     /// ```
@@ -150,10 +164,10 @@ impl SymbolTable {
     /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
     ///
-    /// assert_eq!(symbol.ids(), 2);
+    /// assert_eq!(symbol.ids(), 3);
     /// ```
     pub fn ids(&self) -> usize {
-        self.ids + 1
+        self.reverse.len()
     }
 
     /// Returns the value associated for a specific char.
@@ -161,7 +175,9 @@ impl SymbolTable {
     /// If the char is not inside the symbol table, a value is returned anyway: this value
     /// represents any the transaction to be applied to any character not in the table.
     /// This value is also equal to the number of the symbols inside the table (hence the reason
-    /// why the table is immutable after construction)
+    /// why the table is immutable after construction).
+    ///
+    /// The epsilon character IDs is always 0.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -176,13 +192,13 @@ impl SymbolTable {
     /// let index_a = symbol.get('a');
     /// let index_not_in_table = symbol.get('ダ');
     ///
-    /// assert!(index_a < 3);
-    /// assert_eq!(index_not_in_table, 3);
+    /// assert_eq!(index_a, 1);
+    /// assert_eq!(index_not_in_table, 4);
     /// ```
     pub fn get(&self, symbol: char) -> usize {
         match self.table.get(&symbol) {
             Some(val) => *val,
-            None => self.ids,
+            None => self.reverse.len() - 1,
         }
     }
 
@@ -218,7 +234,7 @@ impl SymbolTable {
         for symbol in symbols {
             match self.table.get(symbol) {
                 Some(val) => ret.insert(*val),
-                None => ret.insert(self.ids),
+                None => ret.insert(self.reverse.len() - 1),
             };
         }
         ret
@@ -261,7 +277,7 @@ impl SymbolTable {
                 accept.insert(*symbol.1);
             }
         }
-        accept.insert(self.ids);
+        accept.insert(self.reverse.len() - 1);
         accept
     }
 
@@ -362,9 +378,9 @@ pub struct NFA {
     /// Number of states.
     states_no: usize,
     /// Transition map. (node index, symbol) -> Set(node index).
-    transition: HashMap<(usize, char), FnvHashSet<usize>>,
+    transition: HashMap<(usize, usize), FnvHashSet<usize>>,
     /// All the symbols recognized by the NFA, except EPSILON and ANY_VALUE.
-    alphabet: FnvHashSet<char>,
+    alphabet: SymbolTable,
     /// Starting node of the NFA.
     start: usize,
     /// Accepting states. (node index) -> (production index)
@@ -397,7 +413,7 @@ impl NFA {
             NFA {
                 states_no: 1,
                 transition: HashMap::new(),
-                alphabet: FnvHashSet::default(),
+                alphabet: SymbolTable::empty(),
                 start: 0,
                 accept: FnvHashMap::default(),
             }
@@ -405,12 +421,13 @@ impl NFA {
             // collect the alphabet for DFA
             let alphabet = parse_trees
                 .iter()
-                .flat_map(get_alphabet)
-                .collect::<FnvHashSet<char>>();
+                .flat_map(get_set_of_symbols)
+                .collect::<BTreeSet<_>>();
+            let symtable = SymbolTable::new(alphabet);
             // convert the parse tree into a canonical one (not ? or +, only *)
             let canonical_tree = parse_trees
                 .into_iter()
-                .map(|x| canonicalise(x, &alphabet))
+                .map(|x| canonicalise(x, &symtable))
                 .collect::<Vec<_>>();
             let mut index = 0 as usize; //used to keep unique node indices
                                         // thompson construction
@@ -439,44 +456,46 @@ impl NFA {
                     .into_iter()
                     .flat_map(|x| x.transition)
                     .collect::<HashMap<_, _>>();
-                transition_table.insert((index, EPSILON_VALUE), start_transition);
+                transition_table.insert((index, 0), start_transition);
                 index += 1;
                 NFA {
                     states_no: index,
                     transition: transition_table,
-                    alphabet,
+                    alphabet: symtable,
                     start: index - 1,
                     accept,
                 }
             } else {
-                thompson_nfas.pop().unwrap()
+                let mut nfa = thompson_nfas.pop().unwrap();
+                nfa.alphabet = symtable;
+                nfa
             }
         }
     }
 
-    /// Converts the NFA to a DFA.
-    ///
-    /// The generated DFA is always the DFA with the minimum number of states capable of recognizing
-    /// the requested language.
-    ///
-    /// **NOTE**: This conversion uses the *Subset Construction* algorithm, which has a **very**
-    /// high time complexity, `O(2^n)`. Although the average case can be handled withouth any
-    /// problems, consider constructing directly a DFA for very large grammars.
-    ///
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::NFA;
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let nfa = NFA::new(&grammar);
-    /// nfa.to_dfa();
-    /// ```
-    pub fn to_dfa(&self) -> DFA {
-        let big_dfa = subset_construction(&self);
-        min_dfa(big_dfa)
-    }
+    // /// Converts the NFA to a DFA.
+    // ///
+    // /// The generated DFA is always the DFA with the minimum number of states capable of recognizing
+    // /// the requested language.
+    // ///
+    // /// **NOTE**: This conversion uses the *Subset Construction* algorithm, which has a **very**
+    // /// high time complexity, `O(2^n)`. Although the average case can be handled withouth any
+    // /// problems, consider constructing directly a DFA for very large grammars.
+    // ///
+    // /// # Examples
+    // /// Basic usage:
+    // /// ```
+    // /// use wisent::grammar::Grammar;
+    // /// use wisent::lexer::NFA;
+    // ///
+    // /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    // /// let nfa = NFA::new(&grammar);
+    // /// nfa.to_dfa();
+    // /// ```
+    // pub fn to_dfa(&self) -> DFA {
+    //     let big_dfa = subset_construction(&self);
+    //     min_dfa(big_dfa)
+    // }
 }
 
 impl std::fmt::Display for NFA {
@@ -513,15 +532,29 @@ impl Automaton for NFA {
         for trans in &self.transition {
             for target in trans.1 {
                 let source = (trans.0).0;
-                let mut symbol = (trans.0).1;
-                if symbol == EPSILON_VALUE {
-                    symbol = '\u{03F5}';
-                } else if (symbol as usize) < 32 {
-                    symbol = '\u{FFFF}';
-                } else if symbol == '"' {
-                    symbol = '\u{2033}';
-                }
-                write!(&mut f, "{}->{}[label=\"{}\"];", source, target, symbol).unwrap();
+                let symbol_id = (trans.0).1;
+                let symbol_label = self
+                    .alphabet
+                    .reverse
+                    .get(&symbol_id)
+                    .unwrap()
+                    .iter()
+                    .map(|c| {
+                        if (*c as usize) < 32 {
+                            '\u{FFFF}'
+                        } else if *c == '"' {
+                            '\u{2033}'
+                        } else {
+                            *c
+                        }
+                    })
+                    .collect::<String>();
+                write!(
+                    &mut f,
+                    "{}->{}[label=\"{}\"];",
+                    source, target, symbol_label
+                )
+                .unwrap();
             }
         }
         write!(&mut f, "}}").unwrap();
@@ -529,127 +562,130 @@ impl Automaton for NFA {
     }
 }
 
-/// A Deterministic Finite Automaton for lexical analysis.
-///
-/// A DFA is an automaton where each state has a single transaction for a given input symbol, and
-/// no transactions on empty symbols (ϵ-moves).
-///
-/// An example of DFA recognizing the language `a|b*` is the following:
-///
-/// ![DFA Example](../../../../doc/images/dfa.svg)
-pub struct DFA {
-    /// Number of states.
-    states_no: usize,
-    /// Transition function: (node index, symbol) -> (node).
-    transition: HashMap<(usize, char), usize>,
-    /// Set of symbols in the language.
-    alphabet: FnvHashSet<char>,
-    /// Starting node.
-    start: usize,
-    /// Accepting states: (node index) -> (accepted production).
-    accept: FnvHashMap<usize, usize>,
-}
-
-impl std::fmt::Display for DFA {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DFA({},{})", self.nodes(), self.edges())
-    }
-}
-
-impl DFA {
-    /// Constructs a DFA given an input grammar.
-    ///
-    /// The DFA is constructed directly from the regex parse tree without using an intermediate NFA.
-    ///
-    /// The generated DFA has the minimum number of states required to recognized the requested
-    /// language.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::DFA;
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let nfa = DFA::new(&grammar);
-    /// ```
-    pub fn new(grammar: &Grammar) -> Self {
-        // Convert a grammar into a series of parse trees, then expand the sets
-        let parse_trees = grammar
-            .iter_term()
-            .map(|x| gen_precedence_tree(x))
-            .map(expand_literals)
-            .collect::<Vec<_>>();
-        if parse_trees.is_empty() {
-            // no production found, return a single state, no transaction DFA.
-            DFA {
-                states_no: 1,
-                transition: HashMap::new(),
-                alphabet: FnvHashSet::default(),
-                start: 0,
-                accept: FnvHashMap::default(),
-            }
-        } else {
-            // collect the alphabet for DFA
-            let alphabet = parse_trees
-                .iter()
-                .flat_map(get_alphabet)
-                .collect::<FnvHashSet<char>>();
-            // convert the parse tree into a canonical one (not ? or +, only *)
-            let canonical_tree = parse_trees
-                .into_iter()
-                .map(|x| canonicalise(x, &alphabet))
-                .collect::<Vec<_>>();
-            // merge all trees of every production into a single one
-            let merged_tree = merge_regex_trees(canonical_tree);
-            // build the dfa
-            let dfa = direct_construction(merged_tree);
-            // minimize the dfa
-            min_dfa(dfa)
-        }
-    }
-}
-
-impl Automaton for DFA {
-    fn is_empty(&self) -> bool {
-        self.transition.is_empty()
-    }
-
-    fn nodes(&self) -> usize {
-        self.states_no
-    }
-
-    fn edges(&self) -> usize {
-        self.transition.len()
-    }
-
-    fn to_dot(&self) -> String {
-        let mut f = String::new();
-        write!(&mut f, "digraph{{start[shape=point];").unwrap();
-        for state in &self.accept {
-            write!(
-                &mut f,
-                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
-                state.0, state.1
-            )
-            .unwrap();
-        }
-        write!(&mut f, "start->{};", &self.start).unwrap();
-        for trans in &self.transition {
-            let source = (trans.0).0;
-            let mut symbol = (trans.0).1;
-            if (symbol as usize) < 32 || (symbol as usize) > 126 {
-                symbol = '\u{FFFF}';
-            } else if symbol == '"' {
-                symbol = '\u{2033}';
-            } else if symbol == '\\' {
-                symbol = '\u{2216}';
-            }
-            write!(&mut f, "{}->{}[label=\"{}\"];", source, trans.1, symbol).unwrap();
-        }
-        write!(&mut f, "}}").unwrap();
-        f
-    }
-}
+// /// A Deterministic Finite Automaton for lexical analysis.
+// ///
+// /// A DFA is an automaton where each state has a single transaction for a given input symbol, and
+// /// no transactions on empty symbols (ϵ-moves).
+// ///
+// /// An example of DFA recognizing the language `a|b*` is the following:
+// ///
+// /// ![DFA Example](../../../../doc/images/dfa.svg)
+// pub struct DFA {
+//     /// Number of states.
+//     states_no: usize,
+//     /// Transition function: (node index, symbol) -> (node).
+//     transition: HashMap<(usize, char), usize>,
+//     /// Set of symbols in the language.
+//     alphabet: SymbolTable,
+//     /// Starting node.
+//     start: usize,
+//     /// Accepting states: (node index) -> (accepted production).
+//     accept: FnvHashMap<usize, usize>,
+// }
+//
+// impl std::fmt::Display for DFA {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "DFA({},{})", self.nodes(), self.edges())
+//     }
+// }
+//
+// impl DFA {
+//     /// Constructs a DFA given an input grammar.
+//     ///
+//     /// The DFA is constructed directly from the regex parse tree without using an intermediate NFA.
+//     ///
+//     /// The generated DFA has the minimum number of states required to recognized the requested
+//     /// language.
+//     /// # Examples
+//     /// Basic usage:
+//     /// ```
+//     /// use wisent::grammar::Grammar;
+//     /// use wisent::lexer::DFA;
+//     ///
+//     /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+//     /// let nfa = DFA::new(&grammar);
+//     /// ```
+//     pub fn new(grammar: &Grammar) -> Self {
+//         // Convert a grammar into a series of parse trees, then expand the sets
+//         // let parse_trees = grammar
+//         //     .iter_term()
+//         //     .map(|x| gen_precedence_tree(x))
+//         //     .map(expand_literals)
+//         //     .collect::<Vec<_>>();
+//         // if parse_trees.is_empty() {
+//             // no production found, return a single state, no transaction DFA.
+//             // DFA {
+//             //     states_no: 1,
+//             //     transition: HashMap::new(),
+//             //     alphabet: SymbolTable::empty(),
+//             //     start: 0,
+//             //     accept: FnvHashMap::default(),
+//             // }
+//         // } else {
+//             // collect the alphabet for DFA
+//             // let alphabet = parse_trees
+//             //     .iter()
+//             //     .flat_map(get_set_of_symbols)
+//             //     .collect::<BTreeSet<_>>();
+//             // let symtable = SymbolTable::new(alphabet);
+//             // convert the parse tree into a canonical one (not ? or +, only *)
+//             // let canonical_tree = parse_trees
+//             //     .into_iter()
+//             //     .map(|x| canonicalise(x, &symtable))
+//             //     .collect::<Vec<_>>();
+//             // merge all trees of every production into a single one
+//             // let merged_tree = merge_regex_trees(canonical_tree);
+//             // build the dfa
+//             // let dfa = direct_construction(merged_tree);
+//             // minimize the dfa
+//             // min_dfa(dfa)
+//         // }
+//         let nfa = NFA::new(&grammar);
+//         nfa.to_dfa()
+//     }
+// }
+//
+// impl Automaton for DFA {
+//     fn is_empty(&self) -> bool {
+//         self.transition.is_empty()
+//     }
+//
+//     fn nodes(&self) -> usize {
+//         self.states_no
+//     }
+//
+//     fn edges(&self) -> usize {
+//         self.transition.len()
+//     }
+//
+//     fn to_dot(&self) -> String {
+//         let mut f = String::new();
+//         write!(&mut f, "digraph{{start[shape=point];").unwrap();
+//         for state in &self.accept {
+//             write!(
+//                 &mut f,
+//                 "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
+//                 state.0, state.1
+//             )
+//             .unwrap();
+//         }
+//         write!(&mut f, "start->{};", &self.start).unwrap();
+//         for trans in &self.transition {
+//             let source = (trans.0).0;
+//             let mut symbol = (trans.0).1;
+//             if (symbol as usize) < 32 || (symbol as usize) > 126 {
+//                 symbol = '\u{FFFF}';
+//             } else if symbol == '"' {
+//                 symbol = '\u{2033}';
+//             } else if symbol == '\\' {
+//                 symbol = '\u{2216}';
+//             }
+//             write!(&mut f, "{}->{}[label=\"{}\"];", source, trans.1, symbol).unwrap();
+//         }
+//         write!(&mut f, "}}").unwrap();
+//         f
+//     }
+// }
 
 #[derive(Copy, Clone)]
 /// Operands/Operators that can be found in a Regex along with their value and priority.
@@ -710,9 +746,9 @@ impl std::fmt::Display for OpType {
 
 /// Extended Literal: exacltly like RegexOp but does not depend on the string slice
 /// (because every set has been expanded to a single letter).
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 enum ExLiteral {
-    Value(char),
+    Value(BTreeSet<char>),
     AnyValue,
     Operation(OpType),
 }
@@ -720,7 +756,14 @@ enum ExLiteral {
 impl std::fmt::Display for ExLiteral {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExLiteral::Value(i) => write!(f, "VALUE({})", i),
+            ExLiteral::Value(i) => {
+                let mut string = String::from("[");
+                for charz in i {
+                    string.push(*charz);
+                }
+                string.push(']');
+                write!(f, "VALUE({})", string)
+            }
             ExLiteral::AnyValue => write!(f, "ANY"),
             ExLiteral::Operation(tp) => write!(f, "OP({})", tp),
         }
@@ -731,12 +774,8 @@ impl std::fmt::Display for ExLiteral {
 /// Used to build the canonical parse tree.
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum Literal {
-    /// The input symbol (a single letter).
-    Symbol(char),
-    /// The accepting state (production number).
-    ///
-    /// Used only in the direct construction after merging all parse trees into a single one.
-    /// This value will record the accepted production at some point in the tree.
+    /// The input symbol (a single letter. The value is the number in the symbol table).
+    Symbol(usize),
     Acc(usize),
     /// Kleenee star unary operator `*`.
     KLEENE,
@@ -749,6 +788,7 @@ enum Literal {
 impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Literal::Symbol(0) => write!(f, "\u{03F5}"),
             Literal::Symbol(i) => write!(f, "{}", i),
             Literal::Acc(i) => write!(f, "ACC({})", i),
             Literal::KLEENE => write!(f, "*"),
@@ -1027,96 +1067,100 @@ fn expand_literals(node: PrecedenceTree) -> ExpandedPrecedenceTree {
     }
 }
 
-/// Expand a single node containing sets like `[a-z]` in the single symbols concatenated.
-/// Replace also the . symbol with the special placeholder to represent any value.
+/// Expands a single node containing sets like `[a-z]` in a set with all the simbols like
+/// `{a, b, c, d....}`. Replace also the . symbol with the special placeholder to represent any
+/// value and any eventual set with .
 fn expand_literal_node(literal: &str) -> ExpandedPrecedenceTree {
     if literal == "." {
-        return BSTree {
+        BSTree {
             value: ExLiteral::AnyValue,
             left: None,
             right: None,
-        };
-    }
-    let mut charz = Vec::new();
-    let mut iter = literal.chars();
-    let start = iter.next().unwrap();
-    let end;
-    let mut last = '\x00';
-    let mut set_op = if start == '[' {
-        end = ']';
-        OpType::OR
+        }
     } else {
-        end = '\'';
-        OpType::AND
-    };
-    while let Some(char) = iter.next() {
-        let mut pushme = char;
-        if char == '\\' {
-            //escaped char
-            pushme = unescape_character(iter.next().unwrap(), &mut iter);
-            last = pushme;
-            charz.push(BSTree {
-                value: ExLiteral::Value(pushme),
+        let mut charz = Vec::new();
+        let mut iter = literal.chars();
+        let start = iter.next().unwrap();
+        let end;
+        let mut last = '\x00';
+        let mut is_set = false;
+        if start == '[' {
+            end = ']';
+            is_set = true;
+        } else {
+            end = '\'';
+        };
+        // process all character between quotes or braces
+        while let Some(char) = iter.next() {
+            let mut pushme = char;
+            if char == '\\' {
+                //escaped char
+                pushme = unescape_character(iter.next().unwrap(), &mut iter);
+                last = pushme;
+                charz.push(pushme);
+            } else if start == '[' && char == '-' {
+                //set in form a-z, A-Z, 0-9, etc..
+                let from = last as u32 + 1;
+                let until = iter.next().unwrap() as u32 + 1; //included
+                for i in from..until {
+                    pushme = std::char::from_u32(i).unwrap();
+                    charz.push(pushme);
+                }
+            } else if char == end {
+                //end of sequence
+                break;
+            } else {
+                //normal char
+                last = pushme;
+                charz.push(pushme);
+            }
+        }
+        //check possible range in form 'a'..'z', at this point I ASSUME this can be a literal only
+        //and the syntax has already been checked.
+        if let Some(_c @ '.') = iter.next() {
+            iter.next();
+            iter.next();
+            is_set = true;
+            let mut until_char = iter.next().unwrap();
+            if until_char == '\\' {
+                until_char = unescape_character(iter.next().unwrap(), &mut iter);
+            }
+            let from = last as u32 + 1;
+            let until = until_char as u32 + 1;
+            for i in from..until {
+                charz.push(std::char::from_u32(i).unwrap());
+            }
+        }
+        // set of characters will be transformed into an "or" by the Symbol table later
+        if is_set || charz.is_empty() {
+            BSTree {
+                value: ExLiteral::Value(charz.into_iter().collect::<BTreeSet<_>>()),
                 left: None,
                 right: None,
-            });
-        } else if set_op == OpType::OR && char == '-' {
-            //set in form a-z, A-Z, 0-9, etc..
-            let from = last as u32 + 1;
-            let until = iter.next().unwrap() as u32 + 1; //included
-            for i in from..until {
-                pushme = std::char::from_u32(i).unwrap();
-                charz.push(BSTree {
-                    value: ExLiteral::Value(pushme),
+            }
+        } else {
+            // concatenation instead must be performed here
+            let mut done = charz
+                .into_iter()
+                .map(|x| BSTree {
+                    value: ExLiteral::Value(btreeset! {x}),
                     left: None,
                     right: None,
-                });
+                })
+                .collect::<Vec<_>>();
+            while done.len() > 1 {
+                let right = Some(Box::new(done.pop().unwrap()));
+                let left = Some(Box::new(done.pop().unwrap()));
+                let concat = BSTree {
+                    value: ExLiteral::Operation(OpType::AND),
+                    left,
+                    right,
+                };
+                done.push(concat);
             }
-        } else if char == end {
-            //end of sequence
-            break;
-        } else {
-            //normal char
-            last = pushme;
-            charz.push(BSTree {
-                value: ExLiteral::Value(pushme as char),
-                left: None,
-                right: None,
-            });
+            done.pop().unwrap()
         }
     }
-    //check possible range in form 'a'..'z', at this point I ASSUME this can be a literal only
-    //and the syntax has already been checked.
-    if let Some(_c @ '.') = iter.next() {
-        set_op = OpType::OR;
-        iter.next();
-        iter.next();
-        let mut until_char = iter.next().unwrap();
-        if until_char == '\\' {
-            until_char = unescape_character(iter.next().unwrap(), &mut iter);
-        }
-        let from = last as u32 + 1;
-        let until = until_char as u32 + 1;
-        for i in from..until {
-            let pushme = std::char::from_u32(i).unwrap();
-            charz.push(BSTree {
-                value: ExLiteral::Value(pushme),
-                left: None,
-                right: None,
-            });
-        }
-    }
-    while charz.len() >= 2 {
-        let right = charz.pop().unwrap();
-        let left = charz.pop().unwrap();
-        let new = BSTree {
-            value: ExLiteral::Operation(set_op),
-            left: Some(Box::new(left)),
-            right: Some(Box::new(right)),
-        };
-        charz.push(new);
-    }
-    charz.pop().unwrap()
 }
 
 /// Transforms escaped strings in the form "\\n" to the single character they represent '\n'.
@@ -1151,14 +1195,14 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
     }
 }
 
-/// Returns a set containing all the characters used in the regexp extended tree.
-fn get_alphabet(node: &ExpandedPrecedenceTree) -> FnvHashSet<char> {
-    let mut ret = FnvHashSet::default();
-    let mut todo_nodes = vec![node];
+/// Returns the set of symbols for a given tree.
+fn get_set_of_symbols(root: &ExpandedPrecedenceTree) -> BTreeSet<BTreeSet<char>> {
+    let mut ret = BTreeSet::new();
+    let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {
-        match node.value {
+        match &node.value {
             ExLiteral::Value(i) => {
-                ret.insert(i);
+                ret.insert(i.clone());
             }
             ExLiteral::AnyValue => {}
             ExLiteral::Operation(_) => {
@@ -1175,77 +1219,61 @@ fn get_alphabet(node: &ExpandedPrecedenceTree) -> FnvHashSet<char> {
     ret
 }
 
-/// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
-/// the *any symbol* placeholder, concatenation, alternation, kleene star).
-fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &FnvHashSet<char>) -> CanonicalTree {
-    match node.value {
-        ExLiteral::Value(i) => BSTree {
-            value: Literal::Symbol(i),
+fn set_to_literal_node(set: BTreeSet<usize>) -> CanonicalTree {
+    if set.is_empty() {
+        BSTree {
+            value: Literal::Symbol(EPSILON_VALUE),
             left: None,
             right: None,
-        },
-        ExLiteral::AnyValue => {
-            let mut chars = alphabet
-                .iter()
-                .chain(&[ANY_VALUE])
-                .map(|c| BSTree {
-                    value: Literal::Symbol(*c),
-                    left: None,
-                    right: None,
-                })
-                .collect::<Vec<_>>();
-            while chars.len() >= 2 {
-                let left = Some(Box::new(chars.pop().unwrap()));
-                let right = Some(Box::new(chars.pop().unwrap()));
-                let tree = BSTree {
-                    value: Literal::OR,
-                    left,
-                    right,
-                };
-                chars.push(tree);
-            }
-            chars.pop().unwrap()
         }
+    } else {
+        let mut nodes = Vec::new();
+        for val in set {
+            let node = BSTree {
+                value: Literal::Symbol(val),
+                left: None,
+                right: None,
+            };
+            nodes.push(node);
+        }
+        while nodes.len() > 1 {
+            let right = nodes.pop().unwrap();
+            let left = nodes.pop().unwrap();
+            let node = BSTree {
+                value: Literal::OR,
+                left: Some(Box::new(left)),
+                right: Some(Box::new(right)),
+            };
+            nodes.push(node);
+        }
+        nodes.pop().unwrap()
+    }
+}
+
+/// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
+/// the *any symbol* placeholder, concatenation, alternation, kleene star).
+fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> CanonicalTree {
+    match node.value {
+        ExLiteral::Value(i) => set_to_literal_node(symtable.get_set(&i)),
+        ExLiteral::AnyValue => set_to_literal_node(symtable.get_negated(&BTreeSet::new())),
         ExLiteral::Operation(op) => {
             match op {
                 OpType::NOT => {
-                    //get the entire used alphabet for both nodes
-                    let mut subnode_alphabet = FnvHashSet::default();
-                    if let Some(l) = node.left {
-                        subnode_alphabet.extend(get_alphabet(&*l));
-                    }
-                    if let Some(r) = node.right {
-                        subnode_alphabet.extend(get_alphabet(&*r));
-                    }
-                    // this creates problems in ~. but this statement is stupid so I don't care
-                    let mut diff = alphabet
-                        .difference(&subnode_alphabet)
-                        .chain(&[ANY_VALUE])
-                        .map(|c| BSTree {
-                            value: Literal::Symbol(*c),
-                            left: None,
-                            right: None,
-                        })
-                        .collect::<Vec<_>>();
-                    while diff.len() >= 2 {
-                        let right = diff.pop().unwrap();
-                        let left = diff.pop().unwrap();
-                        let new_node = BSTree {
-                            value: Literal::OR,
-                            left: Some(Box::new(left)),
-                            right: Some(Box::new(right)),
-                        };
-                        diff.push(new_node);
-                    }
-                    diff.pop().unwrap()
+                    //get the entire used alphabet for the only existing node
+                    let used_symbols = get_set_of_symbols(&node.left.unwrap())
+                        .into_iter()
+                        .flatten()
+                        .collect::<BTreeSet<_>>();
+                    let negated = symtable.get_negated(&used_symbols);
+                    set_to_literal_node(negated)
                 }
                 OpType::OR => {
                     let left = match node.left {
-                        Some(l) => Some(Box::new(canonicalise(*l, alphabet))),
+                        Some(l) => Some(Box::new(canonicalise(*l, symtable))),
                         None => None,
                     };
                     let right = match node.right {
-                        Some(r) => Some(Box::new(canonicalise(*r, alphabet))),
+                        Some(r) => Some(Box::new(canonicalise(*r, symtable))),
                         None => None,
                     };
                     BSTree {
@@ -1256,11 +1284,11 @@ fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &FnvHashSet<char>) -> Ca
                 }
                 OpType::AND => {
                     let left = match node.left {
-                        Some(l) => Some(Box::new(canonicalise(*l, alphabet))),
+                        Some(l) => Some(Box::new(canonicalise(*l, symtable))),
                         None => None,
                     };
                     let right = match node.right {
-                        Some(r) => Some(Box::new(canonicalise(*r, alphabet))),
+                        Some(r) => Some(Box::new(canonicalise(*r, symtable))),
                         None => None,
                     };
                     BSTree {
@@ -1271,11 +1299,11 @@ fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &FnvHashSet<char>) -> Ca
                 }
                 OpType::KLEENE => {
                     let left = match node.left {
-                        Some(l) => Some(Box::new(canonicalise(*l, alphabet))),
+                        Some(l) => Some(Box::new(canonicalise(*l, symtable))),
                         None => None,
                     };
                     let right = match node.right {
-                        Some(r) => Some(Box::new(canonicalise(*r, alphabet))),
+                        Some(r) => Some(Box::new(canonicalise(*r, symtable))),
                         None => None,
                     };
                     BSTree {
@@ -1291,7 +1319,7 @@ fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &FnvHashSet<char>) -> Ca
                         right: None,
                     }));
                     //it the node has a ? DEFINITELY it has only a left children
-                    let right = Some(Box::new(canonicalise(*node.left.unwrap(), alphabet)));
+                    let right = Some(Box::new(canonicalise(*node.left.unwrap(), symtable)));
                     BSTree {
                         value: Literal::OR,
                         left,
@@ -1300,7 +1328,7 @@ fn canonicalise(node: ExpandedPrecedenceTree, alphabet: &FnvHashSet<char>) -> Ca
                 }
                 OpType::PL => {
                     //it the node has a + DEFINITELY it has only a left children
-                    let left = canonicalise(*node.left.unwrap(), alphabet);
+                    let left = canonicalise(*node.left.unwrap(), symtable);
                     let right = BSTree {
                         value: Literal::KLEENE,
                         left: Some(Box::new(left.clone())),
@@ -1342,10 +1370,6 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
         let pushme;
         match node.value {
             Literal::Symbol(val) => {
-                let mut alphabet = FnvHashSet::default();
-                if val != EPSILON_VALUE {
-                    alphabet.insert(val);
-                }
                 let mut target_set = FnvHashSet::default();
                 target_set.insert(index + 1);
                 let mut accept = FnvHashMap::default();
@@ -1355,7 +1379,7 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                     transition: hashmap! {
                         (index, val) => target_set,
                     },
-                    alphabet,
+                    alphabet: SymbolTable::empty(),
                     start: index,
                     accept,
                 };
@@ -1396,7 +1420,6 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                         .insert((acc.0, EPSILON_VALUE), target_set.clone());
                 }
                 first.accept = second.accept;
-                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
                 first.states_no += second.states_no;
                 pushme = first;
             }
@@ -1426,7 +1449,6 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                         .insert((acc.0, EPSILON_VALUE), target_set.clone());
                 }
                 first.start = new_start;
-                first.alphabet = first.alphabet.union(&second.alphabet).cloned().collect();
                 first.accept = accept;
                 first.states_no += second.states_no + 2;
                 pushme = first;
@@ -1437,6 +1459,8 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
     }
     done.pop().unwrap()
 }
+
+/*
 
 /// Transforms a NFA to a DFA using subset construction algorithm.
 ///
@@ -1593,6 +1617,7 @@ fn merge_regex_trees(nodes: Vec<CanonicalTree>) -> CanonicalTree {
     roots.pop().unwrap()
 }
 
+
 /// Performs a direct DFA construction from the canonical tree without using an intermediate NFA.
 /// Refers to "Compilers, principle techniques and tools" of A.Aho et al. (p.179 on 2nd edition).
 ///
@@ -1689,15 +1714,14 @@ fn build_dc_helper(node: &CanonicalTree, start_index: usize) -> BSTree<DCHelper>
     let lastpos;
     match &node.value {
         Literal::Symbol(val) => {
-            if *val == EPSILON_VALUE {
-                nullable = true;
-                firstpos = BTreeSet::new();
-                lastpos = BTreeSet::new();
-            } else {
-                nullable = false;
-                firstpos = btreeset! {index};
-                lastpos = btreeset! {index};
-            }
+            nullable = false;
+            firstpos = btreeset!{index};
+            lastpos = btreeset!{index};
+        }
+        Literal::Epsilon => {
+            nullable = true;
+            firstpos = BTreeSet::new();
+            lastpos = BTreeSet::new();
         }
         Literal::KLEENE => {
             let c1 = &left.as_ref().unwrap().value;
@@ -1951,6 +1975,7 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
         start,
     }
 }
+*/
 
 #[cfg(test)]
 #[path = "tests/lexer.rs"]
