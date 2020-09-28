@@ -264,7 +264,6 @@ fn dfa_direct_construction_no_sink() {
     let names = "PROD1";
     let grammar = Grammar::new(&[terminal], &[], &[names]);
     let dfa = DFA::new(&grammar);
-    dfa.save_dot("/home/davide/Desktop/prova.dot");
     assert!(!dfa.is_empty());
     assert_eq!(dfa.nodes(), 4);
     assert_eq!(dfa.edges(), 8);
@@ -283,7 +282,6 @@ fn dfa_direct_construction_sink_accepting() {
 fn dfa_direct_construction_set_productions() {
     let grammar = Grammar::new(&["[a-c]([b-d]?[e-g])*", "[fg]+"], &[], &["LONG1", "LONG2"]);
     let dfa = DFA::new(&grammar);
-    dfa.save_dot("/home/davide/Desktop/prova.dot");
     assert_eq!(dfa.nodes(), 4);
     assert_eq!(dfa.edges(), 10);
 }
@@ -367,7 +365,6 @@ fn dfa_subset_construction_start_accepting() {
     let grammar = Grammar::new(&["'ab'*"], &[], &["ABSTAR"]);
     let nfa = NFA::new(&grammar);
     let dfa = nfa.to_dfa();
-    dfa.save_dot("/home/davide/Desktop/prova.dot");
     assert!(!dfa.is_empty());
     assert_eq!(dfa.nodes(), 2);
     assert_eq!(dfa.edges(), 2);
