@@ -1,12 +1,15 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::ops::Index;
 
 use regex::Regex;
 
 use crate::error::ParseError;
 
+const SINGLE_QUOTE_AS_U8: u8 = b'\'';
+
 #[derive(Debug)]
 /// Struct representing a parsed grammar.
+///
 /// This struct stores terminal and non-terminal productions in the form `head`:`body`; and allows
 /// to access every `body` given a particular `head`
 /// This struct also record the lexer actions for each terminal production, but drops any embedded
@@ -301,7 +304,8 @@ impl Grammar {
     pub fn parse_string(content: &str) -> Result<Grammar, ParseError> {
         let productions = retrieve_productions(&content);
         let grammar_rec = split_head_body(productions)?;
-        let grammar_not_rec = resolve_terminals_dependencies(grammar_rec)?;
+        let grammar_no_lit = extract_literals_from_non_term(grammar_rec);
+        let grammar_not_rec = resolve_terminals_dependencies(grammar_no_lit)?;
         let grammar = reindex(grammar_not_rec);
         Ok(grammar)
     }
@@ -364,7 +368,7 @@ struct GrammarInternal {
     ///`key`:`value`; map containing fragments.
     fragments: HashMap<String, String>,
     ///array containing every production `key` in the order they appear in the file.
-    order: Vec<String>,
+    order: VecDeque<String>,
     //`key`:`value`; map containing terminal actions
     actions: HashMap<String, BTreeSet<Action>>,
 }
@@ -409,6 +413,74 @@ fn reindex(mut grammar: GrammarInternal) -> Grammar {
     }
 }
 
+/// Removes all literals from non terminals inside a grammar.
+///
+/// Given a grammar with some non-terminal productions, this method removes all literal from inside
+/// the non-terminals. Literals must be enclosed within single quotes and, per ANTLR specification,
+/// cannot contain escaped quotes (or at least this is my assumption after reading the
+/// specification). The various literals are replaced with the corresponding terminal production, if
+/// one exists, otherwise a new one is created with highest priority.
+fn extract_literals_from_non_term(grammar: GrammarInternal) -> GrammarInternal {
+    let mut new_terminals = HashMap::new();
+    let mut terminals_rev = grammar
+        .terminals
+        .iter()
+        .map(|x| (x.1[..].to_string(), x.0.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut order = grammar.order;
+    let mut non_terminals = HashMap::new();
+    let mut literal_idx = 0;
+    for nonterm in grammar.non_terminals.into_iter() {
+        let key = nonterm.0;
+        let value = nonterm.1;
+        let mut replaced = String::new();
+        let nonterm_as_bytes = value.as_bytes();
+        let indices_of_quotes = nonterm_as_bytes
+            .iter()
+            .enumerate()
+            .filter(|x| *x.1 == SINGLE_QUOTE_AS_U8)
+            .map(|c| c.0)
+            .chain(std::iter::once(0))
+            .collect::<BTreeSet<_>>();
+        let mut is_literal = nonterm_as_bytes[0] == SINGLE_QUOTE_AS_U8;
+        let mut indices_iterator = indices_of_quotes.into_iter().peekable();
+        // in this loop every substring (between the quotes) is iterated and checked
+        while let Some(mut index0) = indices_iterator.next() {
+            let index1 = *indices_iterator.peek().unwrap_or(&value.len());
+            if nonterm_as_bytes[index0] == SINGLE_QUOTE_AS_U8 && index1 != value.len() {
+                // without index1 != value.len() there would be errors in case index0 is the last
+                // letter and a quote and peeking index1 results in value.len()
+                index0 += 1;
+            }
+            if is_literal {
+                let quoted_str = &value[index0 - 1..index1 + 1];
+                if let Some(prod_name) = terminals_rev.get(quoted_str) {
+                    replaced.push_str(prod_name);
+                } else {
+                    let prod_name = format!("#LITERAL{}", literal_idx);
+                    literal_idx += 1;
+                    replaced.push_str(&prod_name[..]);
+                    new_terminals.insert(prod_name.clone(), quoted_str.to_string());
+                    terminals_rev.insert(quoted_str.to_string(), prod_name.clone());
+                    order.push_front(prod_name);
+                }
+            } else {
+                let str = &value[index0..index1];
+                replaced.push_str(str);
+            }
+            is_literal = !is_literal;
+        }
+        non_terminals.insert(key, replaced);
+    }
+    GrammarInternal {
+        terminals: grammar.terminals.into_iter().chain(new_terminals).collect(),
+        non_terminals,
+        fragments: grammar.fragments,
+        order,
+        actions: grammar.actions,
+    }
+}
+
 /// Categorizes various productions into terminal, non-terminal and fragments. Then splits them into
 /// head and body, assuming productions in the form `head:body;`
 /// # Arguments
@@ -424,7 +496,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
     let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
     let actions = HashMap::new();
-    let mut order = Vec::new();
+    let mut order = VecDeque::new();
     //the capt.group of this regex will be passed to p_re so I need to include ;
     let f_re = r"\s*fragment\s+((?:.|\n)+;)";
     let p_re = r"\s*(\w+)\s*:\s*((?:.|\n)+);";
@@ -444,7 +516,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
                 if name.chars().next().unwrap().is_lowercase() {
                     if !is_fragment {
                         non_terminals.insert(name.to_owned(), rule);
-                        order.push(name);
+                        order.push_back(name);
                     } else {
                         return Err(ParseError::SyntaxError {
                             message: format!("Fragments should be uppercase: {}", production),
@@ -452,7 +524,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
                     }
                 } else if !is_fragment {
                     terminals.insert(name.to_owned(), rule);
-                    order.push(name);
+                    order.push_back(name);
                 } else {
                     //no position recorded for fragments
                     fragments.insert(name, rule);

@@ -137,9 +137,20 @@ fn grammar_parse_string() {
 }
 
 #[test]
+fn extract_literal() {
+    let grammar = "LP: '(';\nRP: ')';\nrandom: '(' '(' Џɯɷ幫Ѩ䷘ ')' ')';\nfunction: fn '{' '}';";
+    match Grammar::parse_string(&grammar) {
+        Ok(g) => {
+            assert_eq!(g.len(), 6);
+        }
+        Err(_) => assert!(false, "Failed to parse grammar"),
+    }
+}
+
+#[test]
 //Asserts that non-existent files returns error
 fn parse_grammar_non_existent() {
-    match Grammar::parse_grammar("./resources/java_grammar.txt") {
+    match Grammar::parse_grammar("./resources/ada_grammar.txt") {
         Ok(_) => assert!(false, "Expected the file to not exist!"),
         Err(e) => assert_eq!(
             e.to_string(),
@@ -197,10 +208,13 @@ fn parse_recursive_fragments() {
 #[test]
 //Asserts that a simple grammar is parsed correctly.
 fn parse_simple_grammar_correctly() {
-    match Grammar::parse_grammar("./resources/simple_grammar.txt") {
+    match Grammar::parse_grammar(
+        "./resources/simple_grammar\
+    .txt",
+    ) {
         Ok(g) => assert_eq!(
             g.len(),
-            6,
+            9,
             "Grammar was parsed correctly, but a different number of production was expected"
         ),
         Err(_) => assert!(false, "Simple grammar failed to parse"),
@@ -216,7 +230,7 @@ fn get_production() {
             assert_eq!(g.get("STRING").unwrap(), "'\"'('\"\"'|~'\"')*'\"'");
             assert_eq!(g.get("csvFile").unwrap(), "hdr row+ ");
             assert_eq!(g.get("hdr").unwrap(), "row ");
-            assert_eq!(g.get("row").unwrap(), "field (',' field)* '\\r'? '\\n' ");
+            assert_eq!(g.get("row").unwrap(), "field (COMMA field)* CR? LF ");
             assert_eq!(g.get("field").unwrap(), "TEXT| STRING|");
         }
         Err(_) => assert!(false, "Simple grammar failed to parse"),
@@ -231,10 +245,13 @@ fn order_unchanged_at() {
         Ok(g) => {
             assert_eq!(g[0], "~[,\\n\\r\"]+");
             assert_eq!(g[1], "'\"'('\"\"'|~'\"')*'\"'");
-            assert_eq!(g[2], "hdr row+ ");
-            assert_eq!(g[3], "row ");
-            assert_eq!(g[4], "field (',' field)* '\\r'? '\\n' ");
-            assert_eq!(g[5], "TEXT| STRING|");
+            assert_eq!(g[2], "','");
+            assert_eq!(g[3], "'\\r'");
+            assert_eq!(g[4], "'\\n'");
+            assert_eq!(g[5], "hdr row+ ");
+            assert_eq!(g[6], "row ");
+            assert_eq!(g[7], "field (COMMA field)* CR? LF ");
+            assert_eq!(g[8], "TEXT| STRING|");
         }
         Err(_) => assert!(false, "Simple grammar failed to parse"),
     }
@@ -242,10 +259,11 @@ fn order_unchanged_at() {
 
 #[test]
 //Asserts that the order of the production is kept unchanged by iterating terminals
-fn order_unchanged_iter_term() {
+fn order_iter_term() {
     match Grammar::parse_grammar("./resources/simple_grammar.txt") {
         Ok(g) => {
             let vec = g.iter_term().as_slice();
+            //0, 1, 2 are replaced literals
             assert_eq!(vec[0], "~[,\\n\\r\"]+");
             assert_eq!(vec[1], "'\"'('\"\"'|~'\"')*'\"'");
         }
@@ -261,7 +279,7 @@ fn order_unchanged_iter_nonterm() {
             let vec = g.iter_nonterm().as_slice();
             assert_eq!(vec[0], "hdr row+ ");
             assert_eq!(vec[1], "row ");
-            assert_eq!(vec[2], "field (',' field)* '\\r'? '\\n' ");
+            assert_eq!(vec[2], "field (COMMA field)* CR? LF ");
             assert_eq!(vec[3], "TEXT| STRING|");
         }
         Err(_) => assert!(false, "Simple grammar failed to parse"),
@@ -386,7 +404,7 @@ fn parse_c_grammar_correctly() {
     match Grammar::parse_grammar("./resources/c_grammar.txt") {
         Ok(g) => assert_eq!(
             g.len(),
-            191,
+            205,
             "Grammar was parsed correctly, but a different number of production was expected"
         ),
         Err(_) => assert!(false, "C grammar failed to parse"),
