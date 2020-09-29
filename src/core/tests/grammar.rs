@@ -1,4 +1,5 @@
-use crate::grammar::{topological_sort, Action, Grammar};
+use crate::grammar::{Action, Grammar};
+use crate::grammar_bootstrap::topological_sort;
 use std::collections::BTreeSet;
 
 #[test]
