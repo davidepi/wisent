@@ -73,12 +73,18 @@ impl SymbolTable {
     ///
     /// This function takes as input a set of sets, `symbols`.
     /// Each set represents a possible input for a production, for example the production
-    /// `[a-z]*[a-zA-Z0-9]` will have two sets `[a-z]` and `[a-zA-Z0-9]` whereas the production `a`*
-    /// will have only `[a]`.
+    /// `[a-z]*[a-zA-Z0-9]` will have two input sets `[a-z]` and `[a-zA-Z0-9]` whereas the
+    /// production `a`* will have only `[a]`.
     ///
     /// The construction works by refining the input sets: given two sets `A` and `B` the
     /// intersection `A∩B` is removed from them and added as extra set. This continues until every
     /// intersection between every pair yields ∅.
+    ///
+    /// In the above example, the resulting input sets after refining will be `[a]`, `[b-z]` and
+    /// `[A-Z0-9]`. This means that the two productions can be converted to
+    /// `([a]|[b-z])*([a]|[b-z]|[A-Z0-9])` and `[a]*`.
+    /// An unique number can be assigned to each of these sets reducing the DFA moves for each state
+    /// from 62 to just 3.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -641,6 +647,56 @@ impl DFA {
             // minimize the dfa
             min_dfa(big_dfa)
         }
+    }
+
+    /// Writes the transition table for the current DFA as a Rust file implementation.
+    ///
+    /// The implementation is defined in the `lexer_skeleton.txt` file found inside the resources.
+    ///
+    /// The function expects the name of the generated struct passed as parameter.
+    pub fn generate_lexer(&self, class_name: &str) -> String {
+        // +1 in the next line is the "not in the table" value
+        let alphabet_len = self.alphabet.table.len() + 1;
+        // this converts the transition table from HashMap<(usize,usize),usize> into a flatten array
+        // the usize::MAX is used to indicate no transition found.
+        let tt = format!(
+            "[{}]", //outer array, iterates on the nodes indices
+            (0..)
+                .take(self.nodes())
+                .map(|node| {
+                    format!(
+                        "[{}],", //inner array, iterates on the alphabet symbols
+                        (0..)
+                            .take(alphabet_len)
+                            .map(|c| self
+                                .transition
+                                .get(&(node, c))
+                                .unwrap_or(&usize::MAX)
+                                .to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+                .collect::<String>()
+        );
+        let table = format!(
+            "[{}].iter().cloned().collect()",
+            self.alphabet
+                .table
+                .iter()
+                .map(|c| format!("({:#X}, {})", (*c.0) as u32, c.1))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        format!(
+            include_str!("../../resources/lexer_skeleton.txt"),
+            class_name,
+            alphabet_len,
+            self.nodes(),
+            class_name,
+            tt,
+            table
+        )
     }
 }
 

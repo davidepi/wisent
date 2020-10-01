@@ -3,6 +3,10 @@ use crate::lexer::{
     canonicalise, expand_literals, gen_precedence_tree, get_set_of_symbols, Automaton, BSTree,
     OpType, RegexOp, SymbolTable, DFA, NFA,
 };
+use std::fs::{remove_file, File};
+use std::io::Write;
+use std::process::Command;
+use tempfile::tempdir;
 
 #[test]
 fn canonical_tree_any() {
@@ -256,6 +260,39 @@ fn dfa_conflicts_resolution() {
     assert!(!dfa2.is_empty());
     assert_eq!(dfa2.nodes(), 4);
     assert_eq!(dfa2.edges(), 7);
+}
+
+#[test]
+fn dfa_transition_table_generation() -> Result<(), std::io::Error> {
+    let terminal = "('a'|'b')*'abb'";
+    let names = "PROD1";
+    let grammar = Grammar::new(&[terminal], &[], &[names]);
+    let dfa = DFA::new(&grammar);
+    let generated = dfa.generate_lexer("GeneratedScanner");
+    // write file
+    let directory = tempdir()?;
+    let source_filepath = directory.path().join("lexer_generated.rs");
+    let compiled_filepath = directory.path().join("lexer_generated.rlib");
+    let mut source_file = File::create(source_filepath.clone())?;
+    source_file.write_all(generated.as_bytes())?;
+    // compile file
+    let output = Command::new("rustc")
+        .arg("--crate-type=lib")
+        .arg(source_filepath.to_str().unwrap())
+        .arg("-o")
+        .arg(compiled_filepath.to_str().unwrap())
+        .output()
+        .unwrap();
+    let result = output.status.success();
+    let result_message = String::from_utf8(output.stderr).unwrap();
+    // cleanup
+    if result {
+        remove_file(compiled_filepath.as_path())?;
+    }
+    remove_file(source_filepath.as_path())?;
+    directory.close()?;
+    assert!(result, "Compilation error:\n{}", result_message);
+    Ok(())
 }
 
 #[test]
