@@ -41,15 +41,6 @@ rust-test:
 rust-coverage:
   stage: coverage
   script:
-    - rustup show
-    - curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -
-    - ./grcov --version
-    - export CARGO_INCREMENTAL=0
-    - export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
-    - export RUSTDOCFLAGS="-Cpanic=abort"
-    - rustup install nightly
-    - cargo +nightly build
-    - cargo +nightly test
-    - ./grcov ./target/debug/ -s . --commit-sha="${CI_COMMIT_SHA}" --llvm --branch --ignore-not-existing --ignore="/*" --ignore="*_tests.rs" --ignore="benches/*" -t html -o ./target/debug/coverage
-    - cat ./target/debug/coverage/index.html
+    - cargo install cargo-tarpaulin
+    - cargo tarpaulin -v
   image: rust:latest
