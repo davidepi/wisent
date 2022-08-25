@@ -138,7 +138,7 @@ impl SymbolTable {
         }
         // assign indices: unique to the same and increase only if something has been inserted
         let mut table = FnvHashMap::default();
-        let mut uniques = 1 as usize; // 0 reserved for epsilon
+        let mut uniques = 1; // 0 reserved for epsilon
         let mut reverse = FnvHashMap::default();
         for set in done.into_iter() {
             let mut inserted = false;
@@ -279,7 +279,7 @@ impl SymbolTable {
         for symbol in &self.table {
             // this fails if negating only "partial sets". however in a normal execution should
             // NEVER happen (the same set passed as construction time should be passed here)
-            if !symbols.contains(&symbol.0) {
+            if !symbols.contains(symbol.0) {
                 accept.insert(*symbol.1);
             }
         }
@@ -435,8 +435,8 @@ impl NFA {
                 .into_iter()
                 .map(|x| canonicalise(x, &symtable))
                 .collect::<Vec<_>>();
-            let mut index = 0 as usize; //used to keep unique node indices
-                                        // thompson construction
+            let mut index = 0; //used to keep unique node indices
+                               // thompson construction
             let mut thompson_nfas = canonical_tree
                 .iter()
                 .enumerate()
@@ -499,7 +499,7 @@ impl NFA {
     /// nfa.to_dfa();
     /// ```
     pub fn to_dfa(&self) -> DFA {
-        let big_dfa = subset_construction(&self);
+        let big_dfa = subset_construction(self);
         min_dfa(big_dfa)
     }
 }
@@ -770,6 +770,7 @@ struct RegexOp<'a> {
 
 ///Operators for a regex (and an operand, ID).
 #[derive(PartialEq, Debug, Copy, Clone)]
+#[allow(clippy::upper_case_acronyms)]
 enum OpType {
     /// Kleenee star `*`.
     KLEENE,
@@ -842,6 +843,7 @@ impl std::fmt::Display for ExLiteral {
 /// Two operands (Symbol and Accepting state) and a limited set of operators (*, AND, OR).
 /// Used to build the canonical parse tree.
 #[derive(PartialEq, Debug, Copy, Clone)]
+#[allow(clippy::upper_case_acronyms)]
 enum Literal {
     /// The input symbol (a single letter. The value is the number in the symbol table).
     Symbol(usize),
@@ -899,7 +901,7 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
     let mut operands = Vec::new();
     let mut operators: Vec<RegexOp> = Vec::new();
     // first get a sequence of operands and operators
-    let tokens = regex_to_operands(&regex);
+    let tokens = regex_to_operands(regex);
     // for each in the sequence do the following actions
     for operator in tokens {
         match operator.r#type {
@@ -1119,14 +1121,8 @@ fn expand_literals(node: PrecedenceTree) -> ExpandedPrecedenceTree {
     match node.value.r#type {
         OpType::ID => expand_literal_node(node.value.value),
         n => {
-            let left = match node.left {
-                Some(l) => Some(Box::new(expand_literals(*l))),
-                None => None,
-            };
-            let right = match node.right {
-                Some(r) => Some(Box::new(expand_literals(*r))),
-                None => None,
-            };
+            let left = node.left.map(|l| Box::new(expand_literals(*l)));
+            let right = node.right.map(|r| Box::new(expand_literals(*r)));
             BSTree {
                 value: ExLiteral::Operation(n),
                 left,
@@ -1277,10 +1273,10 @@ fn get_set_of_symbols(root: &ExpandedPrecedenceTree) -> BTreeSet<BTreeSet<char>>
             ExLiteral::Operation(_) => {
                 //nothing to do with the "operation" itself, but this is the only non-leaf type node
                 if let Some(left) = &node.left {
-                    todo_nodes.push(&*left);
+                    todo_nodes.push(left);
                 }
                 if let Some(right) = &node.right {
-                    todo_nodes.push(&*right);
+                    todo_nodes.push(right);
                 }
             }
         }
@@ -1337,14 +1333,8 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
                     set_to_literal_node(negated)
                 }
                 OpType::OR => {
-                    let left = match node.left {
-                        Some(l) => Some(Box::new(canonicalise(*l, symtable))),
-                        None => None,
-                    };
-                    let right = match node.right {
-                        Some(r) => Some(Box::new(canonicalise(*r, symtable))),
-                        None => None,
-                    };
+                    let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
+                    let right = node.right.map(|r| Box::new(canonicalise(*r, symtable)));
                     BSTree {
                         value: Literal::OR,
                         left,
@@ -1352,14 +1342,8 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
                     }
                 }
                 OpType::AND => {
-                    let left = match node.left {
-                        Some(l) => Some(Box::new(canonicalise(*l, symtable))),
-                        None => None,
-                    };
-                    let right = match node.right {
-                        Some(r) => Some(Box::new(canonicalise(*r, symtable))),
-                        None => None,
-                    };
+                    let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
+                    let right = node.right.map(|r| Box::new(canonicalise(*r, symtable)));
                     BSTree {
                         value: Literal::AND,
                         left,
@@ -1367,14 +1351,8 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
                     }
                 }
                 OpType::KLEENE => {
-                    let left = match node.left {
-                        Some(l) => Some(Box::new(canonicalise(*l, symtable))),
-                        None => None,
-                    };
-                    let right = match node.right {
-                        Some(r) => Some(Box::new(canonicalise(*r, symtable))),
-                        None => None,
-                    };
+                    let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
+                    let right = node.right.map(|r| Box::new(canonicalise(*r, symtable)));
                     BSTree {
                         value: Literal::KLEENE,
                         left,
@@ -1536,7 +1514,7 @@ fn subset_construction(nfa: &NFA) -> DFA {
     let mut ds_marked = BTreeSet::new();
     let mut ds_unmarked = Vec::new();
     let mut indices = HashMap::new();
-    let mut index = 0 as usize;
+    let mut index = 0;
     let mut transition = HashMap::new();
     let mut accept = FnvHashMap::default();
 
@@ -1622,7 +1600,7 @@ fn sc_epsilon_closure(
 fn sc_accepting(set: &BTreeSet<usize>, accepting: &FnvHashMap<usize, usize>) -> Option<usize> {
     let mut productions = BTreeSet::new(); //so I can easily get the min()
     for node in accepting {
-        if set.contains(&node.0) {
+        if set.contains(node.0) {
             productions.insert(node.1);
         }
     }
@@ -1710,7 +1688,7 @@ fn direct_construction(node: CanonicalTree) -> DFA {
     {
         accept.insert(0, *acc_prod);
     }
-    let mut index = 1 as usize;
+    let mut index = 1;
     let mut unmarked = vec![helper.value.firstpos];
     let mut tran = HashMap::new();
     let alphabet = indices
@@ -1766,7 +1744,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: usize) -> BSTree<DCHelper>
         .iter()
         .map(|x| match x {
             Some(c) => {
-                let helper = build_dc_helper(&*c, index);
+                let helper = build_dc_helper(c, index);
                 index = helper.value.index + 1;
                 Some(Box::new(helper))
             }
@@ -1843,10 +1821,10 @@ fn build_dc_helper(node: &CanonicalTree, start_index: usize) -> BSTree<DCHelper>
 /// content of that cell is the followpos set.
 fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<usize>>) {
     if let Some(l) = &node.left {
-        dc_compute_followpos(&*l, graph);
+        dc_compute_followpos(l, graph);
     }
     if let Some(r) = &node.right {
-        dc_compute_followpos(&*r, graph);
+        dc_compute_followpos(r, graph);
     }
     match &node.value.ttype {
         Literal::Symbol(_) => {}
@@ -1876,10 +1854,10 @@ fn dc_assign_index_to_literal(
     acc: &mut FnvHashMap<usize, usize>,
 ) {
     if let Some(l) = &node.left {
-        dc_assign_index_to_literal(&*l, indices, acc);
+        dc_assign_index_to_literal(l, indices, acc);
     }
     if let Some(r) = &node.right {
-        dc_assign_index_to_literal(&*r, indices, acc);
+        dc_assign_index_to_literal(r, indices, acc);
     }
     match &node.value.ttype {
         Literal::Symbol(val) => indices[node.value.index] = *val,
@@ -1944,7 +1922,7 @@ fn init_partitions(dfa: &DFA) -> Vec<FnvHashSet<usize>> {
         announced_max = announced_max.max(*announced.1);
     }
     let accepting_no = announced_max + 1;
-    let nacc = (0 as usize..)
+    let nacc = (0..)
         .take(dfa.states_no)
         .collect::<FnvHashSet<_>>()
         .difference(&acc)
@@ -2001,8 +1979,8 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
     //first record in which partitions is every node
     let mut new_trans = HashMap::new();
     let mut accept = FnvHashMap::default();
-    let mut in_degree = vec![0 as usize; partitions.len()];
-    let mut out_degree = vec![0 as usize; partitions.len()];
+    let mut in_degree = vec![0_usize; partitions.len()];
+    let mut out_degree = vec![0_usize; partitions.len()];
     //remap accepting nodes
     for acc_node in dfa.accept {
         accept.insert(*positions.get(&acc_node.0).unwrap(), acc_node.1);
@@ -2021,10 +1999,10 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
         new_trans.insert((new_source, letter), new_target);
     }
     // start = partition of previous start
-    let start = *positions.get(&(0 as usize)).unwrap();
+    let start = *positions.get(&0).unwrap();
     // remove unreachable states (and non-accepting sinks)
     //broken: no in-edges and no start state OR no out-edges and not accepting, excluding self-loops
-    let broken_states = (0 as usize..)
+    let broken_states = (0..)
         .take(partitions.len())
         .filter(|x| {
             (in_degree[*x] == 0 && *x != start) || (out_degree[*x] == 0 && !accept.contains_key(x))

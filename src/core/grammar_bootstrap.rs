@@ -7,7 +7,7 @@ const SINGLE_QUOTE_AS_U8: u8 = b'\'';
 
 /// Parse a .g4 grammar with a manually written, ad-hoc parser.
 pub(super) fn bootstrap_parse_string(content: &str) -> Result<Grammar, ParseError> {
-    let productions = retrieve_productions(&content);
+    let productions = retrieve_productions(content);
     let grammar_rec = split_head_body(productions)?;
     let grammar_no_lit = extract_literals_from_non_term(grammar_rec);
     let grammar_not_rec = resolve_terminals_dependencies(grammar_no_lit)?;
@@ -473,13 +473,14 @@ fn topological_sort(graph: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
     // In addition, being this function iterative, the `toprocess` array is used
     // to defer the node into post-order.
     #[derive(Clone, PartialEq)]
+    #[allow(clippy::upper_case_acronyms)]
     enum Mark {
         NONE,
         //Node untouched
         TEMPORARY,
         //Current node being processed
         PERMANENT, //All the children of this node has been processed
-    };
+    }
     let mut visited = vec![Mark::NONE; graph.len()];
     //Pair (node, All my neighbours have already been processed)
     let mut toprocess = Vec::with_capacity(graph.len());
