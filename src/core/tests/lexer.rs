@@ -477,7 +477,7 @@ fn symbol_table_single_set() {
     let set1 = btreeset! {'a'};
     let set = btreeset! {set1};
     let symbol = SymbolTable::new(set);
-    assert_eq!(*symbol.table.get(&'a').unwrap(), 1 as usize);
+    assert_eq!(*symbol.table.get(&'a').unwrap(), 1);
     assert_eq!(symbol.ids(), 3);
 }
 

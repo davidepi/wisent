@@ -18,7 +18,7 @@ fn topological_sort_dag() {
             let expected = vec![3, 4, 2, 1, 0, 5];
             assert_eq!(order, expected, "Wrong topological order");
         }
-        None => assert!(false, "A DAG should return a topological sort"),
+        None => panic!("A DAG should return a topological sort"),
     }
 }
 
@@ -34,11 +34,8 @@ fn topological_sort_cycles() {
 
     let graph = vec![n0, n1, n2, n3, n4, n5];
     match topological_sort(&graph) {
-        Some(_) => assert!(
-            false,
-            "A graph with cycles should not have a topological order"
-        ),
-        None => assert!(true, "A DAG should return a topological sort"),
+        Some(_) => panic!("A graph with cycles should not have a topological order"),
+        None => (), // everything ok!
     }
 }
 
@@ -133,18 +130,18 @@ fn grammar_parse_string() {
             assert_eq!(g.len_term(), 2);
             assert_eq!(g.len_nonterm(), 2);
         }
-        Err(_) => assert!(false, "Failed to parse grammar string"),
+        Err(_) => panic!("Failed to parse grammar string"),
     }
 }
 
 #[test]
 fn extract_literal() {
     let grammar = "LP: '(';\nRP: ')';\nrandom: '(' '(' Џɯɷ幫Ѩ䷘ ')' ')';\nfunction: fn '{' '}';";
-    match Grammar::parse_string(&grammar) {
+    match Grammar::parse_string(grammar) {
         Ok(g) => {
             assert_eq!(g.len(), 6);
         }
-        Err(_) => assert!(false, "Failed to parse grammar"),
+        Err(_) => panic!("Failed to parse grammar"),
     }
 }
 
@@ -152,7 +149,7 @@ fn extract_literal() {
 //Asserts that non-existent files returns error
 fn parse_grammar_non_existent() {
     match Grammar::parse_grammar("./resources/ada_grammar.txt") {
-        Ok(_) => assert!(false, "Expected the file to not exist!"),
+        Ok(_) => panic!("Expected the file to not exist!"),
         Err(e) => assert_eq!(
             e.to_string(),
             "IOError: No such file or directory (os error 2)"
@@ -167,7 +164,7 @@ fn parse_highly_escaped() {
         Ok(g) => {
             assert_eq!(g.len(), 5);
         }
-        Err(e) => assert!(false, e.to_string()),
+        Err(e) => panic!("{}", e.to_string()),
     }
 }
 
@@ -175,7 +172,7 @@ fn parse_highly_escaped() {
 //Asserts that the fragment using non-terminals generates syntax error
 fn parse_fragments_nonterminal() {
     match Grammar::parse_grammar("./resources/fragments_contains_nt.txt") {
-        Ok(_) => assert!(false, "Expected a syntax error!"),
+        Ok(_) => panic!("Expected a syntax error!"),
         Err(e) => assert_eq!(
             e.to_string(),
             "SyntaxError: Lexer rule DIGIT cannot reference Parser non-terminal digit"
@@ -187,7 +184,7 @@ fn parse_fragments_nonterminal() {
 //Asserts that the fragment using wrong naming generates syntax error
 fn parse_fragments_lowercase_naming() {
     match Grammar::parse_grammar("./resources/fragments_case_err.txt") {
-        Ok(_) => assert!(false, "Expected a syntax error!"),
+        Ok(_) => panic!("Expected a syntax error!"),
         Err(e) => assert_eq!(
             e.to_string(),
             "SyntaxError: Fragments should be uppercase: fragment digit: [0-9]+;"
@@ -202,7 +199,7 @@ fn parse_recursive_fragments() {
         Ok(g) => {
             assert_eq!(g.len(), 2);
         }
-        Err(_) => assert!(false),
+        Err(_) => panic!(),
     }
 }
 
@@ -218,7 +215,7 @@ fn parse_simple_grammar_correctly() {
             9,
             "Grammar was parsed correctly, but a different number of production was expected"
         ),
-        Err(_) => assert!(false, "Simple grammar failed to parse"),
+        Err(_) => panic!("Simple grammar failed to parse"),
     }
 }
 
@@ -234,7 +231,7 @@ fn get_production() {
             assert_eq!(g.get("row").unwrap(), "field (COMMA field)* CR? LF ");
             assert_eq!(g.get("field").unwrap(), "TEXT| STRING|");
         }
-        Err(_) => assert!(false, "Simple grammar failed to parse"),
+        Err(_) => panic!("Simple grammar failed to parse"),
     }
 }
 
@@ -254,7 +251,7 @@ fn order_unchanged_at() {
             assert_eq!(g[7], "field (COMMA field)* CR? LF ");
             assert_eq!(g[8], "TEXT| STRING|");
         }
-        Err(_) => assert!(false, "Simple grammar failed to parse"),
+        Err(_) => panic!("Simple grammar failed to parse"),
     }
 }
 
@@ -268,7 +265,7 @@ fn order_iter_term() {
             assert_eq!(vec[0], "~[,\\n\\r\"]+");
             assert_eq!(vec[1], "'\"'('\"\"'|~'\"')*'\"'");
         }
-        Err(_) => assert!(false, "Simple grammar failed to parse"),
+        Err(_) => panic!("Simple grammar failed to parse"),
     }
 }
 
@@ -283,7 +280,7 @@ fn order_unchanged_iter_nonterm() {
             assert_eq!(vec[2], "field (COMMA field)* CR? LF ");
             assert_eq!(vec[3], "TEXT| STRING|");
         }
-        Err(_) => assert!(false, "Simple grammar failed to parse"),
+        Err(_) => panic!("Simple grammar failed to parse"),
     }
 }
 
@@ -338,7 +335,7 @@ fn parse_actions_simpler() {
                 Action::PUSHMODE("ChannelName".to_owned())
             );
         }
-        Err(_) => assert!(false, "grammar failed to parse"),
+        Err(_) => panic!("grammar failed to parse"),
     }
 }
 
@@ -370,7 +367,7 @@ fn parse_actions_harder() {
             assert_eq!(g.action_nth(3), g.action("Text").unwrap());
             assert_eq!(g.action("NONEXISTENT"), None);
         }
-        Err(_) => assert!(false, "grammar failed to parse"),
+        Err(_) => panic!("grammar failed to parse"),
     }
 }
 
@@ -383,7 +380,7 @@ fn terminal_cleaned() {
             assert_eq!(g.get("Dashbrack").unwrap(), "[a->b\\-\\]]+'->'|([ ]+)");
             assert_eq!(g.get("Newline").unwrap(), "('\\r''\\n'?|'\\n')");
         }
-        Err(_) => assert!(false, "grammar failed to parse"),
+        Err(_) => panic!("grammar failed to parse"),
     }
 }
 
@@ -391,10 +388,7 @@ fn terminal_cleaned() {
 //Asserts that invalid lexer actions are reported as errors
 fn invalid_lexer_actions() {
     match Grammar::parse_grammar("./resources/lexer_invalid_action.txt") {
-        Ok(_) => assert!(
-            false,
-            "Invalid lexer actions should not be able to parse correctly"
-        ),
+        Ok(_) => panic!("Invalid lexer actions should not be able to parse correctly"),
         Err(e) => assert_eq!(e.to_string(), "SyntaxError: invalid action `channel(name`"),
     }
 }
@@ -408,7 +402,7 @@ fn parse_c_grammar_correctly() {
             205,
             "Grammar was parsed correctly, but a different number of production was expected"
         ),
-        Err(_) => assert!(false, "C grammar failed to parse"),
+        Err(_) => panic!("C grammar failed to parse"),
     }
 }
 
@@ -416,7 +410,7 @@ fn parse_c_grammar_correctly() {
 //Asserts that cyclic rules like S->S; cannot be solved in the lexer
 fn lexer_rules_cycles_err() {
     match Grammar::parse_grammar("./resources/lexer_cyclic.txt") {
-        Ok(_) => assert!(false, "expected a failure"),
+        Ok(_) => panic!("expected a failure"),
         Err(e) => assert_eq!(
             e.to_string(),
             "SyntaxError: Lexer contains cyclic productions!"
