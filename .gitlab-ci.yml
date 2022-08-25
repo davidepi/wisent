@@ -6,20 +6,6 @@ stages:
   - test
   - coverage
 
-commit-convention:
-  stage: commit
-  script:
-    - npm install
-    - npm run commitlint
-  image: node:latest
-
-markdown-lint:
-  stage: syntax
-  script:
-    - npm install
-    - npm run markdownlint
-  image: node:latest
-
 rust-fmt:
   stage: syntax
   script:
