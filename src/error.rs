@@ -5,10 +5,12 @@
 /// when opening the grammar on disks fail.
 /// * `SyntaxError` - An error containing a `message` String that can arise when
 /// parsing fails due to syntax errors in the input grammar.
+/// * `DeserializeError` - An error arising during deserialization.
 #[derive(Debug)]
 pub enum ParseError {
     IOError(std::io::Error),
     SyntaxError { message: String },
+    DeserializeError { message: String },
 }
 
 impl From<std::io::Error> for ParseError {
@@ -24,6 +26,9 @@ impl std::fmt::Display for ParseError {
         match self {
             ParseError::IOError(e) => write!(buffer, "IOError: {}", e),
             ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {}", message),
+            ParseError::DeserializeError { message } => {
+                write!(buffer, "DeserializeError: {}", message)
+            }
         }
     }
 }

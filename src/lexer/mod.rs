@@ -9,6 +9,8 @@ mod grammar_conversion;
 mod nfa;
 mod simulator;
 
+use crate::error::ParseError;
+
 pub use self::dfa::Dfa;
 pub use self::nfa::Nfa;
 
@@ -55,7 +57,7 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
 /// no other productions). So, each letter `'a'` in the input can be converted to a number,
 /// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively reducing
 /// the possible inputs to two single values instead of 26.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
     table: FnvHashMap<char, usize>,
@@ -297,6 +299,81 @@ impl SymbolTable {
     pub fn iter(&self) -> Iter<char, usize> {
         self.table.iter()
     }
+
+    /// Converts the current symbol table into an array of bytes.
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut retval = Vec::new();
+        for (index, chars) in &self.reverse {
+            if *index == 0 || *index == self.table.len() {
+                continue; //don't insert epsilon or "NOT_IN_ALPHABET"
+            }
+            retval.extend(u32::to_le_bytes(*index as u32));
+            let all_symbols = chars.iter().collect::<String>();
+            let all_symbols_bytes = all_symbols.as_bytes();
+            retval.extend(u32::to_le_bytes(all_symbols_bytes.len() as u32));
+            retval.extend_from_slice(all_symbols_bytes);
+        }
+        retval
+    }
+
+    /// Contructs a symbol table from an array of bytes previously generated with
+    /// [SymbolTable::as_u8].
+    pub fn from_bytes(v: &[u8]) -> Result<Self, ParseError> {
+        let malformed_err = "malformed symbol_table";
+        if !v.is_empty() {
+            let mut i = 0;
+            let mut table = FnvHashMap::default();
+            let mut reverse = FnvHashMap::default();
+            while i < v.len() {
+                let symbol_index_bytes: [u8; 4] = v
+                    .get(i..i + 4)
+                    .ok_or_else(|| ParseError::DeserializeError {
+                        message: malformed_err.to_string(),
+                    })?
+                    .try_into()
+                    .map_err(|_| ParseError::DeserializeError {
+                        message: malformed_err.to_string(),
+                    })?;
+                i += 4;
+                let symbol_index = u32::from_le_bytes(symbol_index_bytes) as usize;
+                let chars_len_bytes: [u8; 4] = v
+                    .get(i..i + 4)
+                    .ok_or_else(|| ParseError::DeserializeError {
+                        message: malformed_err.to_string(),
+                    })?
+                    .try_into()
+                    .map_err(|_| ParseError::DeserializeError {
+                        message: malformed_err.to_string(),
+                    })?;
+                i += 4;
+                let chars_len = u32::from_le_bytes(chars_len_bytes) as usize;
+                let string_bytes = v
+                    .get(i..i + chars_len)
+                    .ok_or_else(|| ParseError::DeserializeError {
+                        message: malformed_err.to_string(),
+                    })?
+                    .to_vec();
+                i += chars_len;
+                let symbol_set = String::from_utf8(string_bytes)
+                    .map_err(|_| ParseError::DeserializeError {
+                        message: malformed_err.to_string(),
+                    })?
+                    .chars()
+                    .collect::<BTreeSet<_>>();
+                symbol_set.iter().copied().for_each(|char| {
+                    table.insert(char, symbol_index);
+                });
+                reverse.insert(symbol_index, symbol_set);
+            }
+            reverse.insert(0, btreeset!['\u{03F5}']);
+            reverse.insert(table.len(), btreeset!['\u{233A}']); //any char not in alphabet
+            Ok(SymbolTable { table, reverse })
+        } else {
+            Err(ParseError::DeserializeError {
+                message: "empty symbol table".to_string(),
+            })
+        }
+    }
 }
 
 /// An Interface for a lexing Finite State Machine.
@@ -378,6 +455,7 @@ pub trait Automaton {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::ParseError;
     use crate::lexer::SymbolTable;
     use maplit::btreeset;
 
@@ -448,5 +526,18 @@ mod tests {
         assert!(negated.contains(&symbol.get('㊈')));
         assert!(!negated.contains(&symbol.get('b')));
         assert!(!negated.contains(&symbol.get('c')));
+    }
+
+    #[test]
+    fn symbol_table_serialize_deserialize() -> Result<(), ParseError> {
+        let set1 = btreeset! {'a', 'b', 'c'};
+        let set2 = btreeset! {'b', 'c', 'd'};
+        let set3 = btreeset! {'d', 'e'};
+        let set = btreeset! {set1, set2, set3};
+        let symbol = SymbolTable::new(set);
+        let serialized = symbol.as_bytes();
+        let deserialized = SymbolTable::from_bytes(&serialized)?;
+        assert_eq!(symbol, deserialized);
+        Ok(())
     }
 }
