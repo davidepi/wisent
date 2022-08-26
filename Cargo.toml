@@ -7,7 +7,7 @@ publish = false
 
 [lib]
 name = "wisent"
-path = "src/core/lib.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "wisent"

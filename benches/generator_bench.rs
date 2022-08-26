@@ -3,7 +3,7 @@ extern crate criterion;
 
 use criterion::Criterion;
 use wisent::grammar::Grammar;
-use wisent::lexer::DFA;
+use wisent::lexer::Dfa;
 
 fn parse_c_grammar(c: &mut Criterion) {
     c.bench_function("c grammar [parse grammar]", |b| {
@@ -13,7 +13,7 @@ fn parse_c_grammar(c: &mut Criterion) {
 
 fn lex_c_grammar(c: &mut Criterion) {
     let g = Grammar::parse_grammar("./resources/c_grammar.txt").unwrap();
-    c.bench_function("c grammar [lex grammar]", |b| b.iter(|| DFA::new(&g)));
+    c.bench_function("c grammar [lex grammar]", |b| b.iter(|| Dfa::new(&g)));
 }
 
 criterion_group!(benches, parse_c_grammar, lex_c_grammar);

@@ -1,8 +1,10 @@
+use crate::error::ParseError;
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Index;
 
-use crate::error::ParseError;
-use crate::grammar_bootstrap::bootstrap_parse_string;
+/// Code used to parse an ANTLR grammar with and ad-hoc parser
+mod bootstrap;
+use bootstrap::bootstrap_parse_string;
 
 /// Struct representing a parsed grammar.
 ///
