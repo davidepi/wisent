@@ -72,56 +72,6 @@ impl Dfa {
             min_dfa(big_dfa)
         }
     }
-
-    /// Writes the transition table for the current DFA as a Rust file implementation.
-    ///
-    /// The implementation is defined in the `lexer_skeleton.txt` file found inside the resources.
-    ///
-    /// The function expects the name of the generated struct passed as parameter.
-    pub fn generate_lexer(&self, class_name: &str) -> String {
-        // +1 in the next line is the "not in the table" value
-        let alphabet_len = self.alphabet.table.len() + 1;
-        // this converts the transition table from HashMap<(usize,usize),usize> into a flatten array
-        // the usize::MAX is used to indicate no transition found.
-        let tt = format!(
-            "[{}]", //outer array, iterates on the nodes indices
-            (0..)
-                .take(self.nodes())
-                .map(|node| {
-                    format!(
-                        "[{}],", //inner array, iterates on the alphabet symbols
-                        (0..)
-                            .take(alphabet_len)
-                            .map(|c| self
-                                .transition
-                                .get(&(node, c))
-                                .unwrap_or(&usize::MAX)
-                                .to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })
-                .collect::<String>()
-        );
-        let table = format!(
-            "[{}].iter().cloned().collect()",
-            self.alphabet
-                .table
-                .iter()
-                .map(|c| format!("({:#X}, {})", (*c.0) as u32, c.1))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        format!(
-            include_str!("../../resources/lexer_skeleton.txt"),
-            class_name,
-            alphabet_len,
-            self.nodes(),
-            class_name,
-            tt,
-            table
-        )
-    }
 }
 
 impl Automaton for Dfa {
@@ -722,10 +672,6 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
 mod tests {
     use crate::grammar::Grammar;
     use crate::lexer::{Automaton, Dfa, Nfa};
-    use std::fs::{remove_file, File};
-    use std::io::Write;
-    use std::process::Command;
-    use tempfile::tempdir;
 
     #[test]
     fn dfa_conflicts_resolution() {
@@ -748,39 +694,6 @@ mod tests {
         assert!(!dfa2.is_empty());
         assert_eq!(dfa2.nodes(), 4);
         assert_eq!(dfa2.edges(), 7);
-    }
-
-    #[test]
-    fn dfa_transition_table_generation() -> Result<(), std::io::Error> {
-        let terminal = "('a'|'b')*'abb'";
-        let names = "PROD1";
-        let grammar = Grammar::new(&[terminal], &[], &[names]);
-        let dfa = Dfa::new(&grammar);
-        let generated = dfa.generate_lexer("GeneratedScanner");
-        // write file
-        let directory = tempdir()?;
-        let source_filepath = directory.path().join("lexer_generated.rs");
-        let compiled_filepath = directory.path().join("lexer_generated.rlib");
-        let mut source_file = File::create(source_filepath.clone())?;
-        source_file.write_all(generated.as_bytes())?;
-        // compile file
-        let output = Command::new("rustc")
-            .arg("--crate-type=lib")
-            .arg(source_filepath.to_str().unwrap())
-            .arg("-o")
-            .arg(compiled_filepath.to_str().unwrap())
-            .output()
-            .unwrap();
-        let result = output.status.success();
-        let result_message = String::from_utf8(output.stderr).unwrap();
-        // cleanup
-        if result {
-            remove_file(compiled_filepath.as_path())?;
-        }
-        remove_file(source_filepath.as_path())?;
-        directory.close()?;
-        assert!(result, "Compilation error:\n{}", result_message);
-        Ok(())
     }
 
     #[test]
