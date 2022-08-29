@@ -1,6 +1,6 @@
 use maplit::btreeset;
 
-use super::{BSTree, SymbolTable, EPSILON_VALUE};
+use super::{BSTree, SymbolTable};
 use crate::grammar::Grammar;
 use std::collections::BTreeSet;
 use std::iter::{Enumerate, Peekable};
@@ -109,7 +109,6 @@ pub enum Literal {
 impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Symbol(0) => write!(f, "\u{03F5}"),
             Literal::Symbol(i) => write!(f, "{}", i),
             Literal::Acc(i) => write!(f, "ACC({})", i),
             Literal::KLEENE => write!(f, "*"),
@@ -523,8 +522,11 @@ fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> u
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
 fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> CanonicalTree {
     match node.value {
-        ExLiteral::Value(i) => set_to_literal_node(symtable.get_set(&i)),
-        ExLiteral::AnyValue => set_to_literal_node(symtable.get_negated(&BTreeSet::new())),
+        ExLiteral::Value(i) => set_to_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
+        ExLiteral::AnyValue => set_to_literal_node(
+            symtable.symbols_ids_negated(&BTreeSet::new()),
+            symtable.epsilon_id(),
+        ),
         ExLiteral::Operation(op) => {
             match op {
                 OpType::NOT => {
@@ -533,8 +535,8 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
                         .into_iter()
                         .flatten()
                         .collect::<BTreeSet<_>>();
-                    let negated = symtable.get_negated(&used_symbols);
-                    set_to_literal_node(negated)
+                    let negated = symtable.symbols_ids_negated(&used_symbols);
+                    set_to_literal_node(negated, symtable.epsilon_id())
                 }
                 OpType::OR => {
                     let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
@@ -565,7 +567,7 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
                 }
                 OpType::QM => {
                     let left = Some(Box::new(BSTree {
-                        value: Literal::Symbol(EPSILON_VALUE),
+                        value: Literal::Symbol(symtable.epsilon_id()),
                         left: None,
                         right: None,
                     }));
@@ -597,10 +599,10 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
     }
 }
 
-fn set_to_literal_node(set: BTreeSet<usize>) -> CanonicalTree {
+fn set_to_literal_node(set: BTreeSet<usize>, epsilon_id: usize) -> CanonicalTree {
     if set.is_empty() {
         BSTree {
-            value: Literal::Symbol(EPSILON_VALUE),
+            value: Literal::Symbol(epsilon_id),
             left: None,
             right: None,
         }
@@ -669,7 +671,7 @@ mod tests {
         let str = format!("{}", new_tree);
         assert_eq!(
             str,
-            r#"{"val":"&","left":{"val":"*","left":{"val":"&","left":{"val":"*","left":{"val":"1"}},"right":{"val":"|","left":{"val":"1"},"right":{"val":"2"}}}},"right":{"val":"1"}}"#
+            r#"{"val":"&","left":{"val":"*","left":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"|","left":{"val":"0"},"right":{"val":"1"}}}},"right":{"val":"0"}}"#
         );
     }
 
@@ -683,7 +685,7 @@ mod tests {
         let str = format!("{}", new_tree);
         assert_eq!(
             str,
-            r#"{"val":"&","left":{"val":"&","left":{"val":"&","left":{"val":"*","left":{"val":"1"}},"right":{"val":"2"}},"right":{"val":"*","left":{"val":"&","left":{"val":"*","left":{"val":"1"}},"right":{"val":"2"}}}},"right":{"val":"1"}}"#
+            r#"{"val":"&","left":{"val":"&","left":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"1"}},"right":{"val":"*","left":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"1"}}}},"right":{"val":"0"}}"#
         );
     }
 
@@ -697,7 +699,7 @@ mod tests {
         let str = format!("{}", new_tree);
         assert_eq!(
             str,
-            r#"{"val":"&","left":{"val":"|","left":{"val":"ϵ"},"right":{"val":"&","left":{"val":"*","left":{"val":"1"}},"right":{"val":"2"}}},"right":{"val":"1"}}"#
+            r#"{"val":"&","left":{"val":"|","left":{"val":"3"},"right":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"1"}}},"right":{"val":"0"}}"#
         );
     }
 
@@ -711,7 +713,7 @@ mod tests {
         let str = format!("{}", new_tree);
         assert_eq!(
             str,
-            r#"{"val":"&","left":{"val":"|","left":{"val":"3"},"right":{"val":"4"}},"right":{"val":"|","left":{"val":"1"},"right":{"val":"3"}}}"#
+            r#"{"val":"&","left":{"val":"|","left":{"val":"2"},"right":{"val":"3"}},"right":{"val":"|","left":{"val":"0"},"right":{"val":"2"}}}"#
         );
     }
 

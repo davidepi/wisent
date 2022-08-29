@@ -1,6 +1,6 @@
 use super::dfa::Dfa;
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
-use super::{Automaton, SymbolTable, EPSILON_VALUE};
+use super::{Automaton, SymbolTable};
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
 use maplit::hashmap;
@@ -52,17 +52,18 @@ impl Nfa {
             Nfa {
                 states_no: 1,
                 transition: HashMap::new(),
-                alphabet: SymbolTable::empty(),
+                alphabet: SymbolTable::default(),
                 start: 0,
                 accept: FnvHashMap::default(),
             }
         } else {
             let mut index = 0; //used to keep unique node indices thompson construction
+            let epsilon_id = symtable.epsilon_id();
             let mut thompson_nfas = canonical_trees
                 .iter()
                 .enumerate()
                 .map(|x| {
-                    let nfa = thompson_construction(x.1, index, x.0);
+                    let nfa = thompson_construction(x.1, index, x.0, epsilon_id);
                     index += nfa.nodes();
                     nfa
                 })
@@ -74,7 +75,6 @@ impl Nfa {
                     .iter()
                     .map(|x| x.start)
                     .collect::<FnvHashSet<_>>();
-                //FIXME: this clone is not particularly efficient (even though I expect nodes in the order of hundredth)
                 let accept = thompson_nfas
                     .iter()
                     .flat_map(|x| x.accept.clone())
@@ -83,7 +83,7 @@ impl Nfa {
                     .into_iter()
                     .flat_map(|x| x.transition)
                     .collect::<HashMap<_, _>>();
-                transition_table.insert((index, 0), start_transition);
+                transition_table.insert((index, epsilon_id), start_transition);
                 index += 1;
                 Nfa {
                     states_no: index,
@@ -159,22 +159,7 @@ impl Automaton for Nfa {
             for target in trans.1 {
                 let source = (trans.0).0;
                 let symbol_id = (trans.0).1;
-                let symbol_label = self
-                    .alphabet
-                    .reverse
-                    .get(&symbol_id)
-                    .unwrap()
-                    .iter()
-                    .map(|c| {
-                        if (*c as usize) < 32 {
-                            '\u{FFFF}'
-                        } else if *c == '"' {
-                            '\u{2033}'
-                        } else {
-                            *c
-                        }
-                    })
-                    .collect::<String>();
+                let symbol_label = self.alphabet.label(symbol_id).replace('"', "\\\"");
                 write!(
                     &mut f,
                     "{}->{}[label=\"{}\"];",
@@ -192,7 +177,12 @@ impl Automaton for Nfa {
 ///
 /// - `start_index`: Starts assigning indices to NFA nodes from this number.
 /// - `production`: This is the announced production index for the current parse tree.
-fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: usize) -> Nfa {
+fn thompson_construction(
+    prod: &CanonicalTree,
+    start_index: usize,
+    production: usize,
+    epsilon_id: usize,
+) -> Nfa {
     let mut index = start_index;
     let mut visit = vec![prod];
     let mut todo = Vec::new();
@@ -221,7 +211,7 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                     transition: hashmap! {
                         (index, val) => target_set,
                     },
-                    alphabet: SymbolTable::empty(),
+                    alphabet: SymbolTable::default(),
                     start: index,
                     accept,
                 };
@@ -238,11 +228,11 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                 for acc in first.accept {
                     first
                         .transition
-                        .insert((acc.0, EPSILON_VALUE), target_set.clone());
+                        .insert((acc.0, epsilon_id), target_set.clone());
                 }
                 first
                     .transition
-                    .insert((new_start, EPSILON_VALUE), target_set.clone());
+                    .insert((new_start, epsilon_id), target_set.clone());
                 first.start = new_start;
                 let mut accept = FnvHashMap::default();
                 accept.insert(new_end, production);
@@ -259,7 +249,7 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                 for acc in first.accept {
                     first
                         .transition
-                        .insert((acc.0, EPSILON_VALUE), target_set.clone());
+                        .insert((acc.0, epsilon_id), target_set.clone());
                 }
                 first.accept = second.accept;
                 first.states_no += second.states_no;
@@ -280,15 +270,13 @@ fn thompson_construction(prod: &CanonicalTree, start_index: usize, production: u
                 target_set.insert(first.start);
                 target_set.insert(second.start);
                 first.transition.extend(second.transition);
-                first
-                    .transition
-                    .insert((new_start, EPSILON_VALUE), target_set);
+                first.transition.insert((new_start, epsilon_id), target_set);
                 target_set = FnvHashSet::default();
                 target_set.insert(new_end);
                 for acc in first.accept.into_iter().chain(second.accept.into_iter()) {
                     first
                         .transition
-                        .insert((acc.0, EPSILON_VALUE), target_set.clone());
+                        .insert((acc.0, epsilon_id), target_set.clone());
                 }
                 first.start = new_start;
                 first.accept = accept;
@@ -314,6 +302,32 @@ mod tests {
         assert!(!nfa.is_empty());
         assert_eq!(nfa.nodes(), 31);
         assert_eq!(nfa.edges(), 38);
+    }
+
+    #[test]
+    fn nfa_manually_checked_edges() {
+        let grammar = Grammar::new(&["'a''b'*"], &[], &["A BSTAR"]);
+        let nfa = Nfa::new(&grammar);
+        let a = nfa.alphabet.symbol_id('a');
+        let b = nfa.alphabet.symbol_id('b');
+        let e = nfa.alphabet.epsilon_id();
+        assert_eq!(
+            *nfa.transition.get(&(0, a)).unwrap().iter().next().unwrap(),
+            1
+        );
+        assert_eq!(
+            *nfa.transition.get(&(1, e)).unwrap().iter().next().unwrap(),
+            4
+        );
+        assert_eq!(nfa.transition.get(&(4, e)).unwrap().len(), 2);
+        assert_eq!(
+            *nfa.transition.get(&(2, b)).unwrap().iter().next().unwrap(),
+            3
+        );
+        assert_eq!(nfa.transition.get(&(3, e)).unwrap().len(), 2);
+        assert_eq!(*nfa.accept.get(&5).unwrap(), 0);
+        assert_eq!(nfa.nodes(), 6);
+        assert_eq!(nfa.edges(), 7);
     }
 
     #[test]

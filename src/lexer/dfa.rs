@@ -1,6 +1,6 @@
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
 use super::nfa::Nfa;
-use super::{Automaton, BSTree, SymbolTable, EPSILON_VALUE};
+use super::{Automaton, BSTree, SymbolTable};
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
 use maplit::btreeset;
@@ -58,7 +58,7 @@ impl Dfa {
             Dfa {
                 states_no: 1,
                 transition: HashMap::new(),
-                alphabet: SymbolTable::empty(),
+                alphabet: SymbolTable::default(),
                 start: 0,
                 accept: FnvHashMap::default(),
             }
@@ -66,8 +66,7 @@ impl Dfa {
             // merge all trees of every production into a single one
             let merged_tree = merge_regex_trees(canonical_trees);
             // build the dfa
-            let mut big_dfa = direct_construction(merged_tree);
-            big_dfa.alphabet = symtable;
+            let big_dfa = direct_construction(merged_tree, symtable);
             // minimize the dfa
             min_dfa(big_dfa)
         }
@@ -102,22 +101,7 @@ impl Automaton for Dfa {
         for trans in &self.transition {
             let source = (trans.0).0;
             let symbol_id = (trans.0).1;
-            let symbol_label = self
-                .alphabet
-                .reverse
-                .get(&symbol_id)
-                .unwrap()
-                .iter()
-                .map(|c| {
-                    if (*c as usize) < 32 {
-                        '\u{FFFF}'
-                    } else if *c == '"' {
-                        '\u{2033}'
-                    } else {
-                        *c
-                    }
-                })
-                .collect::<String>();
+            let symbol_label = self.alphabet.label(symbol_id).replace('"', "\\\"");
             write!(
                 &mut f,
                 "{}->{}[label=\"{}\"];",
@@ -150,7 +134,7 @@ fn subset_construction(nfa: &Nfa) -> Dfa {
 
     let mut start_set = FnvHashSet::default();
     start_set.insert(nfa.start);
-    let s0 = sc_epsilon_closure(start_set, &nfa.transition);
+    let s0 = sc_epsilon_closure(start_set, &nfa.transition, nfa.alphabet.epsilon_id());
     indices.insert(s0.clone(), index);
     // possible acceptance check is done at creation time
     if let Some(accepted_production) = sc_accepting(&s0, &nfa.accept) {
@@ -164,7 +148,7 @@ fn subset_construction(nfa: &Nfa) -> Dfa {
         for symbol in nfa.alphabet.iter() {
             let sym = *symbol.1;
             let mov = sc_move(&t, sym, &nfa.transition);
-            let u = sc_epsilon_closure(mov, &nfa.transition);
+            let u = sc_epsilon_closure(mov, &nfa.transition, nfa.alphabet.epsilon_id());
             let u_idx;
             if !u.is_empty() {
                 //check if node has already been created
@@ -211,11 +195,12 @@ fn subset_construction(nfa: &Nfa) -> Dfa {
 fn sc_epsilon_closure(
     set: FnvHashSet<usize>,
     transition_table: &HashMap<(usize, usize), FnvHashSet<usize>>,
+    epsilon_id: usize,
 ) -> BTreeSet<usize> {
     let mut stack = set.iter().copied().collect::<Vec<_>>();
     let mut closure = set;
     while let Some(t) = stack.pop() {
-        if let Some(eset) = transition_table.get(&(t, EPSILON_VALUE)) {
+        if let Some(eset) = transition_table.get(&(t, epsilon_id)) {
             closure = closure.union(eset).cloned().collect();
             stack.extend(eset.iter());
         }
@@ -313,9 +298,9 @@ struct DCHelper {
 /// Refers to "Compilers, principle techniques and tools" of A.Aho et al. (p.179 on 2nd edition).
 ///
 /// Guaranteed to have a move on every symbol for every node.
-fn direct_construction(node: CanonicalTree) -> Dfa {
-    let helper = build_dc_helper(&node, 0);
-    let mut indices = vec![EPSILON_VALUE; helper.value.index + 1];
+fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
+    let helper = build_dc_helper(&node, 0, symtable.epsilon_id());
+    let mut indices = vec![symtable.epsilon_id(); helper.value.index + 1];
     let mut followpos = vec![BTreeSet::new(); helper.value.index + 1];
     //retrieve accepting nodes (they are embedded in the helper tree, we don't have NFA here)
     let mut accepting_nodes = FnvHashMap::default();
@@ -340,7 +325,7 @@ fn direct_construction(node: CanonicalTree) -> Dfa {
     let mut tran = HashMap::new();
     let alphabet = indices
         .iter()
-        .filter(|x| **x != EPSILON_VALUE)
+        .filter(|x| **x != symtable.epsilon_id())
         .copied()
         .collect::<FnvHashSet<usize>>();
     // loop, conceptually similar to subset construction, but uses followpos instead of NFA
@@ -373,7 +358,7 @@ fn direct_construction(node: CanonicalTree) -> Dfa {
         states_no: index,
         start: 0,
         transition: tran,
-        alphabet: SymbolTable::empty(),
+        alphabet: symtable,
         accept,
     }
 }
@@ -384,14 +369,18 @@ fn direct_construction(node: CanonicalTree) -> Dfa {
 ///
 /// - `node`: the root of the tree (it's a recursive function)
 /// - `start_index`: starting index of the output DFA (0 for the first invocation)
-fn build_dc_helper(node: &CanonicalTree, start_index: usize) -> BSTree<DCHelper> {
+fn build_dc_helper(
+    node: &CanonicalTree,
+    start_index: usize,
+    epsilon_id: usize,
+) -> BSTree<DCHelper> {
     //postorder because I need to build it bottom up
     let mut index = start_index;
     let mut children = [&node.left, &node.right]
         .iter()
         .map(|x| match x {
             Some(c) => {
-                let helper = build_dc_helper(c, index);
+                let helper = build_dc_helper(c, index, epsilon_id);
                 index = helper.value.index + 1;
                 Some(Box::new(helper))
             }
@@ -405,7 +394,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: usize) -> BSTree<DCHelper>
     let lastpos;
     match &node.value {
         Literal::Symbol(val) => {
-            if *val == EPSILON_VALUE {
+            if *val == epsilon_id {
                 nullable = true;
                 firstpos = BTreeSet::new();
                 lastpos = BTreeSet::new();

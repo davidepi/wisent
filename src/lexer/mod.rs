@@ -1,5 +1,4 @@
 use fnv::FnvHashMap;
-use maplit::btreeset;
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
 
@@ -13,9 +12,6 @@ use crate::error::ParseError;
 
 pub use self::dfa::Dfa;
 pub use self::nfa::Nfa;
-
-/// Value associated with the epsilon character
-const EPSILON_VALUE: usize = 0;
 
 /// A Binary Search Tree.
 #[derive(Clone)]
@@ -46,7 +42,7 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
     }
 }
 
-/// Table assigning unique numerical values to symbols.
+/// Table assigning unique numerical values (IDs) to symbols.
 ///
 /// Symbols are grouped by productions: if two or more symbols are **always** found in the same
 /// set (or subset) in every production, they are assigned the same index. This effectively reduces
@@ -65,18 +61,17 @@ pub struct SymbolTable {
     reverse: FnvHashMap<usize, BTreeSet<char>>,
 }
 
-impl SymbolTable {
-    /// Builds an empty symbol table.
-    pub fn empty() -> SymbolTable {
-        let mut reverse = FnvHashMap::default();
-        reverse.insert(0, btreeset!['\u{03F5}']);
-        reverse.insert(1, btreeset!['\u{233A}']); //any char not in alphabet
+impl Default for SymbolTable {
+    fn default() -> Self {
+        let reverse = FnvHashMap::default();
         SymbolTable {
             table: FnvHashMap::default(),
             reverse,
         }
     }
+}
 
+impl SymbolTable {
     /// Builds the symbol table given a set of sets.
     ///
     /// This function takes as input a set of sets, `symbols`.
@@ -104,8 +99,8 @@ impl SymbolTable {
     /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
     ///
-    /// assert_ne!(symbol.get('a'), symbol.get('d'));
-    /// assert_eq!(symbol.get('b'), symbol.get('c'));
+    /// assert_ne!(symbol.symbol_id('a'), symbol.symbol_id('d'));
+    /// assert_eq!(symbol.symbol_id('b'), symbol.symbol_id('c'));
     /// ```
     pub fn new(symbols: BTreeSet<BTreeSet<char>>) -> SymbolTable {
         // Refinement is done by taking a set `A` and comparing against all others (called `B`).
@@ -146,7 +141,8 @@ impl SymbolTable {
         }
         // assign indices: unique to the same and increase only if something has been inserted
         let mut table = FnvHashMap::default();
-        let mut uniques = 1; // 0 reserved for epsilon
+        //let mut uniques = 1; // 0 reserved for epsilon transactions
+        let mut uniques = 0;
         let mut reverse = FnvHashMap::default();
         for set in done.into_iter() {
             let mut inserted = false;
@@ -158,16 +154,38 @@ impl SymbolTable {
                 uniques += 1;
             }
         }
-        reverse.insert(0, btreeset!['\u{03F5}']);
-        reverse.insert(uniques, btreeset!['\u{233A}']); //any char not in alphabet
         SymbolTable { table, reverse }
     }
 
-    /// Returns the number of unique ids assigned to the symbols.
+    /// Returns the ID of a character not in the alphabet.
+    ///
+    /// This is a special ID, not contained in the symbol table, that represents any character not
+    /// inside the symbol table.
+    ///
+    /// Its ID is the highest ID found in the symbol table + 1.
+    pub fn not_in_alphabet_id(&self) -> usize {
+        self.reverse.len()
+    }
+
+    /// Returns the ID of the epsilon symbol.
+    ///
+    /// The epsilon symbol represents a transaction without reading any other symbol. As such it
+    /// cannot be inserted into the symbol table. However, it is needed for the DFA construction
+    /// and the NFA construction and simulation. As such, this method provides the epsilon value
+    /// for the current symbol table.
+    ///
+    /// Its ID is the highest ID found in the symbol table + 2.
+    pub fn epsilon_id(&self) -> usize {
+        self.reverse.len() + 1
+    }
+
+    /// Returns the amount of unique IDs assigned to the symbols.
     ///
     /// IDs are progressive, so this is also the size required for the transition table of any
-    /// NFA/DFA. This ALWAYS includes the two reserved ids: "epsilon" and "any char not in the
-    /// table".
+    /// NFA/DFA. This ALWAYS includes the ID reserved for any character not in the alphabet, but
+    /// DOES NOT count the epsilon ID.
+    /// The motivation of this discrepancy is the fact that in the transition table for a DFA the
+    /// "not in alphabet" transition is needed, wheread the epsilon transition is not.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -178,20 +196,20 @@ impl SymbolTable {
     /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
     ///
-    /// assert_eq!(symbol.ids(), 3);
+    /// assert_eq!(symbol.ids(), 2);
     /// ```
     pub fn ids(&self) -> usize {
-        self.reverse.len()
+        self.reverse.len() + 1
     }
 
-    /// Returns the value associated for a specific char.
+    /// Returns the ID associated for a specific char.
     ///
-    /// If the char is not inside the symbol table, a value is returned anyway: this value
-    /// represents any the transaction to be applied to any character not in the table.
+    /// If the char is not inside the symbol table, an ID is returned anyway: this ID
+    /// represents the transaction to be applied to [any character not in the
+    /// table](SymbolTable::not_in_alphabet_id).
     /// This value is also equal to the number of the symbols inside the table (hence the reason
     /// why the table is immutable after construction).
     ///
-    /// The epsilon character IDs is always 0.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -203,26 +221,26 @@ impl SymbolTable {
     /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
     ///
-    /// let index_a = symbol.get('a');
-    /// let index_not_in_table = symbol.get('ダ');
+    /// let index_a = symbol.symbol_id('a');
+    /// let index_not_in_table = symbol.symbol_id('ダ');
     ///
-    /// assert_eq!(index_a, 1);
-    /// assert_eq!(index_not_in_table, 4);
+    /// assert_eq!(index_a, 0);
+    /// assert_eq!(index_not_in_table, 3);
     /// ```
-    pub fn get(&self, symbol: char) -> usize {
-        match self.table.get(&symbol) {
-            Some(val) => *val,
-            None => self.reverse.len() - 1,
-        }
+    pub fn symbol_id(&self, symbol: char) -> usize {
+        *self
+            .table
+            .get(&symbol)
+            .unwrap_or(&self.not_in_alphabet_id())
     }
 
-    /// Returns the value(s) associated with a specific set.
+    /// Returns all the IDs associated with a specific set.
     ///
-    /// A set can be associated to a single val up to a number of vals equal to the input set
+    /// A set can be associated to a single ID up to a number of IDs equal to the input set
     /// size.
     ///
-    /// Also in this case, a special number will be assigned to those symbols not in the symbol
-    /// table.
+    /// Also in this case, a [special number will be assigned to those symbols not in the symbol
+    /// table](SymbolTable::not_in_alphabet_id).
     /// # Examples
     /// Basic usage:
     /// ```
@@ -235,7 +253,7 @@ impl SymbolTable {
     /// let symbol = SymbolTable::new(set);
     ///
     /// let input_set = vec!['b', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let mut encoded = symbol.get_set(&input_set).into_iter();
+    /// let mut encoded = symbol.symbols_ids(&input_set).into_iter();
     ///
     /// assert!(encoded.next().is_some()); // [b, c] (or [d])
     /// assert!(encoded.next().is_some()); // [d] (or [b, c])
@@ -243,24 +261,24 @@ impl SymbolTable {
     /// ```
     /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
     /// A set of `[b, d]` will return two values: the one for `[b, c]` and the one for `[d]`.
-    pub fn get_set(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
+    pub fn symbols_ids(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
         let mut ret = BTreeSet::new();
         for symbol in symbols {
             match self.table.get(symbol) {
                 Some(val) => ret.insert(*val),
-                None => ret.insert(self.reverse.len() - 1),
+                None => ret.insert(self.not_in_alphabet_id()),
             };
         }
         ret
     }
 
-    /// Returns all the values NOT associated with a specific set.
+    /// Returns all the IDs NOT associated with a specific set.
     ///
     /// This method returns values associated for negated sets, simulating cases like `[^a-z]`, or,
     /// in ANTLR syntax, `~[a-z]`.
     ///
-    /// **NOTE**: It is expected the input set to contain only symbols included in the table, so the
-    /// special number for all the symbols not in the table will always be returned.
+    /// **NOTE**: It is expected the input set to contain only symbols included in the table, so
+    /// [not in alphabet](SymbolTable::not_in_alphabet_id) will always be in the returned set.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -273,7 +291,7 @@ impl SymbolTable {
     /// let symbol = SymbolTable::new(set);
     ///
     /// let input_set = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let mut negated = symbol.get_negated(&input_set).into_iter();
+    /// let mut negated = symbol.symbols_ids_negated(&input_set).into_iter();
     ///
     /// assert!(negated.next().is_some()); //a
     /// assert!(negated.next().is_some()); // IDs of "any other char"
@@ -282,7 +300,7 @@ impl SymbolTable {
     /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
     /// A set of `[b, c, d]`, corresponding to `[^bcd]` in regexp syntax, will return two
     /// values, the one for `[a]` and the one for any other char not in table.
-    pub fn get_negated(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
+    pub fn symbols_ids_negated(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
         let mut accept = BTreeSet::new();
         for symbol in &self.table {
             // this fails if negating only "partial sets". however in a normal execution should
@@ -291,8 +309,44 @@ impl SymbolTable {
                 accept.insert(*symbol.1);
             }
         }
-        accept.insert(self.reverse.len() - 1);
+        accept.insert(self.not_in_alphabet_id());
         accept
+    }
+
+    /// Converts a given ID to a list of chars
+    ///
+    /// [Epsilon](SymbolTable::epsilon_id) is represented with `ϵ` and
+    /// [not in alphabet](SymbolTable::not_in_alphabet_id) is represented with `⊙`.
+    /// If an ID that does not match anything in the symbol table, nor epsilon or not in alphabet
+    /// is provided, this function returns `�`.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// assert_eq!(symbol.label(0), 'a'.to_string());
+    /// assert_eq!(symbol.label(symbol.not_in_alphabet_id()), '⊙'.to_string());
+    /// assert_eq!(symbol.label(symbol.epsilon_id()), 'ϵ'.to_string());
+    /// assert_eq!(symbol.label(9999), '�'.to_string());
+    /// ```
+    pub fn label(&self, id: usize) -> String {
+        match self.reverse.get(&id) {
+            Some(val) => val.iter().copied().collect(),
+            None => {
+                if id == self.not_in_alphabet_id() {
+                    '\u{2299}'.to_string() // ⊙
+                } else if id == self.epsilon_id() {
+                    '\u{03F5}'.to_string() // ϵ
+                } else {
+                    '\u{FFFD}'.to_string() // �
+                }
+            }
+        }
     }
 
     /// Returns an iterator over the underlying table
@@ -304,9 +358,6 @@ impl SymbolTable {
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut retval = Vec::new();
         for (index, chars) in &self.reverse {
-            if *index == 0 || *index == self.table.len() {
-                continue; //don't insert epsilon or "NOT_IN_ALPHABET"
-            }
             retval.extend(u32::to_le_bytes(*index as u32));
             let all_symbols = chars.iter().collect::<String>();
             let all_symbols_bytes = all_symbols.as_bytes();
@@ -317,7 +368,7 @@ impl SymbolTable {
     }
 
     /// Contructs a symbol table from an array of bytes previously generated with
-    /// [SymbolTable::as_u8].
+    /// [SymbolTable::as_bytes].
     pub fn from_bytes(v: &[u8]) -> Result<Self, ParseError> {
         let malformed_err = "malformed symbol_table";
         if !v.is_empty() {
@@ -365,8 +416,6 @@ impl SymbolTable {
                 });
                 reverse.insert(symbol_index, symbol_set);
             }
-            reverse.insert(0, btreeset!['\u{03F5}']);
-            reverse.insert(table.len(), btreeset!['\u{233A}']); //any char not in alphabet
             Ok(SymbolTable { table, reverse })
         } else {
             Err(ParseError::DeserializeError {
@@ -464,8 +513,8 @@ mod tests {
         let set1 = btreeset! {'a'};
         let set = btreeset! {set1};
         let symbol = SymbolTable::new(set);
-        assert_eq!(*symbol.table.get(&'a').unwrap(), 1);
-        assert_eq!(symbol.ids(), 3);
+        assert_eq!(*symbol.table.get(&'a').unwrap(), 0);
+        assert_eq!(symbol.ids(), 2);
     }
 
     #[test]
@@ -478,14 +527,14 @@ mod tests {
         let set6 = btreeset! {'h', 'c'};
         let set = btreeset! {set1, set2, set3, set4, set5, set6};
         let symbol = SymbolTable::new(set);
-        assert_eq!(symbol.get('f'), symbol.get('g'));
-        assert_ne!(symbol.get('a'), symbol.get('b'));
+        assert_eq!(symbol.symbol_id('f'), symbol.symbol_id('g'));
+        assert_ne!(symbol.symbol_id('a'), symbol.symbol_id('b'));
     }
 
     #[test]
     fn symbol_table_empty() {
-        let symbol = SymbolTable::empty();
-        assert_eq!(symbol.ids(), 2);
+        let symbol = SymbolTable::default();
+        assert_eq!(symbol.ids(), 1);
     }
 
     #[test]
@@ -493,8 +542,8 @@ mod tests {
         let set1 = btreeset! {'a', 'b', 'c'};
         let set2 = btreeset! {'b', 'c', 'd'};
         let symbol = SymbolTable::new(btreeset! {set1, set2});
-        assert_eq!(symbol.ids(), 5);
-        assert_eq!(symbol.get('e'), symbol.ids() - 1);
+        assert_eq!(symbol.ids(), 4);
+        assert_eq!(symbol.symbol_id('e'), symbol.not_in_alphabet_id());
     }
 
     #[test]
@@ -504,13 +553,13 @@ mod tests {
         let set3 = btreeset! {'f','g','h'};
         let set = btreeset! {set1, set2, set3};
         let symbol = SymbolTable::new(set);
-        assert_ne!(symbol.get('f'), symbol.get('g'));
-        assert_eq!(symbol.get('d'), symbol.get('e'));
+        assert_ne!(symbol.symbol_id('f'), symbol.symbol_id('g'));
+        assert_eq!(symbol.symbol_id('d'), symbol.symbol_id('e'));
 
-        let retrieve1 = symbol.get_set(&btreeset! {'a', 'b', 'c'});
-        assert_eq!(retrieve1.len(), 1); //[a, b, c] have the same value
-        let retrieve2 = symbol.get_set(&btreeset! {'d', 'e', 'f'});
-        assert_eq!(retrieve2.len(), 2); //[d, e] [f] are the sets
+        let retrieve1 = symbol.symbols_ids(&btreeset! {'a', 'b', 'c'});
+        assert_eq!(retrieve1.len(), 1); //[a, b, c] have the same value so only [0] returned
+        let retrieve2 = symbol.symbols_ids(&btreeset! {'d', 'e', 'f'});
+        assert_eq!(retrieve2.len(), 2); //[d, e] [f] are the sets so [1, 2] is returned
     }
 
     #[test]
@@ -520,12 +569,12 @@ mod tests {
         let symbol = SymbolTable::new(btreeset! {set1, set2});
 
         let negate_me = btreeset! {'b','c'};
-        let negated = symbol.get_negated(&negate_me);
-        assert!(negated.contains(&symbol.get('a')));
-        assert!(negated.contains(&symbol.get('d')));
-        assert!(negated.contains(&symbol.get('㊈')));
-        assert!(!negated.contains(&symbol.get('b')));
-        assert!(!negated.contains(&symbol.get('c')));
+        let negated = symbol.symbols_ids_negated(&negate_me);
+        assert!(negated.contains(&symbol.symbol_id('a')));
+        assert!(negated.contains(&symbol.symbol_id('d')));
+        assert!(negated.contains(&symbol.symbol_id('㊈')));
+        assert!(!negated.contains(&symbol.symbol_id('b')));
+        assert!(!negated.contains(&symbol.symbol_id('c')));
     }
 
     #[test]
