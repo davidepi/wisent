@@ -1,6 +1,7 @@
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
 use super::nfa::Nfa;
 use super::{Automaton, BSTree, SymbolTable};
+use crate::error::ParseError;
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
 use maplit::btreeset;
@@ -15,7 +16,7 @@ use std::fmt::Write;
 /// An example of DFA recognizing the language `a|b*` is the following:
 ///
 /// ![DFA Example](../../../../doc/images/dfa.svg)
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dfa {
     /// Number of states.
     states_no: u32,
@@ -70,6 +71,72 @@ impl Dfa {
             // minimize the dfa
             min_dfa(big_dfa)
         }
+    }
+
+    /// Serialize the current DFA into a vector of bytes.
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut retval = Vec::new();
+        let symtable = self.alphabet.as_bytes();
+        retval.extend(u32::to_le_bytes(self.states_no));
+        retval.extend(u32::to_le_bytes(self.start));
+        retval.extend(u32::to_le_bytes(symtable.len() as u32));
+        retval.extend(u32::to_le_bytes(self.transition.len() as u32));
+        retval.extend(u32::to_le_bytes(self.accept.len() as u32));
+        retval.extend(symtable);
+        for ((node_src, symbol), node_dst) in &self.transition {
+            retval.extend(u32::to_le_bytes(*node_src));
+            retval.extend(u32::to_le_bytes(*symbol));
+            retval.extend(u32::to_le_bytes(*node_dst));
+        }
+        for (accepting_node, accepted_production) in &self.accept {
+            retval.extend(u32::to_le_bytes(*accepting_node));
+            retval.extend(u32::to_le_bytes(*accepted_production));
+        }
+        retval
+    }
+
+    /// Deserialize a DFA from a slice of bytes.
+    pub fn from_bytes(v: &[u8]) -> Result<Self, ParseError> {
+        let malformed_err = "malformed dfa";
+        let parse_u32 = |i: &mut usize| -> Result<u32, ParseError> {
+            let bytes: [u8; 4] = v
+                .get(*i..*i + 4)
+                .ok_or_else(|| ParseError::DeserializeError {
+                    message: malformed_err.to_string(),
+                })?
+                .try_into()
+                .map_err(|_| ParseError::DeserializeError {
+                    message: malformed_err.to_string(),
+                })?;
+            *i += 4;
+            Ok(u32::from_le_bytes(bytes))
+        };
+        let mut i = 0;
+        let states_no = parse_u32(&mut i)?;
+        let start = parse_u32(&mut i)?;
+        let symtable_len = parse_u32(&mut i)? as usize;
+        let transition_len = parse_u32(&mut i)? as usize;
+        let accept_len = parse_u32(&mut i)? as usize;
+        let symtable = SymbolTable::from_bytes(&v[i..i + symtable_len])?;
+        i += symtable_len;
+        let mut transition =
+            FnvHashMap::with_capacity_and_hasher(transition_len, Default::default());
+        for _ in 0..transition_len {
+            let k = (parse_u32(&mut i)?, parse_u32(&mut i)?);
+            let v = parse_u32(&mut i)?;
+            transition.insert(k, v);
+        }
+        let mut accept = FnvHashMap::with_capacity_and_hasher(accept_len, Default::default());
+        for _ in 0..accept_len {
+            accept.insert(parse_u32(&mut i)?, parse_u32(&mut i)?);
+        }
+        Ok(Dfa {
+            states_no,
+            transition,
+            alphabet: symtable,
+            start,
+            accept,
+        })
     }
 }
 
@@ -662,6 +729,7 @@ fn remap(partitions: Vec<FnvHashSet<u32>>, positions: FnvHashMap<u32, u32>, dfa:
 
 #[cfg(test)]
 mod tests {
+    use crate::error::ParseError;
     use crate::grammar::Grammar;
     use crate::lexer::{Automaton, Dfa, Nfa};
 
@@ -818,5 +886,19 @@ mod tests {
         let dfa = nfa.clone().to_dfa();
         assert!(nfa.is_empty());
         assert!(dfa.is_empty());
+    }
+
+    #[test]
+    fn dfa_serialization() -> Result<(), ParseError> {
+        let grammar = Grammar::new(
+            &["[a-c].?([b-d]?[e-g])*", "[fg]+"],
+            &[],
+            &["LONG1", "LONG2"],
+        );
+        let dfa = Dfa::new(&grammar);
+        let serialized = dfa.as_bytes();
+        let deserialized = Dfa::from_bytes(&serialized)?;
+        assert_eq!(dfa, deserialized);
+        Ok(())
     }
 }
