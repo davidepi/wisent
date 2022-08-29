@@ -96,8 +96,8 @@ impl std::fmt::Display for ExLiteral {
 #[allow(clippy::upper_case_acronyms)]
 pub enum Literal {
     /// The input symbol (a single letter. The value is the number in the symbol table).
-    Symbol(usize),
-    Acc(usize),
+    Symbol(u32),
+    Acc(u32),
     /// Kleenee star unary operator `*`.
     KLEENE,
     /// Concatenation operator.
@@ -599,7 +599,7 @@ fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> Canonic
     }
 }
 
-fn set_to_literal_node(set: BTreeSet<usize>, epsilon_id: usize) -> CanonicalTree {
+fn set_to_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
     if set.is_empty() {
         BSTree {
             value: Literal::Symbol(epsilon_id),

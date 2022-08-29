@@ -56,9 +56,9 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
-    table: FnvHashMap<char, usize>,
+    table: FnvHashMap<char, u32>,
     // table for reverse lookup, given an ID prints the transition set (useful only for debug)
-    reverse: FnvHashMap<usize, BTreeSet<char>>,
+    reverse: FnvHashMap<u32, BTreeSet<char>>,
 }
 
 impl Default for SymbolTable {
@@ -163,8 +163,8 @@ impl SymbolTable {
     /// inside the symbol table.
     ///
     /// Its ID is the highest ID found in the symbol table + 1.
-    pub fn not_in_alphabet_id(&self) -> usize {
-        self.reverse.len()
+    pub fn not_in_alphabet_id(&self) -> u32 {
+        self.reverse.len() as u32
     }
 
     /// Returns the ID of the epsilon symbol.
@@ -175,8 +175,8 @@ impl SymbolTable {
     /// for the current symbol table.
     ///
     /// Its ID is the highest ID found in the symbol table + 2.
-    pub fn epsilon_id(&self) -> usize {
-        self.reverse.len() + 1
+    pub fn epsilon_id(&self) -> u32 {
+        self.reverse.len() as u32 + 1
     }
 
     /// Returns the amount of unique IDs assigned to the symbols.
@@ -227,7 +227,7 @@ impl SymbolTable {
     /// assert_eq!(index_a, 0);
     /// assert_eq!(index_not_in_table, 3);
     /// ```
-    pub fn symbol_id(&self, symbol: char) -> usize {
+    pub fn symbol_id(&self, symbol: char) -> u32 {
         *self
             .table
             .get(&symbol)
@@ -261,7 +261,7 @@ impl SymbolTable {
     /// ```
     /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
     /// A set of `[b, d]` will return two values: the one for `[b, c]` and the one for `[d]`.
-    pub fn symbols_ids(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
+    pub fn symbols_ids(&self, symbols: &BTreeSet<char>) -> BTreeSet<u32> {
         let mut ret = BTreeSet::new();
         for symbol in symbols {
             match self.table.get(symbol) {
@@ -300,7 +300,7 @@ impl SymbolTable {
     /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
     /// A set of `[b, c, d]`, corresponding to `[^bcd]` in regexp syntax, will return two
     /// values, the one for `[a]` and the one for any other char not in table.
-    pub fn symbols_ids_negated(&self, symbols: &BTreeSet<char>) -> BTreeSet<usize> {
+    pub fn symbols_ids_negated(&self, symbols: &BTreeSet<char>) -> BTreeSet<u32> {
         let mut accept = BTreeSet::new();
         for symbol in &self.table {
             // this fails if negating only "partial sets". however in a normal execution should
@@ -334,7 +334,7 @@ impl SymbolTable {
     /// assert_eq!(symbol.label(symbol.epsilon_id()), 'ϵ'.to_string());
     /// assert_eq!(symbol.label(9999), '�'.to_string());
     /// ```
-    pub fn label(&self, id: usize) -> String {
+    pub fn label(&self, id: u32) -> String {
         match self.reverse.get(&id) {
             Some(val) => val.iter().copied().collect(),
             None => {
@@ -350,7 +350,7 @@ impl SymbolTable {
     }
 
     /// Returns an iterator over the underlying table
-    pub fn iter(&self) -> Iter<char, usize> {
+    pub fn iter(&self) -> Iter<char, u32> {
         self.table.iter()
     }
 
@@ -358,7 +358,7 @@ impl SymbolTable {
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut retval = Vec::new();
         for (index, chars) in &self.reverse {
-            retval.extend(u32::to_le_bytes(*index as u32));
+            retval.extend(u32::to_le_bytes(*index));
             let all_symbols = chars.iter().collect::<String>();
             let all_symbols_bytes = all_symbols.as_bytes();
             retval.extend(u32::to_le_bytes(all_symbols_bytes.len() as u32));
@@ -386,7 +386,7 @@ impl SymbolTable {
                         message: malformed_err.to_string(),
                     })?;
                 i += 4;
-                let symbol_index = u32::from_le_bytes(symbol_index_bytes) as usize;
+                let symbol_index = u32::from_le_bytes(symbol_index_bytes);
                 let chars_len_bytes: [u8; 4] = v
                     .get(i..i + 4)
                     .ok_or_else(|| ParseError::DeserializeError {
@@ -456,7 +456,7 @@ pub trait Automaton {
     ///
     /// assert_eq!(nfa.nodes(), 7);
     /// ```
-    fn nodes(&self) -> usize;
+    fn nodes(&self) -> u32;
 
     /// Returns the number of edges in the automaton.
     /// # Examples
@@ -470,7 +470,7 @@ pub trait Automaton {
     ///
     /// assert_eq!(nfa.edges(), 8)
     /// ```
-    fn edges(&self) -> usize;
+    fn edges(&self) -> u32;
 
     /// Returns a graphviz dot representation of the automaton as string.
     /// # Examples

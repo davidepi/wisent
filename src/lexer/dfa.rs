@@ -18,15 +18,15 @@ use std::fmt::Write;
 #[derive(Clone)]
 pub struct Dfa {
     /// Number of states.
-    states_no: usize,
+    states_no: u32,
     /// Transition function: (node index, symbol) -> (node).
-    transition: HashMap<(usize, usize), usize>,
+    transition: FnvHashMap<(u32, u32), u32>,
     /// Set of symbols in the language.
     alphabet: SymbolTable,
     /// Starting node.
-    start: usize,
+    start: u32,
     /// Accepting states: (node index) -> (accepted production).
-    accept: FnvHashMap<usize, usize>,
+    accept: FnvHashMap<u32, u32>,
 }
 
 impl std::fmt::Display for Dfa {
@@ -57,7 +57,7 @@ impl Dfa {
             // no production found, return a single state, no transaction DFA.
             Dfa {
                 states_no: 1,
-                transition: HashMap::new(),
+                transition: FnvHashMap::default(),
                 alphabet: SymbolTable::default(),
                 start: 0,
                 accept: FnvHashMap::default(),
@@ -78,12 +78,12 @@ impl Automaton for Dfa {
         self.transition.is_empty()
     }
 
-    fn nodes(&self) -> usize {
+    fn nodes(&self) -> u32 {
         self.states_no
     }
 
-    fn edges(&self) -> usize {
-        self.transition.len()
+    fn edges(&self) -> u32 {
+        self.transition.len() as u32
     }
 
     fn to_dot(&self) -> String {
@@ -129,7 +129,7 @@ fn subset_construction(nfa: &Nfa) -> Dfa {
     let mut ds_unmarked = Vec::new();
     let mut indices = HashMap::new();
     let mut index = 0;
-    let mut transition = HashMap::new();
+    let mut transition = FnvHashMap::default();
     let mut accept = FnvHashMap::default();
 
     let mut start_set = FnvHashSet::default();
@@ -193,10 +193,10 @@ fn subset_construction(nfa: &Nfa) -> Dfa {
 /// - `set`: the input set where to start the epsilon move
 /// - `transition`: transition table of the NFA
 fn sc_epsilon_closure(
-    set: FnvHashSet<usize>,
-    transition_table: &HashMap<(usize, usize), FnvHashSet<usize>>,
-    epsilon_id: usize,
-) -> BTreeSet<usize> {
+    set: FnvHashSet<u32>,
+    transition_table: &FnvHashMap<(u32, u32), FnvHashSet<u32>>,
+    epsilon_id: u32,
+) -> BTreeSet<u32> {
     let mut stack = set.iter().copied().collect::<Vec<_>>();
     let mut closure = set;
     while let Some(t) = stack.pop() {
@@ -212,7 +212,7 @@ fn sc_epsilon_closure(
 ///
 /// Returns Some(production index) if the current set is accepting, None otherwise. Will return
 /// the lowest production index possible (production appearing first).
-fn sc_accepting(set: &BTreeSet<usize>, accepting: &FnvHashMap<usize, usize>) -> Option<usize> {
+fn sc_accepting(set: &BTreeSet<u32>, accepting: &FnvHashMap<u32, u32>) -> Option<u32> {
     let mut productions = BTreeSet::new(); //so I can easily get the min()
     for node in accepting {
         if set.contains(node.0) {
@@ -234,10 +234,10 @@ fn sc_accepting(set: &BTreeSet<usize>, accepting: &FnvHashMap<usize, usize>) -> 
 /// - `symbol`: The given symbol for the move
 /// - `transition`: The transition table
 fn sc_move(
-    set: &BTreeSet<usize>,
-    symbol: usize,
-    transition: &HashMap<(usize, usize), FnvHashSet<usize>>,
-) -> FnvHashSet<usize> {
+    set: &BTreeSet<u32>,
+    symbol: u32,
+    transition: &FnvHashMap<(u32, u32), FnvHashSet<u32>>,
+) -> FnvHashSet<u32> {
     let mut ret = FnvHashSet::default();
     for node in set {
         if let Some(t) = transition.get(&(*node, symbol)) {
@@ -251,15 +251,15 @@ fn sc_move(
 /// Accepting states are labeled with a new node in the canonical tree.
 fn merge_regex_trees(nodes: Vec<CanonicalTree>) -> CanonicalTree {
     let mut roots = Vec::new();
-    for node in nodes.into_iter().enumerate() {
+    for (node_no, node) in nodes.into_iter().enumerate() {
         let right = BSTree {
-            value: Literal::Acc(node.0),
+            value: Literal::Acc(node_no as u32),
             left: None,
             right: None,
         };
         let root = BSTree {
             value: Literal::AND,
-            left: Some(Box::new(node.1)),
+            left: Some(Box::new(node)),
             right: Some(Box::new(right)),
         };
         roots.push(root);
@@ -283,15 +283,15 @@ struct DCHelper {
     /// and the followpos is deferred from the firstpos, nullable, lastpos.
     ttype: Literal,
     ///
-    index: usize,
+    index: u32,
     /// true if the current node is nullable.
     nullable: bool,
     /// firstpos for the current set (has an average size of 22 on the C grammar so BTreeSet is
     /// faster than HashSet).
-    firstpos: BTreeSet<usize>,
+    firstpos: BTreeSet<u32>,
     /// lastpos for the current set (has an average size of 22 on the C grammar so BTreeSet is
     /// faster than HashSet).
-    lastpos: BTreeSet<usize>,
+    lastpos: BTreeSet<u32>,
 }
 
 /// Performs a direct DFA construction from the canonical tree without using an intermediate NFA.
@@ -300,8 +300,8 @@ struct DCHelper {
 /// Guaranteed to have a move on every symbol for every node.
 fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
     let helper = build_dc_helper(&node, 0, symtable.epsilon_id());
-    let mut indices = vec![symtable.epsilon_id(); helper.value.index + 1];
-    let mut followpos = vec![BTreeSet::new(); helper.value.index + 1];
+    let mut indices = vec![symtable.epsilon_id(); (helper.value.index + 1) as usize];
+    let mut followpos = vec![BTreeSet::new(); (helper.value.index + 1) as usize];
     //retrieve accepting nodes (they are embedded in the helper tree, we don't have NFA here)
     let mut accepting_nodes = FnvHashMap::default();
     dc_assign_index_to_literal(&helper, &mut indices, &mut accepting_nodes);
@@ -322,20 +322,20 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
     }
     let mut index = 1;
     let mut unmarked = vec![helper.value.firstpos];
-    let mut tran = HashMap::new();
+    let mut tran = FnvHashMap::default();
     let alphabet = indices
         .iter()
         .filter(|x| **x != symtable.epsilon_id())
         .copied()
-        .collect::<FnvHashSet<usize>>();
+        .collect::<FnvHashSet<u32>>();
     // loop, conceptually similar to subset construction, but uses followpos instead of NFA
     // (followpos is essentially an NFA without epsilon moves)
     while let Some(node_set) = unmarked.pop() {
         for symbol in &alphabet {
             let u = node_set
                 .iter()
-                .filter(|x| indices[**x] == *symbol)
-                .flat_map(|x| &followpos[*x])
+                .filter(|x| indices[**x as usize] == *symbol)
+                .flat_map(|x| &followpos[*x as usize])
                 .cloned()
                 .collect::<BTreeSet<_>>();
             let u_idx;
@@ -369,11 +369,7 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
 ///
 /// - `node`: the root of the tree (it's a recursive function)
 /// - `start_index`: starting index of the output DFA (0 for the first invocation)
-fn build_dc_helper(
-    node: &CanonicalTree,
-    start_index: usize,
-    epsilon_id: usize,
-) -> BSTree<DCHelper> {
+fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> BSTree<DCHelper> {
     //postorder because I need to build it bottom up
     let mut index = start_index;
     let mut children = [&node.left, &node.right]
@@ -455,7 +451,7 @@ fn build_dc_helper(
 ///
 /// Computes `followpos` set. Each index of the output vector is the index of the DFA node, and the
 /// content of that cell is the followpos set.
-fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<usize>>) {
+fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
     if let Some(l) = &node.left {
         dc_compute_followpos(l, graph);
     }
@@ -470,12 +466,18 @@ fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<usize>
             let c1 = &**node.left.as_ref().unwrap();
             let c2 = &**node.right.as_ref().unwrap();
             for i in &c1.value.lastpos {
-                graph[*i] = graph[*i].union(&c2.value.firstpos).cloned().collect();
+                graph[*i as usize] = graph[*i as usize]
+                    .union(&c2.value.firstpos)
+                    .cloned()
+                    .collect();
             }
         }
         Literal::KLEENE => {
             for i in &node.value.lastpos {
-                graph[*i] = graph[*i].union(&node.value.firstpos).cloned().collect();
+                graph[*i as usize] = graph[*i as usize]
+                    .union(&node.value.firstpos)
+                    .cloned()
+                    .collect();
             }
         }
     }
@@ -486,8 +488,8 @@ fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<usize>
 /// the production number for each accepting node.
 fn dc_assign_index_to_literal(
     node: &BSTree<DCHelper>,
-    indices: &mut Vec<usize>,
-    acc: &mut FnvHashMap<usize, usize>,
+    indices: &mut Vec<u32>,
+    acc: &mut FnvHashMap<u32, u32>,
 ) {
     if let Some(l) = &node.left {
         dc_assign_index_to_literal(l, indices, acc);
@@ -496,7 +498,7 @@ fn dc_assign_index_to_literal(
         dc_assign_index_to_literal(r, indices, acc);
     }
     match &node.value.ttype {
-        Literal::Symbol(val) => indices[node.value.index] = *val,
+        Literal::Symbol(val) => indices[node.value.index as usize] = *val,
         Literal::Acc(prod) => {
             acc.insert(node.value.index, *prod);
         }
@@ -515,10 +517,10 @@ fn min_dfa(dfa: Dfa) -> Dfa {
     let mut positions = FnvHashMap::default();
     for (partition_index, partition) in partitions.iter().enumerate() {
         for node in partition {
-            positions.insert(*node, partition_index);
+            positions.insert(*node, partition_index as u32);
         }
     }
-    while partitions.len() < dfa.states_no {
+    while partitions.len() < dfa.states_no as usize {
         let mut old_partitions = Vec::new();
         let mut new_partitions = Vec::new();
         for partition in partitions {
@@ -536,7 +538,7 @@ fn min_dfa(dfa: Dfa) -> Dfa {
             for (new_idx, partition) in new_partitions.iter().enumerate() {
                 for node in partition {
                     positions.remove(node);
-                    positions.insert(*node, old_partitions.len() + new_idx);
+                    positions.insert(*node, (old_partitions.len() + new_idx) as u32);
                 }
             }
             old_partitions.append(&mut new_partitions);
@@ -550,24 +552,24 @@ fn min_dfa(dfa: Dfa) -> Dfa {
 ///
 /// Creates the initial partitions: non accepting nodes, and a partition for each group of accepting
 /// nodes announcing the same rule.
-fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<usize>> {
-    let mut announced_max = std::usize::MIN;
+fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<u32>> {
+    let mut announced_max = std::u32::MIN;
     let mut acc = FnvHashSet::default();
-    for announced in &dfa.accept {
-        acc.insert(*announced.0);
-        announced_max = announced_max.max(*announced.1);
+    for (announcing_state, announced_rule) in &dfa.accept {
+        acc.insert(*announcing_state);
+        announced_max = announced_max.max(*announced_rule);
     }
     let accepting_no = announced_max + 1;
     let nacc = (0..)
-        .take(dfa.states_no)
+        .take(dfa.states_no as usize)
         .collect::<FnvHashSet<_>>()
         .difference(&acc)
         .cloned()
         .collect::<FnvHashSet<_>>();
     // this is a DFA for lexical analysis so I need to further split acc by announced rule
-    let mut ret = vec![FnvHashSet::default(); accepting_no];
-    for announced in &dfa.accept {
-        ret[(*announced.1)].insert(*announced.0);
+    let mut ret = vec![FnvHashSet::default(); accepting_no as usize];
+    for (announcing_state, announced_rule) in &dfa.accept {
+        ret[(*announced_rule) as usize].insert(*announcing_state);
     }
     ret.push(nacc); //add the non_accepting partition to the end
     ret
@@ -577,10 +579,10 @@ fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<usize>> {
 ///
 /// Splits a partition if two nodes goes to different partitions on the same symbol.
 fn split_partition(
-    partition: FnvHashSet<usize>,
-    position: &FnvHashMap<usize, usize>,
+    partition: FnvHashSet<u32>,
+    position: &FnvHashMap<u32, u32>,
     dfa: &Dfa,
-) -> (FnvHashSet<usize>, FnvHashSet<usize>) {
+) -> (FnvHashSet<u32>, FnvHashSet<u32>) {
     let mut split = FnvHashSet::default();
     if partition.len() > 1 {
         for symbol in dfa.alphabet.iter() {
@@ -611,12 +613,12 @@ fn split_partition(
 /// one.
 ///
 /// Also, removes the sink, if any and not accepting.
-fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>, dfa: Dfa) -> Dfa {
+fn remap(partitions: Vec<FnvHashSet<u32>>, positions: FnvHashMap<u32, u32>, dfa: Dfa) -> Dfa {
     //first record in which partitions is every node
-    let mut new_trans = HashMap::new();
+    let mut new_trans = FnvHashMap::default();
     let mut accept = FnvHashMap::default();
-    let mut in_degree = vec![0_usize; partitions.len()];
-    let mut out_degree = vec![0_usize; partitions.len()];
+    let mut in_degree = vec![0; partitions.len()];
+    let mut out_degree = vec![0; partitions.len()];
     //remap accepting nodes
     for acc_node in dfa.accept {
         accept.insert(*positions.get(&acc_node.0).unwrap(), acc_node.1);
@@ -629,8 +631,8 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
         let old_target = transition.1;
         let new_target = *positions.get(&old_target).unwrap();
         if new_source != new_target {
-            out_degree[new_source] += 1;
-            in_degree[new_target] += 1;
+            out_degree[new_source as usize] += 1;
+            in_degree[new_target as usize] += 1;
         }
         new_trans.insert((new_source, letter), new_target);
     }
@@ -638,10 +640,11 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
     let start = *positions.get(&0).unwrap();
     // remove unreachable states (and non-accepting sinks)
     //broken: no in-edges and no start state OR no out-edges and not accepting, excluding self-loops
-    let broken_states = (0..)
+    let broken_states = (0_u32..)
         .take(partitions.len())
         .filter(|x| {
-            (in_degree[*x] == 0 && *x != start) || (out_degree[*x] == 0 && !accept.contains_key(x))
+            (in_degree[*x as usize] == 0 && *x != start)
+                || (out_degree[*x as usize] == 0 && !accept.contains_key(x))
         })
         .collect::<BTreeSet<_>>();
     new_trans = new_trans
@@ -649,7 +652,7 @@ fn remap(partitions: Vec<FnvHashSet<usize>>, positions: FnvHashMap<usize, usize>
         .filter(|x| !broken_states.contains(&(x.0).0) && !broken_states.contains(&x.1))
         .collect();
     Dfa {
-        states_no: partitions.len() - broken_states.len(),
+        states_no: (partitions.len() - broken_states.len()) as u32,
         transition: new_trans,
         alphabet: dfa.alphabet,
         accept,

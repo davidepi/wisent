@@ -3,8 +3,6 @@ use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
 use super::{Automaton, SymbolTable};
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
-use maplit::hashmap;
-use std::collections::HashMap;
 use std::fmt::Write;
 
 /// A Non-deterministic Finite Automaton for lexical analysis.
@@ -20,15 +18,15 @@ use std::fmt::Write;
 #[derive(Clone)]
 pub struct Nfa {
     /// Number of states.
-    pub(super) states_no: usize,
+    pub(super) states_no: u32,
     /// Transition map. (node index, symbol) -> Set(node index).
-    pub(super) transition: HashMap<(usize, usize), FnvHashSet<usize>>,
+    pub(super) transition: FnvHashMap<(u32, u32), FnvHashSet<u32>>,
     /// All the symbols recognized by the NFA, except EPSILON and ANY_VALUE.
     pub(super) alphabet: SymbolTable,
     /// Starting node of the NFA.
-    pub(super) start: usize,
+    pub(super) start: u32,
     /// Accepting states. (node index) -> (production index)
-    pub(super) accept: FnvHashMap<usize, usize>,
+    pub(super) accept: FnvHashMap<u32, u32>,
 }
 
 impl Nfa {
@@ -51,7 +49,7 @@ impl Nfa {
             // no production found, return a single state, no transaction NFA.
             Nfa {
                 states_no: 1,
-                transition: HashMap::new(),
+                transition: FnvHashMap::default(),
                 alphabet: SymbolTable::default(),
                 start: 0,
                 accept: FnvHashMap::default(),
@@ -63,7 +61,7 @@ impl Nfa {
                 .iter()
                 .enumerate()
                 .map(|x| {
-                    let nfa = thompson_construction(x.1, index, x.0, epsilon_id);
+                    let nfa = thompson_construction(x.1, index, x.0 as u32, epsilon_id);
                     index += nfa.nodes();
                     nfa
                 })
@@ -82,7 +80,7 @@ impl Nfa {
                 let mut transition_table = thompson_nfas
                     .into_iter()
                     .flat_map(|x| x.transition)
-                    .collect::<HashMap<_, _>>();
+                    .collect::<FnvHashMap<_, _>>();
                 transition_table.insert((index, epsilon_id), start_transition);
                 index += 1;
                 Nfa {
@@ -135,12 +133,14 @@ impl Automaton for Nfa {
         self.transition.is_empty()
     }
 
-    fn nodes(&self) -> usize {
+    fn nodes(&self) -> u32 {
         self.states_no
     }
 
-    fn edges(&self) -> usize {
-        self.transition.iter().fold(0, |acc, x| x.1.len() + acc)
+    fn edges(&self) -> u32 {
+        self.transition
+            .iter()
+            .fold(0, |acc, x| x.1.len() as u32 + acc)
     }
 
     fn to_dot(&self) -> String {
@@ -179,9 +179,9 @@ impl Automaton for Nfa {
 /// - `production`: This is the announced production index for the current parse tree.
 fn thompson_construction(
     prod: &CanonicalTree,
-    start_index: usize,
-    production: usize,
-    epsilon_id: usize,
+    start_index: u32,
+    production: u32,
+    epsilon_id: u32,
 ) -> Nfa {
     let mut index = start_index;
     let mut visit = vec![prod];
@@ -206,11 +206,11 @@ fn thompson_construction(
                 target_set.insert(index + 1);
                 let mut accept = FnvHashMap::default();
                 accept.insert(index + 1, production);
+                let mut transition = FnvHashMap::default();
+                transition.insert((index, val), target_set);
                 pushme = Nfa {
                     states_no: 2,
-                    transition: hashmap! {
-                        (index, val) => target_set,
-                    },
+                    transition,
                     alphabet: SymbolTable::default(),
                     start: index,
                     accept,
