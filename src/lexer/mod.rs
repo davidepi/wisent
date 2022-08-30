@@ -12,6 +12,7 @@ use crate::error::ParseError;
 
 pub use self::dfa::Dfa;
 pub use self::nfa::Nfa;
+pub use self::simulator::Utf8CharReader;
 
 /// A Binary Search Tree.
 #[derive(Clone)]
