@@ -11,6 +11,7 @@ pub enum ParseError {
     IOError(std::io::Error),
     SyntaxError { message: String },
     DeserializeError { message: String },
+    LexerSimulationError { message: String },
 }
 
 impl From<std::io::Error> for ParseError {
@@ -28,6 +29,9 @@ impl std::fmt::Display for ParseError {
             ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {}", message),
             ParseError::DeserializeError { message } => {
                 write!(buffer, "DeserializeError: {}", message)
+            }
+            ParseError::LexerSimulationError { message } => {
+                write!(buffer, "LexerSimulationError: {}", message)
             }
         }
     }

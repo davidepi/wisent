@@ -1,5 +1,121 @@
+use crate::error::ParseError;
+use crate::lexer::{Dfa, SymbolTable};
 use std::io::Error as IOError;
 use std::str::Chars;
+
+const BUFFER_SIZE: u16 = 4096;
+
+struct CharBuffer {
+    data: [u32; BUFFER_SIZE as usize],
+    len: u16,
+}
+
+impl Default for CharBuffer {
+    fn default() -> Self {
+        Self {
+            data: [0; BUFFER_SIZE as usize],
+            len: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+/// Simple to struct to name indices for the lexeme_pos and forward_pos
+/// Just to remember what they represents, with a tuple it would be a mess
+struct BufferIndexer {
+    index: u16,
+    buffer_index: u8,
+}
+
+/// Lexical analyzer for a DFA
+///
+/// Simulates a Dfa with a given input and groups the input characters in tokens according to the
+/// rules of the grammar passed to the [`Dfa`].
+pub struct DfaSimulator<R: Utf8CharReader> {
+    /// Buffer and its len (capacity is BUFFER_SIZE, len is the second value in the tuple)
+    buffers: [CharBuffer; 2],
+    /// Position of the next lexeme to read and the buffer where it is
+    lexeme_pos: BufferIndexer,
+    /// Position of the next lookahead character to read and the buffer where it is
+    forward_pos: BufferIndexer,
+    symtable: SymbolTable,
+    reader: R,
+}
+
+impl<R: Utf8CharReader> DfaSimulator<R> {
+    /// Creates a new Lexical Analyzer with the given DFA and the given input.
+    /// # Examples
+    /// Retrieving letters and numbers from a string:
+    /// **TODO:** write an example when the public interface is available
+    pub fn new(dfa: Dfa, mut reader: R) -> Result<Self, ParseError> {
+        let mut first_buffer = Default::default();
+        let symtable = dfa.alphabet;
+        refill_buffer(&mut first_buffer, &mut reader, &symtable)?;
+        Ok(DfaSimulator {
+            buffers: [first_buffer, Default::default()],
+            symtable,
+            lexeme_pos: Default::default(),
+            forward_pos: Default::default(),
+            reader,
+        })
+    }
+
+    /// Reads the next character from the input in form of [`SymbolTable`] IDs.
+    ///
+    /// Takes care of buffering the read and handling the buffers.
+    ///
+    /// DO NOT change the input `s` until EOF is returned!
+    fn next_char(&mut self) -> Result<Option<u32>, ParseError> {
+        let mut current_buffer = &self.buffers[self.forward_pos.buffer_index as usize];
+        if self.forward_pos.index == current_buffer.len {
+            // refill buffer
+            // swap buffers and refill the other one
+            let next_index = (self.forward_pos.buffer_index + 1) % self.buffers.len() as u8;
+            let count_bytes = refill_buffer(
+                &mut self.buffers[next_index as usize],
+                &mut self.reader,
+                &self.symtable,
+            )?;
+            if count_bytes == 0 {
+                // EOF
+                return Ok(None);
+            } else {
+                if self.lexeme_pos.buffer_index != self.forward_pos.buffer_index {
+                    // lexeme is longer than an entire buffer, and buffer was overwritten
+                    // can't continue
+                    return Err(ParseError::LexerSimulationError {
+                        message: "lexeme size exceeded the maximum supported size".to_string(),
+                    });
+                }
+                self.forward_pos.buffer_index = next_index;
+                self.forward_pos.index = 0;
+                current_buffer = &self.buffers[self.forward_pos.buffer_index as usize];
+            }
+        }
+        // if arrives here, then forward_pos < buffer len
+        let char = current_buffer.data[self.forward_pos.index as usize];
+        self.forward_pos.index += 1;
+        Ok(Some(char))
+    }
+}
+
+/// Refill the simulator buffer by taking symbols from `r` and converting them to their ID in the
+/// symbol table.
+/// Returns the amount of bytes read. The amount of chars read, instead, will be written in the
+/// `len` parameter of the `CharBuffer`
+fn refill_buffer<R: Utf8CharReader>(
+    buf: &mut CharBuffer,
+    r: &mut R,
+    symtab: &SymbolTable,
+) -> Result<usize, IOError> {
+    let string = r.read_chars(BUFFER_SIZE as usize)?;
+    buf.len = 0;
+    for (symbol, buf_val) in string.chars().zip(buf.data.iter_mut()) {
+        *buf_val = symtab.symbol_id(symbol);
+        buf.len += 1;
+    }
+    Ok(string.len())
+}
 
 /// Trait used to read a given amount of UTF-8 characters from different sources.
 ///
@@ -30,8 +146,13 @@ impl Utf8CharReader for Chars<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::Utf8CharReader;
+    use crate::error::ParseError;
+    use crate::grammar::Grammar;
+    use crate::lexer::simulator::BUFFER_SIZE;
+    use crate::lexer::{Dfa, Utf8CharReader};
     use std::io::Error as IOError;
+
+    use super::DfaSimulator;
 
     const UTF8_INPUT: &str = "Příliš žluťoučký kůň úpěl ďábelské ódy";
 
@@ -49,5 +170,64 @@ mod tests {
         assert!(input.read_chars(999).is_ok());
         assert_eq!(input.read_chars(999)?, "".to_string());
         Ok(())
+    }
+
+    #[test]
+    fn simulator_input_small() -> Result<(), ParseError> {
+        // input smaller than BUFFER_SIZE
+        let grammar = Grammar::new(&["(~[0-9])+", "' '*"], &[], &["NO_NUMBER", "SPACE"]);
+        let dfa = Dfa::new(&grammar);
+        let reader = UTF8_INPUT.chars();
+        let mut simulator = DfaSimulator::new(dfa, reader)?;
+        for _ in 0..38 {
+            assert!(simulator.next_char().unwrap().is_some());
+        }
+        assert!(simulator.next_char().unwrap().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn simulator_input_big() -> Result<(), ParseError> {
+        // input bigger than BUFFER_SIZE to allow a buffer swap
+        // bigger inputs requires moving also the lexeme_pos
+        let grammar = Grammar::new(&["(~[0-9])+", "' '*"], &[], &["NO_NUMBER", "SPACE"]);
+        let dfa = Dfa::new(&grammar);
+        let mut input = String::new();
+        while input.chars().count() < BUFFER_SIZE as usize {
+            input.push_str(UTF8_INPUT);
+        }
+        let mut simulator = DfaSimulator::new(dfa, input.chars())?;
+        for _ in 0..4104 {
+            assert!(simulator.next_char().unwrap().is_some());
+        }
+        assert!(simulator.next_char().unwrap().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn simulator_input_lexeme_bigger_than_buffer() -> Result<(), ParseError> {
+        let piece = UTF8_INPUT
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+        let mut input = String::new();
+        while input.chars().count() < 2 * BUFFER_SIZE as usize {
+            input.push_str(&piece);
+        }
+        let reader = input.chars();
+        let grammar = Grammar::new(&["(~' ')+"], &[], &["NOT_SPACE"]);
+        let dfa = Dfa::new(&grammar);
+        let mut simulator = DfaSimulator::new(dfa, reader)?;
+        for _ in 0..8192 {
+            assert!(simulator.next_char().unwrap().is_some());
+        }
+        let err = simulator.next_char();
+        match err {
+            Ok(_) => panic!("test should return error"),
+            Err(e) => match e {
+                ParseError::LexerSimulationError { .. } => Ok(()),
+                _ => panic!("wrong error type"),
+            },
+        }
     }
 }

@@ -19,15 +19,15 @@ use std::fmt::Write;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dfa {
     /// Number of states.
-    states_no: u32,
+    pub(super) states_no: u32,
     /// Transition function: (node index, symbol) -> (node).
-    transition: FnvHashMap<(u32, u32), u32>,
+    pub(super) transition: FnvHashMap<(u32, u32), u32>,
     /// Set of symbols in the language.
-    alphabet: SymbolTable,
+    pub(super) alphabet: SymbolTable,
     /// Starting node.
-    start: u32,
+    pub(super) start: u32,
     /// Accepting states: (node index) -> (accepted production).
-    accept: FnvHashMap<u32, u32>,
+    pub(super) accept: FnvHashMap<u32, u32>,
 }
 
 impl std::fmt::Display for Dfa {
