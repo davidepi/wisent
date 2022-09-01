@@ -1,6 +1,5 @@
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
-use super::nfa::Nfa;
-use super::{Automaton, BSTree, SymbolTable};
+use super::{BSTree, SymbolTable};
 use crate::error::ParseError;
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
@@ -138,22 +137,70 @@ impl Dfa {
             accept,
         })
     }
-}
 
-impl Automaton for Dfa {
-    fn is_empty(&self) -> bool {
+    /// Returns true if the DFA is empty.
+    ///
+    /// A DFA is empty if there are no transitions, and, as such, it halts in the starting
+    /// state.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::Dfa;
+    ///
+    /// let grammar = Grammar::new(&[], &[], &[]);
+    /// let dfa = Dfa::new(&grammar);
+    ///
+    /// assert!(dfa.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
         self.transition.is_empty()
     }
 
-    fn nodes(&self) -> u32 {
+    /// Returns the number of nodes in the DFA, excluding the eventual sink node.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::Dfa;
+    ///
+    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let dfa = Dfa::new(&grammar);
+    ///
+    /// assert_eq!(dfa.nodes(), 3);
+    /// ```
+    pub fn nodes(&self) -> u32 {
         self.states_no
     }
 
-    fn edges(&self) -> u32 {
+    /// Returns the number of edges in the DFA.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::Dfa;
+    ///
+    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let dfa = Dfa::new(&grammar);
+    ///
+    /// assert_eq!(dfa.edges(), 3)
+    /// ```
+    pub fn edges(&self) -> u32 {
         self.transition.len() as u32
     }
 
-    fn to_dot(&self) -> String {
+    /// Returns a graphviz dot representation of the automaton as string.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::Dfa;
+    ///
+    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let dfa = Dfa::new(&grammar);
+    /// dfa.to_dot();
+    /// ```
+    pub fn to_dot(&self) -> String {
         let mut f = String::new();
         write!(&mut f, "digraph{{start[shape=point];").unwrap();
         for state in &self.accept {
@@ -179,139 +226,6 @@ impl Automaton for Dfa {
         write!(&mut f, "}}").unwrap();
         f
     }
-}
-
-impl From<Nfa> for Dfa {
-    fn from(nfa: Nfa) -> Self {
-        let big_dfa = subset_construction(&nfa);
-        min_dfa(big_dfa)
-    }
-}
-
-/// Transforms a NFA to a DFA using subset construction algorithm.
-///
-/// Guaranteed to have a move on every symbol for every node.
-fn subset_construction(nfa: &Nfa) -> Dfa {
-    let mut ds_marked = BTreeSet::new();
-    let mut ds_unmarked = Vec::new();
-    let mut indices = HashMap::new();
-    let mut index = 0;
-    let mut transition = FnvHashMap::default();
-    let mut accept = FnvHashMap::default();
-
-    let mut start_set = FnvHashSet::default();
-    start_set.insert(nfa.start);
-    let s0 = sc_epsilon_closure(start_set, &nfa.transition, nfa.alphabet.epsilon_id());
-    indices.insert(s0.clone(), index);
-    // possible acceptance check is done at creation time
-    if let Some(accepted_production) = sc_accepting(&s0, &nfa.accept) {
-        accept.insert(index, accepted_production);
-    }
-    ds_unmarked.push(s0);
-    index += 1;
-    while let Some(t) = ds_unmarked.pop() {
-        let t_idx = *indices.get(&t).unwrap();
-        ds_marked.insert(t.clone());
-        for symbol in nfa.alphabet.iter() {
-            let sym = *symbol.1;
-            let mov = sc_move(&t, sym, &nfa.transition);
-            let u = sc_epsilon_closure(mov, &nfa.transition, nfa.alphabet.epsilon_id());
-            let u_idx;
-            if !u.is_empty() {
-                //check if node has already been created
-                if !indices.contains_key(&u) {
-                    u_idx = index;
-                    indices.insert(u.clone(), u_idx);
-                    index += 1;
-                    // check if state is accepting
-                    if let Some(accepted_production) = sc_accepting(&u, &nfa.accept) {
-                        accept.insert(u_idx, accepted_production);
-                    }
-                    ds_unmarked.push(u);
-                } else {
-                    u_idx = *indices.get(&u).unwrap();
-                }
-                transition.insert((t_idx, sym), u_idx);
-            }
-        }
-    }
-    //add sink (it's not guaranteed to have a sink and REQUIRED by the min_dfa function)
-    //accidentally adding a second sink is no problem: it will be removed by min_dfa function
-    let sink = index;
-    index += 1;
-    for node in 0..index {
-        for symbol in nfa.alphabet.iter() {
-            transition.entry((node, *symbol.1)).or_insert(sink);
-        }
-    }
-    Dfa {
-        states_no: index,
-        alphabet: nfa.alphabet.clone(),
-        transition,
-        accept,
-        start: 0,
-    }
-}
-
-/// Part of the subset construction algorithm:
-///
-/// Returns the set of nodes reachable with epsilon moves from the current set.
-///
-/// - `set`: the input set where to start the epsilon move
-/// - `transition`: transition table of the NFA
-fn sc_epsilon_closure(
-    set: FnvHashSet<u32>,
-    transition_table: &FnvHashMap<(u32, u32), FnvHashSet<u32>>,
-    epsilon_id: u32,
-) -> BTreeSet<u32> {
-    let mut stack = set.iter().copied().collect::<Vec<_>>();
-    let mut closure = set;
-    while let Some(t) = stack.pop() {
-        if let Some(eset) = transition_table.get(&(t, epsilon_id)) {
-            closure = closure.union(eset).cloned().collect();
-            stack.extend(eset.iter());
-        }
-    }
-    closure.into_iter().collect::<BTreeSet<_>>()
-}
-
-/// Part of the subset construction algorithm:
-///
-/// Returns Some(production index) if the current set is accepting, None otherwise. Will return
-/// the lowest production index possible (production appearing first).
-fn sc_accepting(set: &BTreeSet<u32>, accepting: &FnvHashMap<u32, u32>) -> Option<u32> {
-    let mut productions = BTreeSet::new(); //so I can easily get the min()
-    for node in accepting {
-        if set.contains(node.0) {
-            productions.insert(node.1);
-        }
-    }
-    if !productions.is_empty() {
-        Some(**productions.iter().next().unwrap()) //get smallest value (production appearing first)
-    } else {
-        None
-    }
-}
-
-/// Part of the subset construction algorithm:
-///
-/// Returns the set of nodes reachable with a move on a given symbol from the current set.
-///
-/// - `set`: The input set
-/// - `symbol`: The given symbol for the move
-/// - `transition`: The transition table
-fn sc_move(
-    set: &BTreeSet<u32>,
-    symbol: u32,
-    transition: &FnvHashMap<(u32, u32), FnvHashSet<u32>>,
-) -> FnvHashSet<u32> {
-    let mut ret = FnvHashSet::default();
-    for node in set {
-        if let Some(t) = transition.get(&(*node, symbol)) {
-            ret = ret.union(t).cloned().collect::<FnvHashSet<_>>();
-        }
-    }
-    ret
 }
 
 /// Merges different canonical trees into a single canonical tree with multiple accepting nodes.
@@ -731,7 +645,7 @@ fn remap(partitions: Vec<FnvHashSet<u32>>, positions: FnvHashMap<u32, u32>, dfa:
 mod tests {
     use crate::error::ParseError;
     use crate::grammar::Grammar;
-    use crate::lexer::{Automaton, Dfa, Nfa};
+    use crate::lexer::Dfa;
 
     #[test]
     fn dfa_conflicts_resolution() {
@@ -817,74 +731,6 @@ mod tests {
     fn dfa_direct_construction_empty() {
         let grammar = Grammar::new(&[], &[], &[]);
         let dfa = Dfa::new(&grammar);
-        assert!(dfa.is_empty());
-    }
-
-    #[test]
-    fn dfa_subset_construction_no_sink() {
-        let terminal = "('a'|'b')*'abb'";
-        let names = "PROD1";
-        let grammar = Grammar::new(&[terminal], &[], &[names]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.to_dfa();
-        assert_eq!(dfa.nodes(), 4);
-        assert_eq!(dfa.edges(), 8);
-    }
-
-    #[test]
-    fn dfa_subset_construction_sink_accepting() {
-        let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digits", "more_digits"]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.to_dfa();
-        assert_eq!(dfa.nodes(), 3);
-        assert_eq!(dfa.edges(), 3);
-    }
-
-    #[test]
-    fn dfa_subset_construction_set_productions() {
-        let grammar = Grammar::new(&["[a-c]([b-d]?[e-g])*", "[fg]+"], &[], &["LONG1", "LONG2"]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.to_dfa();
-        assert_eq!(dfa.nodes(), 4);
-        assert_eq!(dfa.edges(), 10);
-    }
-
-    #[test]
-    fn dfa_subset_construction_multi_production() {
-        let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.to_dfa();
-        assert_eq!(dfa.nodes(), 3);
-        assert_eq!(dfa.edges(), 3);
-    }
-
-    #[test]
-    fn dfa_subset_construction_start_accepting() {
-        let grammar = Grammar::new(&["'ab'*"], &[], &["ABSTAR"]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.to_dfa();
-        assert!(!dfa.is_empty());
-        assert_eq!(dfa.nodes(), 2);
-        assert_eq!(dfa.edges(), 2);
-    }
-
-    #[test]
-    fn dfa_subset_construction_single_production() {
-        let terminal = "(('a'*'b')|'c')?'c'";
-        let names = "PROD1";
-        let grammar = Grammar::new(&[terminal], &[], &[names]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.to_dfa();
-        assert_eq!(dfa.nodes(), 5);
-        assert_eq!(dfa.edges(), 7);
-    }
-
-    #[test]
-    fn dfa_subset_construction_empty() {
-        let grammar = Grammar::new(&[], &[], &[]);
-        let nfa = Nfa::new(&grammar);
-        let dfa = nfa.clone().to_dfa();
-        assert!(nfa.is_empty());
         assert!(dfa.is_empty());
     }
 

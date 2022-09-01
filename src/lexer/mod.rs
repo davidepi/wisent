@@ -5,13 +5,11 @@ use std::collections::BTreeSet;
 // from ANTLR grammar to a lexer friendly-one
 mod dfa;
 mod grammar_conversion;
-mod nfa;
 mod simulator;
 
 use crate::error::ParseError;
 
 pub use self::dfa::Dfa;
-pub use self::nfa::Nfa;
 pub use self::simulator::{DfaSimulator, Utf8CharReader};
 
 /// A Binary Search Tree.
@@ -423,83 +421,6 @@ impl SymbolTable {
                 message: "empty symbol table".to_string(),
             })
         }
-    }
-}
-
-/// An Interface for a lexing Finite State Machine.
-pub trait Automaton {
-    /// Returns true if the automaton is empty.
-    ///
-    /// An automaton is empty if there are no transitions, and, as such, it halts in the starting
-    /// state.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Automaton, Nfa};
-    ///
-    /// let grammar = Grammar::new(&[], &[], &[]);
-    /// let nfa = Nfa::new(&grammar);
-    ///
-    /// assert!(nfa.is_empty());
-    /// ```
-    fn is_empty(&self) -> bool;
-
-    /// Returns the number of nodes in the automaton.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Automaton, Nfa};
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let nfa = Nfa::new(&grammar);
-    ///
-    /// assert_eq!(nfa.nodes(), 7);
-    /// ```
-    fn nodes(&self) -> u32;
-
-    /// Returns the number of edges in the automaton.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Automaton, Nfa};
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let nfa = Nfa::new(&grammar);
-    ///
-    /// assert_eq!(nfa.edges(), 8)
-    /// ```
-    fn edges(&self) -> u32;
-
-    /// Returns a graphviz dot representation of the automaton as string.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Automaton, Nfa};
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let nfa = Nfa::new(&grammar);
-    /// nfa.to_dot();
-    /// ```
-    fn to_dot(&self) -> String;
-
-    /// Saves the graphviz dot representation of the automaton to the given file.
-    /// # Examples
-    /// Basic usage:
-    /// ```no_run
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Automaton, Nfa};
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let nfa = Nfa::new(&grammar);
-    /// nfa.save_dot("/home/user/nfa.dot");
-    /// ```
-    fn save_dot(&self, path: &str) {
-        std::fs::write(path, self.to_dot())
-            .unwrap_or_else(|_| panic!("Unable to write file {}", path));
     }
 }
 
