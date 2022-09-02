@@ -197,8 +197,8 @@ impl SymbolTable {
     ///
     /// assert_eq!(symbol.ids(), 2);
     /// ```
-    pub fn ids(&self) -> usize {
-        self.reverse.len() + 1
+    pub fn ids(&self) -> u32 {
+        self.reverse.len() as u32 + 1
     }
 
     /// Returns the ID associated for a specific char.

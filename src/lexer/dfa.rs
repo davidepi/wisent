@@ -19,19 +19,34 @@ use std::fmt::Write;
 pub struct Dfa {
     /// Number of states.
     pub(super) states_no: u32,
-    /// Transition function: (node index, symbol) -> (node).
-    pub(super) transition: FnvHashMap<(u32, u32), u32>,
+    /// Transition function: [node][symbol] -> node.
+    pub(super) transition: Vec<Vec<u32>>,
     /// Set of symbols in the language.
     pub(super) alphabet: SymbolTable,
     /// Starting node.
     pub(super) start: u32,
-    /// Accepting states: (node index) -> (accepted production).
-    pub(super) accept: FnvHashMap<u32, u32>,
+    /// Sink node.
+    pub(super) sink: u32,
+    /// Accepted production for each node. u32::MAX if the node is not accepting.
+    pub(super) accept: Vec<u32>,
 }
 
 impl std::fmt::Display for Dfa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DFA({},{})", self.nodes(), self.edges())
+        write!(f, "DFA({})", self.nodes())
+    }
+}
+
+impl Default for Dfa {
+    fn default() -> Self {
+        Self {
+            states_no: 1,
+            start: 0,
+            sink: 0,
+            transition: vec![vec![0]],
+            accept: vec![u32::MAX],
+            alphabet: SymbolTable::default(),
+        }
     }
 }
 
@@ -54,14 +69,8 @@ impl Dfa {
     pub fn new(grammar: &Grammar) -> Dfa {
         let (canonical_trees, symtable) = canonical_trees(grammar);
         if canonical_trees.is_empty() {
-            // no production found, return a single state, no transaction DFA.
-            Dfa {
-                states_no: 1,
-                transition: FnvHashMap::default(),
-                alphabet: SymbolTable::default(),
-                start: 0,
-                accept: FnvHashMap::default(),
-            }
+            // no production found, return default DFA
+            Dfa::default()
         } else {
             // merge all trees of every production into a single one
             let merged_tree = merge_regex_trees(canonical_trees);
@@ -78,18 +87,17 @@ impl Dfa {
         let symtable = self.alphabet.as_bytes();
         retval.extend(u32::to_le_bytes(self.states_no));
         retval.extend(u32::to_le_bytes(self.start));
+        retval.extend(u32::to_le_bytes(self.sink));
         retval.extend(u32::to_le_bytes(symtable.len() as u32));
-        retval.extend(u32::to_le_bytes(self.transition.len() as u32));
-        retval.extend(u32::to_le_bytes(self.accept.len() as u32));
         retval.extend(symtable);
-        for ((node_src, symbol), node_dst) in &self.transition {
-            retval.extend(u32::to_le_bytes(*node_src));
-            retval.extend(u32::to_le_bytes(*symbol));
-            retval.extend(u32::to_le_bytes(*node_dst));
-        }
-        for (accepting_node, accepted_production) in &self.accept {
-            retval.extend(u32::to_le_bytes(*accepting_node));
-            retval.extend(u32::to_le_bytes(*accepted_production));
+        // single loop for both transition table and accept table.
+        for node in 0..self.states_no {
+            for symbol in 0..self.alphabet.ids() {
+                retval.extend(u32::to_le_bytes(
+                    self.transition[node as usize][symbol as usize],
+                ));
+            }
+            retval.extend(u32::to_le_bytes(self.accept[node as usize]));
         }
         retval
     }
@@ -113,27 +121,26 @@ impl Dfa {
         let mut i = 0;
         let states_no = parse_u32(&mut i)?;
         let start = parse_u32(&mut i)?;
+        let sink = parse_u32(&mut i)?;
         let symtable_len = parse_u32(&mut i)? as usize;
-        let transition_len = parse_u32(&mut i)? as usize;
-        let accept_len = parse_u32(&mut i)? as usize;
         let symtable = SymbolTable::from_bytes(&v[i..i + symtable_len])?;
         i += symtable_len;
-        let mut transition =
-            FnvHashMap::with_capacity_and_hasher(transition_len, Default::default());
-        for _ in 0..transition_len {
-            let k = (parse_u32(&mut i)?, parse_u32(&mut i)?);
-            let v = parse_u32(&mut i)?;
-            transition.insert(k, v);
-        }
-        let mut accept = FnvHashMap::with_capacity_and_hasher(accept_len, Default::default());
-        for _ in 0..accept_len {
-            accept.insert(parse_u32(&mut i)?, parse_u32(&mut i)?);
+        let mut transition = Vec::with_capacity(states_no as usize);
+        let mut accept = Vec::with_capacity(states_no as usize);
+        for _ in 0..states_no {
+            let mut moves = Vec::with_capacity(symtable.ids() as usize);
+            for _ in 0..symtable.ids() {
+                moves.push(parse_u32(&mut i)?);
+            }
+            transition.push(moves);
+            accept.push(parse_u32(&mut i)?);
         }
         Ok(Dfa {
             states_no,
             transition,
             alphabet: symtable,
             start,
+            sink,
             accept,
         })
     }
@@ -154,7 +161,7 @@ impl Dfa {
     /// assert!(dfa.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.transition.is_empty()
+        self.transition.len() <= 1
     }
 
     /// Returns the number of nodes in the DFA, excluding the eventual sink node.
@@ -170,23 +177,7 @@ impl Dfa {
     /// assert_eq!(dfa.nodes(), 3);
     /// ```
     pub fn nodes(&self) -> u32 {
-        self.states_no
-    }
-
-    /// Returns the number of edges in the DFA.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let dfa = Dfa::new(&grammar);
-    ///
-    /// assert_eq!(dfa.edges(), 3)
-    /// ```
-    pub fn edges(&self) -> u32 {
-        self.transition.len() as u32
+        self.states_no - 1
     }
 
     /// Returns a graphviz dot representation of the automaton as string.
@@ -203,25 +194,25 @@ impl Dfa {
     pub fn to_dot(&self) -> String {
         let mut f = String::new();
         write!(&mut f, "digraph{{start[shape=point];").unwrap();
-        for state in &self.accept {
-            write!(
-                &mut f,
-                "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
-                state.0, state.1
-            )
-            .unwrap();
+        for (state, accepted_rule) in self.accept.iter().enumerate() {
+            if *accepted_rule != u32::MAX {
+                write!(
+                    &mut f,
+                    "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
+                    state, accepted_rule
+                )
+                .unwrap();
+            }
         }
         write!(&mut f, "start->{};", &self.start).unwrap();
-        for trans in &self.transition {
-            let source = (trans.0).0;
-            let symbol_id = (trans.0).1;
-            let symbol_label = self.alphabet.label(symbol_id).replace('"', "\\\"");
-            write!(
-                &mut f,
-                "{}->{}[label=\"{}\"];",
-                source, trans.1, symbol_label
-            )
-            .unwrap();
+        for state in 0..self.states_no {
+            for symbol in 0..self.alphabet.ids() {
+                let dst = self.transition[state as usize][symbol as usize];
+                if dst != self.sink {
+                    let symbol_label = self.alphabet.label(symbol).replace('"', "\\\"");
+                    write!(&mut f, "{}->{}[label=\"{}\"];", state, dst, symbol_label).unwrap();
+                }
+            }
         }
         write!(&mut f, "}}").unwrap();
         f
@@ -287,7 +278,7 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
     let mut accepting_nodes = FnvHashMap::default();
     dc_assign_index_to_literal(&helper, &mut indices, &mut accepting_nodes);
     dc_compute_followpos(&helper, &mut followpos);
-    let mut accept = FnvHashMap::default();
+    let mut accept_map = FnvHashMap::default();
     let mut done = HashMap::new();
     done.insert(helper.value.firstpos.clone(), 0);
     // check the first node if it can be accepting, this is done in the loop at creation time.
@@ -299,23 +290,18 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
         .flat_map(|x| accepting_nodes.get(x))
         .min()
     {
-        accept.insert(0, *acc_prod);
+        accept_map.insert(0, *acc_prod);
     }
     let mut index = 1;
     let mut unmarked = vec![helper.value.firstpos];
     let mut tran = FnvHashMap::default();
-    let alphabet = indices
-        .iter()
-        .filter(|x| **x != symtable.epsilon_id())
-        .copied()
-        .collect::<FnvHashSet<u32>>();
     // loop, conceptually similar to subset construction, but uses followpos instead of NFA
     // (followpos is essentially an NFA without epsilon moves)
     while let Some(node_set) = unmarked.pop() {
-        for symbol in &alphabet {
+        for symbol in 0..symtable.ids() {
             let u = node_set
                 .iter()
-                .filter(|x| indices[**x as usize] == *symbol)
+                .filter(|x| indices[**x as usize] == symbol)
                 .flat_map(|x| &followpos[*x as usize])
                 .cloned()
                 .collect::<BTreeSet<_>>();
@@ -326,21 +312,48 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
                 u_idx = index;
                 index += 1;
                 if let Some(acc_prod) = u.iter().flat_map(|x| accepting_nodes.get(x)).min() {
-                    accept.insert(u_idx, *acc_prod);
+                    accept_map.insert(u_idx, *acc_prod);
                 }
                 unmarked.push(u.clone());
                 done.insert(u, u_idx);
             }
             let set_idx = *done.get(&node_set).unwrap();
-            tran.insert((set_idx, *symbol), u_idx);
+            tran.insert((set_idx, symbol), u_idx);
+        }
+    }
+    // converts the transition map to a transition table and marks the sink
+    // the transition is not complete as
+    let mut transition = Vec::with_capacity(index as usize);
+    let mut sink = 0;
+    for node in 0..index {
+        let ids_no = symtable.ids() as usize;
+        let mut next_nodes = Vec::with_capacity(ids_no);
+        let mut all_same = FnvHashSet::with_capacity_and_hasher(ids_no, Default::default());
+        for symbol in 0..symtable.ids() as u32 {
+            let next = *tran.get(&(node, symbol)).unwrap_or(&sink);
+            next_nodes.push(next);
+            all_same.insert(next);
+        }
+        if all_same.len() == 1 && *all_same.iter().next().unwrap() == node {
+            sink = node;
+        }
+        transition.push(next_nodes);
+    }
+    // converts the accepting states map into array
+    let mut accept = Vec::with_capacity(index as usize);
+    for i in 0..index {
+        match accept_map.entry(i) {
+            std::collections::hash_map::Entry::Occupied(val) => accept.push(*val.get()),
+            std::collections::hash_map::Entry::Vacant(_) => accept.push(u32::MAX),
         }
     }
     Dfa {
         states_no: index,
         start: 0,
-        transition: tran,
+        transition,
         alphabet: symtable,
         accept,
+        sink,
     }
 }
 
@@ -534,25 +547,23 @@ fn min_dfa(dfa: Dfa) -> Dfa {
 /// Creates the initial partitions: non accepting nodes, and a partition for each group of accepting
 /// nodes announcing the same rule.
 fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<u32>> {
-    let mut announced_max = std::u32::MIN;
-    let mut acc = FnvHashSet::default();
-    for (announcing_state, announced_rule) in &dfa.accept {
-        acc.insert(*announcing_state);
-        announced_max = announced_max.max(*announced_rule);
+    // find how many announcing_rules exists
+    let announced_max = dfa
+        .accept
+        .iter()
+        .copied()
+        .filter(|&acc| acc != u32::MAX)
+        .max()
+        .unwrap_or(0) as usize;
+    // creates the various sets (+2 because last element is the non-accepting nodes)
+    let mut ret = vec![FnvHashSet::default(); announced_max + 2];
+    for (announcing_state, announced_rule) in dfa.accept.iter().enumerate() {
+        if *announced_rule != u32::MAX {
+            ret[(*announced_rule) as usize].insert(announcing_state as u32);
+        } else {
+            ret[announced_max + 1].insert(announcing_state as u32);
+        }
     }
-    let accepting_no = announced_max + 1;
-    let nacc = (0..)
-        .take(dfa.states_no as usize)
-        .collect::<FnvHashSet<_>>()
-        .difference(&acc)
-        .cloned()
-        .collect::<FnvHashSet<_>>();
-    // this is a DFA for lexical analysis so I need to further split acc by announced rule
-    let mut ret = vec![FnvHashSet::default(); accepting_no as usize];
-    for (announcing_state, announced_rule) in &dfa.accept {
-        ret[(*announced_rule) as usize].insert(*announcing_state);
-    }
-    ret.push(nacc); //add the non_accepting partition to the end
     ret
 }
 
@@ -566,15 +577,15 @@ fn split_partition(
 ) -> (FnvHashSet<u32>, FnvHashSet<u32>) {
     let mut split = FnvHashSet::default();
     if partition.len() > 1 {
-        for symbol in dfa.alphabet.iter() {
+        for symbol_id in 0..dfa.alphabet.ids() {
             let mut iter = partition.iter();
             let first = *iter.next().unwrap();
             let expected_target = *position
-                .get(dfa.transition.get(&(first, *symbol.1)).unwrap())
+                .get(&dfa.transition[first as usize][symbol_id as usize])
                 .unwrap();
             for node in iter {
                 let target = *position
-                    .get(dfa.transition.get(&(*node, *symbol.1)).unwrap())
+                    .get(&dfa.transition[*node as usize][symbol_id as usize])
                     .unwrap();
                 if target != expected_target {
                     split.insert(*node);
@@ -592,52 +603,84 @@ fn split_partition(
 
 /// Given the final set of partitions rewrites the transition table in order to get the efficient
 /// one.
-///
-/// Also, removes the sink, if any and not accepting.
 fn remap(partitions: Vec<FnvHashSet<u32>>, positions: FnvHashMap<u32, u32>, dfa: Dfa) -> Dfa {
     //first record in which partitions is every node
     let mut new_trans = FnvHashMap::default();
-    let mut accept = FnvHashMap::default();
+    let mut accept_map = FnvHashMap::default();
     let mut in_degree = vec![0; partitions.len()];
     let mut out_degree = vec![0; partitions.len()];
     //remap accepting nodes
-    for acc_node in dfa.accept {
-        accept.insert(*positions.get(&acc_node.0).unwrap(), acc_node.1);
+    for (acc_node, acc_rule) in dfa.accept.iter().enumerate() {
+        if *acc_rule != u32::MAX {
+            accept_map.insert(*positions.get(&(acc_node as u32)).unwrap(), *acc_rule);
+        }
     }
     //remap transitions
-    for transition in dfa.transition {
-        let old_source = (transition.0).0;
-        let new_source = *positions.get(&old_source).unwrap();
-        let letter = (transition.0).1;
-        let old_target = transition.1;
-        let new_target = *positions.get(&old_target).unwrap();
-        if new_source != new_target {
-            out_degree[new_source as usize] += 1;
-            in_degree[new_target as usize] += 1;
+    for node in 0..dfa.states_no {
+        for symbol in 0..dfa.alphabet.ids() {
+            let new_src = *positions.get(&node).unwrap();
+            let old_dst = dfa.transition[node as usize][symbol as usize];
+            let new_dst = *positions.get(&old_dst).unwrap();
+            if new_src != new_dst {
+                out_degree[new_src as usize] += 1;
+                in_degree[new_dst as usize] += 1;
+            }
+            new_trans.insert((new_src, symbol), new_dst);
         }
-        new_trans.insert((new_source, letter), new_target);
     }
-    // start = partition of previous start
-    let start = *positions.get(&0).unwrap();
+    let start = *positions.get(&dfa.start).unwrap();
+    let sink = *positions.get(&dfa.sink).unwrap();
     // remove unreachable states (and non-accepting sinks)
     //broken: no in-edges and no start state OR no out-edges and not accepting, excluding self-loops
+    //        and sink
     let broken_states = (0_u32..)
         .take(partitions.len())
         .filter(|x| {
             (in_degree[*x as usize] == 0 && *x != start)
-                || (out_degree[*x as usize] == 0 && !accept.contains_key(x))
+                || (out_degree[*x as usize] == 0 && !accept_map.contains_key(x) && *x != sink)
         })
         .collect::<BTreeSet<_>>();
-    new_trans = new_trans
-        .into_iter()
-        .filter(|x| !broken_states.contains(&(x.0).0) && !broken_states.contains(&x.1))
-        .collect();
+    let mut remapped_indices = vec![0; dfa.states_no as usize];
+    let mut new_index = 0_u32;
+    for index in 0..dfa.states_no {
+        if !broken_states.contains(&index) {
+            remapped_indices[index as usize] = new_index;
+            new_index += 1;
+        }
+    }
+    // now that the number of states is fixed it's time to change map to table.
+    // Unlike the direct consturction, this time we need to reindex nodes.
+    let states_no = (partitions.len() - broken_states.len()) as u32;
+    let mut transition = Vec::with_capacity(states_no as usize);
+    for node in 0..dfa.states_no {
+        if !broken_states.contains(&node) {
+            let ids_no = dfa.alphabet.ids() as usize;
+            let mut next_nodes = Vec::with_capacity(ids_no);
+            for symbol in 0..dfa.alphabet.ids() as u32 {
+                let next = *new_trans.get(&(node, symbol)).unwrap_or(&sink);
+                if !broken_states.contains(&next) {
+                    let next_remapped = remapped_indices[next as usize];
+                    next_nodes.push(next_remapped);
+                }
+            }
+            transition.push(next_nodes);
+        }
+    }
+    // converts the accepting states map into array
+    let mut accept = Vec::with_capacity(states_no as usize);
+    for i in 0..states_no {
+        match accept_map.entry(i) {
+            std::collections::hash_map::Entry::Occupied(val) => accept.push(*val.get()),
+            std::collections::hash_map::Entry::Vacant(_) => accept.push(u32::MAX),
+        }
+    }
     Dfa {
-        states_no: (partitions.len() - broken_states.len()) as u32,
-        transition: new_trans,
+        states_no,
+        transition,
         alphabet: dfa.alphabet,
         accept,
         start,
+        sink,
     }
 }
 
@@ -645,7 +688,11 @@ fn remap(partitions: Vec<FnvHashSet<u32>>, positions: FnvHashMap<u32, u32>, dfa:
 mod tests {
     use crate::error::ParseError;
     use crate::grammar::Grammar;
+    use crate::lexer::dfa::min_dfa;
+    use crate::lexer::grammar_conversion::canonical_trees;
     use crate::lexer::Dfa;
+
+    use super::{direct_construction, merge_regex_trees};
 
     #[test]
     fn dfa_conflicts_resolution() {
@@ -664,10 +711,8 @@ mod tests {
         let dfa2 = Dfa::new(&grammar2);
         assert!(!dfa1.is_empty());
         assert_eq!(dfa1.nodes(), 6);
-        assert_eq!(dfa1.edges(), 9);
         assert!(!dfa2.is_empty());
         assert_eq!(dfa2.nodes(), 4);
-        assert_eq!(dfa2.edges(), 7);
     }
 
     #[test]
@@ -678,16 +723,14 @@ mod tests {
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.nodes(), 4);
-        assert_eq!(dfa.edges(), 8);
     }
 
     #[test]
     fn dfa_direct_construction_sink_accepting() {
-        let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digits", "more_digits"]);
+        let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digit", "more_digits"]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.nodes(), 3);
-        assert_eq!(dfa.edges(), 3);
     }
 
     #[test]
@@ -695,16 +738,14 @@ mod tests {
         let grammar = Grammar::new(&["[a-c]([b-d]?[e-g])*", "[fg]+"], &[], &["LONG1", "LONG2"]);
         let dfa = Dfa::new(&grammar);
         assert_eq!(dfa.nodes(), 4);
-        assert_eq!(dfa.edges(), 10);
     }
 
     #[test]
     fn dfa_direct_construction_start_accepting() {
         let grammar = Grammar::new(&["'ab'*"], &[], &["ABSTAR"]);
-        let dfa_direct = Dfa::new(&grammar);
-        assert!(!dfa_direct.is_empty());
-        assert_eq!(dfa_direct.nodes(), 2);
-        assert_eq!(dfa_direct.edges(), 2);
+        let dfa = Dfa::new(&grammar);
+        assert!(!dfa.is_empty());
+        assert_eq!(dfa.nodes(), 2);
     }
 
     #[test]
@@ -715,7 +756,6 @@ mod tests {
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.nodes(), 5);
-        assert_eq!(dfa.edges(), 7);
     }
 
     #[test]
@@ -724,7 +764,6 @@ mod tests {
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.nodes(), 3);
-        assert_eq!(dfa.edges(), 3);
     }
 
     #[test]
@@ -732,6 +771,21 @@ mod tests {
         let grammar = Grammar::new(&[], &[], &[]);
         let dfa = Dfa::new(&grammar);
         assert!(dfa.is_empty());
+    }
+
+    #[test]
+    fn dfa_minimization() {
+        let grammar = Grammar::new(
+            &["('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*"],
+            &[],
+            &["SEQUENCE"],
+        );
+        let (canonical_trees, symtable) = canonical_trees(&grammar);
+        let merged_tree = merge_regex_trees(canonical_trees);
+        let big_dfa = direct_construction(merged_tree, symtable);
+        let min_dfa = min_dfa(big_dfa.clone());
+        assert_ne!(big_dfa.nodes(), min_dfa.nodes());
+        assert_eq!(min_dfa.nodes(), 4);
     }
 
     #[test]
