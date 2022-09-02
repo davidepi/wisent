@@ -38,7 +38,7 @@ pub struct DfaSimulator<R: Utf8CharReader> {
     lexeme_pos: BufferIndexer,
     /// Position of the next lookahead character to read and the buffer where it is
     forward_pos: BufferIndexer,
-    symtable: SymbolTable,
+    dfa: Dfa,
     reader: R,
 }
 
@@ -49,14 +49,14 @@ impl<R: Utf8CharReader> DfaSimulator<R> {
     /// **TODO:** write an example when the public interface is available
     pub fn new(dfa: Dfa, mut reader: R) -> Result<Self, ParseError> {
         let mut first_buffer = Default::default();
-        let symtable = dfa.alphabet;
+        let symtable = dfa.symbol_table();
         refill_buffer(&mut first_buffer, &mut reader, &symtable)?;
         Ok(DfaSimulator {
             buffers: [first_buffer, Default::default()],
-            symtable,
             lexeme_pos: Default::default(),
             forward_pos: Default::default(),
             reader,
+            dfa,
         })
     }
 
@@ -74,7 +74,7 @@ impl<R: Utf8CharReader> DfaSimulator<R> {
             let count_bytes = refill_buffer(
                 &mut self.buffers[next_index as usize],
                 &mut self.reader,
-                &self.symtable,
+                &self.dfa.symbol_table(),
             )?;
             if count_bytes == 0 {
                 // EOF

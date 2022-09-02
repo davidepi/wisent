@@ -18,17 +18,17 @@ use std::fmt::Write;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dfa {
     /// Number of states.
-    pub(super) states_no: u32,
+    states_no: u32,
     /// Transition function: [node][symbol] -> node.
-    pub(super) transition: Vec<Vec<u32>>,
+    transition: Vec<Vec<u32>>,
     /// Set of symbols in the language.
-    pub(super) alphabet: SymbolTable,
+    alphabet: SymbolTable,
     /// Starting node.
-    pub(super) start: u32,
+    start: u32,
     /// Sink node.
-    pub(super) sink: u32,
+    sink: u32,
     /// Accepted production for each node. u32::MAX if the node is not accepting.
-    pub(super) accept: Vec<u32>,
+    accept: Vec<u32>,
 }
 
 impl std::fmt::Display for Dfa {
@@ -81,7 +81,7 @@ impl Dfa {
         }
     }
 
-    /// Serialize the current DFA into a vector of bytes.
+    /// Serializes the current DFA into a vector of bytes.
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut retval = Vec::new();
         let symtable = self.alphabet.as_bytes();
@@ -102,7 +102,7 @@ impl Dfa {
         retval
     }
 
-    /// Deserialize a DFA from a slice of bytes.
+    /// Deserializes a DFA from a slice of bytes.
     pub fn from_bytes(v: &[u8]) -> Result<Self, ParseError> {
         let malformed_err = "malformed dfa";
         let parse_u32 = |i: &mut usize| -> Result<u32, ParseError> {
@@ -216,6 +216,69 @@ impl Dfa {
         }
         write!(&mut f, "}}").unwrap();
         f
+    }
+
+    /// Return the initial state for this DFA.
+    pub fn start(&self) -> u32 {
+        self.start
+    }
+
+    /// Returns the symbol table associated with this DFA.
+    pub fn symbol_table(&self) -> &SymbolTable {
+        &self.alphabet
+    }
+
+    /// Perform a move in the transition table of this DFA and returns the next state.
+    ///
+    /// Returns None if such a move is not possible
+    ///
+    /// # Panics
+    /// Panics if the symbol is not contained in [`Dfa::symbol_table`] or the given state does not
+    /// exist in the DFA.
+    /// # Examples
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::Dfa;
+    ///
+    /// let grammar = Grammar::new(&["'a'", "'b'"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let dfa = Dfa::new(&grammar);
+    /// let a_id = dfa.symbol_table().symbol_id('a');
+    /// let next = dfa.moove(dfa.start(), a_id);
+    /// assert!(next.is_some());
+    /// ```
+    pub fn moove(&self, state: u32, symbol: u32) -> Option<u32> {
+        let next = self.transition[state as usize][symbol as usize];
+        if next != self.sink {
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the accepted production if the given state is an accepting one.
+    ///
+    /// Returns None otherwise.
+    /// # Panics
+    /// Panics if the given state does not exist in the DFA.
+    /// # Examples
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::Dfa;
+    ///
+    /// let grammar = Grammar::new(&["'a'", "'b'"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let dfa = Dfa::new(&grammar);
+    /// assert!(dfa.accepting(dfa.start()).is_none());
+    /// let a_id = dfa.symbol_table().symbol_id('a');
+    /// let next = dfa.moove(dfa.start(), a_id).unwrap();
+    /// assert!(dfa.accepting(next).is_some());
+    /// ```
+    pub fn accepting(&self, state: u32) -> Option<u32> {
+        let prod = self.accept[state as usize];
+        if prod == u32::MAX {
+            None
+        } else {
+            Some(prod)
+        }
     }
 }
 
@@ -786,6 +849,33 @@ mod tests {
         let min_dfa = min_dfa(big_dfa.clone());
         assert_ne!(big_dfa.nodes(), min_dfa.nodes());
         assert_eq!(min_dfa.nodes(), 4);
+    }
+
+    #[test]
+    fn dfa_moves() {
+        let terminal = "'c'*'ab'";
+        let names = "PROD1";
+        let grammar = Grammar::new(&[terminal], &[], &[names]);
+        let dfa = Dfa::new(&grammar);
+        let a = dfa.symbol_table().symbol_id('a');
+        let b = dfa.symbol_table().symbol_id('b');
+        let c = dfa.symbol_table().symbol_id('c');
+        assert_eq!(dfa.moove(dfa.start(), c).unwrap(), dfa.start());
+        assert!(dfa.moove(dfa.start(), b).is_none());
+        assert_ne!(dfa.moove(dfa.start(), a).unwrap(), dfa.start());
+    }
+
+    #[test]
+    fn dfa_accepting_single() {
+        let terminal = "'a'";
+        let names = "PROD1";
+        let grammar = Grammar::new(&[terminal], &[], &[names]);
+        let dfa = Dfa::new(&grammar);
+        assert!(dfa.accepting(dfa.start()).is_none());
+        let next = dfa
+            .moove(dfa.start(), dfa.symbol_table().symbol_id('a'))
+            .unwrap();
+        assert_eq!(dfa.accepting(next).unwrap(), 0);
     }
 
     #[test]
