@@ -19,7 +19,7 @@ impl Default for CharBuffer {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 /// Simple to struct to name indices for the lexeme_pos and forward_pos
 /// Just to remember what they represents, with a tuple it would be a mess
 struct BufferIndexer {
@@ -31,7 +31,7 @@ struct BufferIndexer {
 ///
 /// Simulates a Dfa with a given input and groups the input characters in tokens according to the
 /// rules of the grammar passed to the [`Dfa`].
-pub struct DfaSimulator<R: Utf8CharReader> {
+pub struct DfaSimulator {
     /// Buffer and its len (capacity is BUFFER_SIZE, len is the second value in the tuple)
     buffers: [CharBuffer; 2],
     /// Position of the next lexeme to read and the buffer where it is
@@ -39,25 +39,61 @@ pub struct DfaSimulator<R: Utf8CharReader> {
     /// Position of the next lookahead character to read and the buffer where it is
     forward_pos: BufferIndexer,
     dfa: Dfa,
-    reader: R,
 }
 
-impl<R: Utf8CharReader> DfaSimulator<R> {
+impl DfaSimulator {
     /// Creates a new Lexical Analyzer with the given DFA and the given input.
     /// # Examples
     /// Retrieving letters and numbers from a string:
     /// **TODO:** write an example when the public interface is available
-    pub fn new(dfa: Dfa, mut reader: R) -> Result<Self, ParseError> {
-        let mut first_buffer = Default::default();
-        let symtable = dfa.symbol_table();
-        refill_buffer(&mut first_buffer, &mut reader, &symtable)?;
-        Ok(DfaSimulator {
-            buffers: [first_buffer, Default::default()],
+    pub fn new(dfa: Dfa) -> Self {
+        Self {
+            buffers: [Default::default(), Default::default()],
             lexeme_pos: Default::default(),
             forward_pos: Default::default(),
-            reader,
             dfa,
-        })
+        }
+    }
+
+    pub fn tokenize<R: Utf8CharReader>(&mut self, input: &mut R) -> Result<Vec<u32>, ParseError> {
+        self.init_tokenize(input)?;
+        let mut state = self.dfa.start();
+        let mut last_accepted = None;
+        let mut productions = Vec::new();
+        while let Some(char_id) = self.next_char(input)? {
+            if let Some(next) = self.dfa.moove(state, char_id) {
+                //can advance
+                state = next;
+                if let Some(accepting_prod) = self.dfa.accepting(state) {
+                    // if the new state is accepting, record the production and the current
+                    // lexeme ending. DO NOT push the accepting state, as we try to greedily match
+                    // other productions.
+                    last_accepted = Some((accepting_prod, self.forward_pos));
+                }
+            } else if let Some((accepted_prod, last_valid_state)) = last_accepted {
+                // no other move available, but there was a previous accepted production.
+                // push the accepted production and roll back the head.
+                productions.push(accepted_prod);
+                state = self.dfa.start();
+                self.lexeme_pos = last_valid_state;
+                self.forward_pos = last_valid_state;
+            } else {
+                break; // halt
+            }
+        }
+        if let Some((production, _)) = last_accepted {
+            productions.push(production);
+        }
+        Ok(productions)
+    }
+
+    /// initialize the buffers for a tokenization.
+    fn init_tokenize<R: Utf8CharReader>(&mut self, input: &mut R) -> Result<(), ParseError> {
+        let symtable = self.dfa.symbol_table();
+        refill_buffer(&mut self.buffers[0], input, symtable)?;
+        self.lexeme_pos = Default::default();
+        self.forward_pos = Default::default();
+        Ok(())
     }
 
     /// Reads the next character from the input in form of [`SymbolTable`] IDs.
@@ -65,7 +101,7 @@ impl<R: Utf8CharReader> DfaSimulator<R> {
     /// Takes care of buffering the read and handling the buffers.
     ///
     /// DO NOT change the input `s` until EOF is returned!
-    fn next_char(&mut self) -> Result<Option<u32>, ParseError> {
+    fn next_char<R: Utf8CharReader>(&mut self, input: &mut R) -> Result<Option<u32>, ParseError> {
         let mut current_buffer = &self.buffers[self.forward_pos.buffer_index as usize];
         if self.forward_pos.index == current_buffer.len {
             // refill buffer
@@ -73,8 +109,8 @@ impl<R: Utf8CharReader> DfaSimulator<R> {
             let next_index = (self.forward_pos.buffer_index + 1) % self.buffers.len() as u8;
             let count_bytes = refill_buffer(
                 &mut self.buffers[next_index as usize],
-                &mut self.reader,
-                &self.dfa.symbol_table(),
+                input,
+                self.dfa.symbol_table(),
             )?;
             if count_bytes == 0 {
                 // EOF
@@ -105,10 +141,10 @@ impl<R: Utf8CharReader> DfaSimulator<R> {
 /// `len` parameter of the `CharBuffer`
 fn refill_buffer<R: Utf8CharReader>(
     buf: &mut CharBuffer,
-    r: &mut R,
+    input: &mut R,
     symtab: &SymbolTable,
 ) -> Result<usize, IOError> {
-    let string = r.read_chars(BUFFER_SIZE as usize)?;
+    let string = input.read_chars(BUFFER_SIZE as usize)?;
     buf.len = 0;
     for (symbol, buf_val) in string.chars().zip(buf.data.iter_mut()) {
         *buf_val = symtab.symbol_id(symbol);
@@ -177,12 +213,12 @@ mod tests {
         // input smaller than BUFFER_SIZE
         let grammar = Grammar::new(&["(~[0-9])+", "' '*"], &[], &["NO_NUMBER", "SPACE"]);
         let dfa = Dfa::new(&grammar);
-        let reader = UTF8_INPUT.chars();
-        let mut simulator = DfaSimulator::new(dfa, reader)?;
+        let mut reader = UTF8_INPUT.chars();
+        let mut simulator = DfaSimulator::new(dfa);
         for _ in 0..38 {
-            assert!(simulator.next_char().unwrap().is_some());
+            assert!(simulator.next_char(&mut reader)?.is_some());
         }
-        assert!(simulator.next_char().unwrap().is_none());
+        assert!(simulator.next_char(&mut reader)?.is_none());
         Ok(())
     }
 
@@ -196,11 +232,12 @@ mod tests {
         while input.chars().count() < BUFFER_SIZE as usize {
             input.push_str(UTF8_INPUT);
         }
-        let mut simulator = DfaSimulator::new(dfa, input.chars())?;
+        let mut simulator = DfaSimulator::new(dfa);
+        let mut reader = input.chars();
         for _ in 0..4104 {
-            assert!(simulator.next_char().unwrap().is_some());
+            assert!(simulator.next_char(&mut reader)?.is_some());
         }
-        assert!(simulator.next_char().unwrap().is_none());
+        assert!(simulator.next_char(&mut reader)?.is_none());
         Ok(())
     }
 
@@ -214,14 +251,14 @@ mod tests {
         while input.chars().count() < 2 * BUFFER_SIZE as usize {
             input.push_str(&piece);
         }
-        let reader = input.chars();
+        let mut reader = input.chars();
         let grammar = Grammar::new(&["(~' ')+"], &[], &["NOT_SPACE"]);
         let dfa = Dfa::new(&grammar);
-        let mut simulator = DfaSimulator::new(dfa, reader)?;
+        let mut simulator = DfaSimulator::new(dfa);
         for _ in 0..8192 {
-            assert!(simulator.next_char().unwrap().is_some());
+            assert!(simulator.next_char(&mut reader)?.is_some());
         }
-        let err = simulator.next_char();
+        let err = simulator.next_char(&mut reader);
         match err {
             Ok(_) => panic!("test should return error"),
             Err(e) => match e {
@@ -229,5 +266,17 @@ mod tests {
                 _ => panic!("wrong error type"),
             },
         }
+    }
+
+    #[test]
+    fn simulator_tokenize_non_greedy() -> Result<(), ParseError> {
+        let grammar = Grammar::new(&["(~[0-9 ])+", "' '+"], &[], &["NO_NUMBER", "SPACE"]);
+        let dfa = Dfa::new(&grammar);
+        let mut reader = UTF8_INPUT.chars();
+        let expected = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let mut simulator = DfaSimulator::new(dfa);
+        let prods = simulator.tokenize(&mut reader)?;
+        assert_eq!(prods, expected);
+        Ok(())
     }
 }
