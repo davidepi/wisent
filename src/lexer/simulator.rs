@@ -117,7 +117,7 @@ impl DfaSimulator {
                 return Ok(None);
             } else {
                 if self.lexeme_pos.buffer_index != self.forward_pos.buffer_index {
-                    // lexeme is longer than an entire buffer, and buffer was overwritten
+                    // lexeme was already longer than an entire buffer, and buffer was overwritten
                     // can't continue
                     return Err(ParseError::LexerSimulationError {
                         message: "lexeme size exceeded the maximum supported size".to_string(),
@@ -232,8 +232,9 @@ mod tests {
         while input.chars().count() < BUFFER_SIZE as usize {
             input.push_str(UTF8_INPUT);
         }
-        let mut simulator = DfaSimulator::new(dfa);
         let mut reader = input.chars();
+        let mut simulator = DfaSimulator::new(dfa);
+        simulator.init_tokenize(&mut reader)?;
         for _ in 0..4104 {
             assert!(simulator.next_char(&mut reader)?.is_some());
         }
@@ -255,6 +256,7 @@ mod tests {
         let grammar = Grammar::new(&["(~' ')+"], &[], &["NOT_SPACE"]);
         let dfa = Dfa::new(&grammar);
         let mut simulator = DfaSimulator::new(dfa);
+        simulator.init_tokenize(&mut reader)?;
         for _ in 0..8192 {
             assert!(simulator.next_char(&mut reader)?.is_some());
         }
