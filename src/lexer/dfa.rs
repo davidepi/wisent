@@ -1,5 +1,5 @@
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
-use super::{BSTree, SymbolTable};
+use super::{BSTree, GraphvizDot, SymbolTable};
 use crate::error::ParseError;
 use crate::grammar::Grammar;
 use fnv::{FnvHashMap, FnvHashSet};
@@ -180,44 +180,6 @@ impl Dfa {
         self.states_no - 1
     }
 
-    /// Returns a graphviz dot representation of the automaton as string.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
-    /// let dfa = Dfa::new(&grammar);
-    /// dfa.to_dot();
-    /// ```
-    pub fn to_dot(&self) -> String {
-        let mut f = String::new();
-        write!(&mut f, "digraph{{start[shape=point];").unwrap();
-        for (state, accepted_rule) in self.accept.iter().enumerate() {
-            if *accepted_rule != u32::MAX {
-                write!(
-                    &mut f,
-                    "{}[shape=doublecircle;xlabel=\"ACC({})\"];",
-                    state, accepted_rule
-                )
-                .unwrap();
-            }
-        }
-        write!(&mut f, "start->{};", &self.start).unwrap();
-        for state in 0..self.states_no {
-            for symbol in 0..self.alphabet.ids() {
-                let dst = self.transition[state as usize][symbol as usize];
-                if dst != self.sink {
-                    let symbol_label = self.alphabet.label(symbol).replace('"', "\\\"");
-                    write!(&mut f, "{}->{}[label=\"{}\"];", state, dst, symbol_label).unwrap();
-                }
-            }
-        }
-        write!(&mut f, "}}").unwrap();
-        f
-    }
-
     /// Return the initial state for this DFA.
     pub fn start(&self) -> u32 {
         self.start
@@ -279,6 +241,43 @@ impl Dfa {
         } else {
             Some(prod)
         }
+    }
+}
+
+impl GraphvizDot for Dfa {
+    fn to_dot(&self) -> String {
+        let mut f = "digraph DFA {\n    start[shape=point];\n".to_string();
+        for (state, accepted_rule) in self.accept.iter().enumerate() {
+            if *accepted_rule != u32::MAX {
+                writeln!(
+                    f,
+                    "    {}[shape=doublecircle;xlabel=\"ACC({})\"];",
+                    state, accepted_rule
+                )
+                .unwrap();
+            }
+        }
+        writeln!(f, "    start->{};", &self.start).unwrap();
+        for state in 0..self.states_no {
+            // group labels together
+            let mut transitions = vec![String::new(); self.states_no as usize];
+            for symbol in 0..self.alphabet.ids() {
+                let dst = self.transition[state as usize][symbol as usize];
+                if dst != self.sink {
+                    let symbol_label = self.alphabet.label(symbol).replace('"', "\\\"");
+                    transitions[dst as usize].push_str(&symbol_label);
+                }
+            }
+            // print grouped labels
+            for dst in 0..self.states_no {
+                let label = &transitions[dst as usize];
+                if !label.is_empty() {
+                    writeln!(f, "    {}->{}[label=\"{}\"];", state, dst, label).unwrap();
+                }
+            }
+        }
+        f.push('}');
+        f
     }
 }
 

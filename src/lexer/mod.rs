@@ -1,6 +1,8 @@
 use fnv::FnvHashMap;
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
+use std::fmt::Write;
+use std::path::Path;
 
 // from ANTLR grammar to a lexer friendly-one
 mod dfa;
@@ -11,6 +13,27 @@ use crate::error::ParseError;
 
 pub use self::dfa::Dfa;
 pub use self::simulator::{DfaSimulator, Utf8CharReader};
+
+/// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
+pub trait GraphvizDot {
+    /// Returns a graphviz dot representation of the object as string.
+    /// # Examples
+    /// Implementation of the [`Dfa`] class:
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::{Dfa, GraphvizDot};
+    ///
+    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let dfa = Dfa::new(&grammar);
+    /// dfa.to_dot();
+    /// ```
+    fn to_dot(&self) -> String;
+
+    /// Writes a graphviz dot representation to to file.
+    fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
+        std::fs::write(path, self.to_dot())
+    }
+}
 
 /// A Binary Search Tree.
 #[derive(Clone)]
@@ -38,6 +61,31 @@ impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
             write!(f, ",\"right\":{}", *right)?;
         }
         write!(f, "}}")
+    }
+}
+
+impl<T: std::fmt::Display> GraphvizDot for BSTree<T> {
+    fn to_dot(&self) -> String {
+        let mut retval = "digraph BST {\n".to_string();
+        let mut next_id = 0;
+        let mut nodes = vec![(self, next_id)];
+        next_id += 1;
+        while let Some((node, id)) = nodes.pop() {
+            writeln!(retval, "    {}[label=\"{}\"];", id, node.value).unwrap();
+            if let Some(left) = node.left.as_ref() {
+                nodes.push((left.as_ref(), next_id));
+                writeln!(retval, "    {}->{}", id, next_id).unwrap();
+                next_id += 1;
+            } else {
+            }
+            if let Some(right) = node.right.as_ref() {
+                nodes.push((right.as_ref(), next_id));
+                writeln!(retval, "    {}->{}", id, next_id).unwrap();
+                next_id += 1;
+            }
+        }
+        retval.push('}');
+        retval
     }
 }
 

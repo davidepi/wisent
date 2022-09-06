@@ -1,8 +1,8 @@
-use maplit::btreeset;
-
 use super::{BSTree, SymbolTable};
 use crate::grammar::Grammar;
+use maplit::btreeset;
 use std::collections::BTreeSet;
+use std::fmt::Write;
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
 
@@ -67,19 +67,19 @@ impl std::fmt::Display for OpType {
 /// Extended Literal: exacltly like RegexOp but does not depend on the string slice
 /// (because every set has been expanded to a single letter).
 #[derive(PartialEq, Debug, Clone)]
-enum ExLiteral {
-    Value(BTreeSet<char>),
+enum ExLiteral<T> {
+    Value(BTreeSet<T>),
     AnyValue,
     Operation(OpType),
 }
 
-impl std::fmt::Display for ExLiteral {
+impl<T: std::fmt::Display> std::fmt::Display for ExLiteral<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExLiteral::Value(i) => {
                 let mut string = String::from("[");
                 for charz in i {
-                    string.push(*charz);
+                    write!(string, "{}", charz)?;
                 }
                 string.push(']');
                 write!(f, "VALUE({})", string)
@@ -95,7 +95,7 @@ impl std::fmt::Display for ExLiteral {
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum Literal {
-    /// The input symbol (a single letter. The value is the number in the symbol table).
+    /// The input symbol (a single byte).
     Symbol(u32),
     Acc(u32),
     /// Kleenee star unary operator `*`.
@@ -120,8 +120,6 @@ impl std::fmt::Display for Literal {
 
 /// Parse tree for the regex operands, accounting for precedence.
 type PrecedenceTree<'a> = BSTree<RegexOp<'a>>;
-/// Parse tree for the regex without sets (only single letters).
-type ExpandedPrecedenceTree = BSTree<ExLiteral>;
 /// Parse tree for the regex with only *, AND, OR. Thus removing + or ? or ^.
 pub(super) type CanonicalTree = BSTree<Literal>;
 
@@ -231,7 +229,7 @@ fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec
 
 /// Transforms a precedence parse tree in a precedence parse tree where the groups like `[a-z]`
 /// are expanded in `a | b | c ... | y | z`
-fn expand_literals(node: PrecedenceTree) -> ExpandedPrecedenceTree {
+fn expand_literals(node: PrecedenceTree) -> BSTree<ExLiteral<char>> {
     match node.value.r#type {
         OpType::ID => expand_literal_node(node.value.value),
         n => {
@@ -249,7 +247,7 @@ fn expand_literals(node: PrecedenceTree) -> ExpandedPrecedenceTree {
 /// Expands a single node containing sets like `[a-z]` in a set with all the simbols like
 /// `{a, b, c, d....}`. Replace also the . symbol with the special placeholder to represent any
 /// value and any eventual set with .
-fn expand_literal_node(literal: &str) -> ExpandedPrecedenceTree {
+fn expand_literal_node(literal: &str) -> BSTree<ExLiteral<char>> {
     if literal == "." {
         BSTree {
             value: ExLiteral::AnyValue,
@@ -520,7 +518,7 @@ fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> u
 
 /// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
-fn canonicalise(node: ExpandedPrecedenceTree, symtable: &SymbolTable) -> CanonicalTree {
+fn canonicalise(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
     match node.value {
         ExLiteral::Value(i) => set_to_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
         ExLiteral::AnyValue => set_to_literal_node(
@@ -631,7 +629,7 @@ fn set_to_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
 }
 
 /// Returns the set of symbols for a given tree.
-fn get_set_of_symbols(root: &ExpandedPrecedenceTree) -> BTreeSet<BTreeSet<char>> {
+fn get_set_of_symbols(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>> {
     let mut ret = BTreeSet::new();
     let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {
