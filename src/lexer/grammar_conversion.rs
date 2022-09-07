@@ -79,7 +79,10 @@ impl<T: std::fmt::Display> std::fmt::Display for ExLiteral<T> {
             ExLiteral::Value(i) => {
                 let mut string = String::from("[");
                 for charz in i {
-                    write!(string, "{}", charz)?;
+                    write!(string, "{},", charz)?;
+                }
+                if string.len() > 1 {
+                    string.pop();
                 }
                 string.push(']');
                 write!(f, "VALUE({})", string)
@@ -228,7 +231,7 @@ fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec
 }
 
 /// Transforms a precedence parse tree in a precedence parse tree where the groups like `[a-z]`
-/// are expanded in `a | b | c ... | y | z`
+/// are expanded in `a | b | c ... | y | z (grouped into a BTreeSet)`
 fn expand_literals(node: PrecedenceTree) -> BSTree<ExLiteral<char>> {
     match node.value.r#type {
         OpType::ID => expand_literal_node(node.value.value),
@@ -370,6 +373,126 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
         }
         _ => letter,
     }
+}
+
+/// expands non ASCII characters into a sequence of UTF-8 bytes.
+fn expand_non_ascii(node: BSTree<ExLiteral<char>>) -> BSTree<ExLiteral<u8>> {
+    match node.value {
+        ExLiteral::Value(val) => {
+            let non_ascii = val
+                .iter()
+                .filter(|c| !c.is_ascii())
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if !non_ascii.is_empty() {
+                let ascii = val
+                    .difference(&non_ascii)
+                    .copied()
+                    .map(|c| c as u8)
+                    .collect::<BTreeSet<_>>();
+                // converts each non-ASCII char into a sequence of consecutive bytes.
+                let mut nonascii_roots = non_ascii
+                    .into_iter()
+                    .map(utf8_literal_to_u8_series)
+                    .collect::<Vec<_>>();
+                // merge (|) all the non ASCII sequences
+                let mut root = if nonascii_roots.len() == 1 {
+                    nonascii_roots.pop().unwrap()
+                } else {
+                    let mut prev = BSTree {
+                        value: ExLiteral::Operation(OpType::OR),
+                        left: Some(Box::new(nonascii_roots.pop().unwrap())),
+                        right: Some(Box::new(nonascii_roots.pop().unwrap())),
+                    };
+                    while let Some(node) = nonascii_roots.pop() {
+                        prev = BSTree {
+                            value: ExLiteral::Operation(OpType::OR),
+                            left: Some(Box::new(prev)),
+                            right: Some(Box::new(node)),
+                        }
+                    }
+                    prev
+                };
+                // handle the ASCII set (if existing)
+                if !ascii.is_empty() {
+                    let ascii_node = BSTree {
+                        value: ExLiteral::Value(ascii),
+                        left: None,
+                        right: None,
+                    };
+                    root = BSTree {
+                        value: ExLiteral::Operation(OpType::OR),
+                        left: Some(Box::new(ascii_node)),
+                        right: Some(Box::new(root)),
+                    };
+                }
+                root
+            } else {
+                let ascii = val.into_iter().map(|c| c as u8).collect();
+                BSTree {
+                    value: ExLiteral::Value(ascii),
+                    left: None,
+                    right: None,
+                }
+            }
+        }
+        ExLiteral::AnyValue => BSTree {
+            value: ExLiteral::AnyValue,
+            left: node.left.map(|l| Box::new(expand_non_ascii(*l))),
+            right: node.right.map(|r| Box::new(expand_non_ascii(*r))),
+        },
+        ExLiteral::Operation(op) => BSTree {
+            value: ExLiteral::Operation(op),
+            left: node.left.map(|l| Box::new(expand_non_ascii(*l))),
+            right: node.right.map(|r| Box::new(expand_non_ascii(*r))),
+        },
+    }
+}
+
+/// expands a non-ascii literal into a series of u8 literals
+/// no checks are performed, as this function is supposed to be invoked from expand_non_ascii
+fn utf8_literal_to_u8_series(utfchar: char) -> BSTree<ExLiteral<u8>> {
+    let utflen = utfchar.len_utf8();
+    let mut encoded = [0; 4];
+    utfchar.encode_utf8(&mut encoded);
+    let first = BSTree {
+        value: ExLiteral::Value(btreeset! {encoded[0]}),
+        left: None,
+        right: None,
+    };
+    let second = BSTree {
+        value: ExLiteral::Value(btreeset! {encoded[1]}),
+        left: None,
+        right: None,
+    };
+    let mut root = BSTree {
+        value: ExLiteral::Operation(OpType::AND),
+        left: Some(Box::new(first)),
+        right: Some(Box::new(second)),
+    };
+    if utflen > 2 {
+        root = BSTree {
+            value: ExLiteral::Operation(OpType::AND),
+            left: Some(Box::new(root)),
+            right: Some(Box::new(BSTree {
+                value: ExLiteral::Value(btreeset! {encoded[2]}),
+                left: None,
+                right: None,
+            })),
+        };
+        if utflen > 3 {
+            root = BSTree {
+                value: ExLiteral::Operation(OpType::AND),
+                left: Some(Box::new(root)),
+                right: Some(Box::new(BSTree {
+                    value: ExLiteral::Value(btreeset! {encoded[3]}),
+                    left: None,
+                    right: None,
+                })),
+            };
+        }
+    }
+    root
 }
 
 /// Transforms a regexp in a sequence of operands or operators.
@@ -658,7 +781,8 @@ fn get_set_of_symbols(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>
 #[cfg(test)]
 mod tests {
     use crate::lexer::grammar_conversion::{
-        canonicalise, expand_literals, gen_precedence_tree, get_set_of_symbols, OpType, RegexOp,
+        canonicalise, expand_literals, expand_non_ascii, gen_precedence_tree, get_set_of_symbols,
+        OpType, RegexOp,
     };
     use crate::lexer::{BSTree, SymbolTable};
 
@@ -814,7 +938,7 @@ mod tests {
         tree.value.value = square;
         let ret_tree = expand_literals(tree);
         let str = format!("{}", &ret_tree);
-        assert_eq!(str, r#"{"val":"VALUE([-]abcd])"}"#);
+        assert_eq!(str, r#"{"val":"VALUE([-,],a,b,c,d])"}"#);
     }
 
     #[test]
@@ -832,7 +956,44 @@ mod tests {
         tree.value.value = range;
         let ret_tree = expand_literals(tree);
         let str = format!("{}", &ret_tree);
-        assert_eq!(str, r#"{"val":"VALUE([ᛃᛄᛅ])"}"#);
+        assert_eq!(str, r#"{"val":"VALUE([ᛃ,ᛄ,ᛅ])"}"#);
+    }
+
+    #[test]
+    fn utf8_literal_to_u8_series() {
+        let literal = '🦀';
+        let u8_series = super::utf8_literal_to_u8_series(literal);
+        let str = format!("{}", u8_series);
+        assert_eq!(
+            str,
+            r#"{"val":"OP(&)","left":{"val":"OP(&)","left":{"val":"OP(&)","left":{"val":"VALUE([240])"},"right":{"val":"VALUE([159])"}},"right":{"val":"VALUE([166])"}},"right":{"val":"VALUE([128])"}}"#
+        )
+    }
+
+    #[test]
+    fn expand_non_ascii_untouched() {
+        let expr = "[a-c]|[d-f]";
+        let prec_tree = gen_precedence_tree(expr);
+        let expanded_tree = expand_literals(prec_tree);
+        let u8_tree = expand_non_ascii(expanded_tree);
+        let str = format!("{}", &u8_tree);
+        assert_eq!(
+            str,
+            r#"{"val":"OP(|)","left":{"val":"VALUE([97,98,99])"},"right":{"val":"VALUE([100,101,102])"}}"#
+        );
+    }
+
+    #[test]
+    fn expand_non_ascii_mixed() {
+        let expr = "[a-cあ]|'d'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expanded_tree = expand_literals(prec_tree);
+        let u8_tree = expand_non_ascii(expanded_tree);
+        let str = format!("{}", &u8_tree);
+        assert_eq!(
+            str,
+            r#"{"val":"OP(|)","left":{"val":"OP(|)","left":{"val":"VALUE([97,98,99])"},"right":{"val":"OP(&)","left":{"val":"OP(&)","left":{"val":"VALUE([227])"},"right":{"val":"VALUE([129])"}},"right":{"val":"VALUE([130])"}}},"right":{"val":"VALUE([100])"}}"#
+        )
     }
 
     #[test]
