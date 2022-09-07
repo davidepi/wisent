@@ -1,4 +1,4 @@
-use fnv::FnvHashMap;
+use rustc_hash::FxHashMap;
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -103,16 +103,16 @@ impl<T: std::fmt::Display> GraphvizDot for BSTree<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
-    table: FnvHashMap<char, u32>,
+    table: FxHashMap<char, u32>,
     // table for reverse lookup, given an ID prints the transition set (useful only for debug)
-    reverse: FnvHashMap<u32, BTreeSet<char>>,
+    reverse: FxHashMap<u32, BTreeSet<char>>,
 }
 
 impl Default for SymbolTable {
     fn default() -> Self {
-        let reverse = FnvHashMap::default();
+        let reverse = FxHashMap::default();
         SymbolTable {
-            table: FnvHashMap::default(),
+            table: FxHashMap::default(),
             reverse,
         }
     }
@@ -187,10 +187,10 @@ impl SymbolTable {
             todo = new_todo;
         }
         // assign indices: unique to the same and increase only if something has been inserted
-        let mut table = FnvHashMap::default();
+        let mut table = FxHashMap::default();
         //let mut uniques = 1; // 0 reserved for epsilon transactions
         let mut uniques = 0;
-        let mut reverse = FnvHashMap::default();
+        let mut reverse = FxHashMap::default();
         for set in done.into_iter() {
             let mut inserted = false;
             for symbol in &set {
@@ -420,8 +420,8 @@ impl SymbolTable {
         let malformed_err = "malformed symbol_table";
         if !v.is_empty() {
             let mut i = 0;
-            let mut table = FnvHashMap::default();
-            let mut reverse = FnvHashMap::default();
+            let mut table = FxHashMap::default();
+            let mut reverse = FxHashMap::default();
             while i < v.len() {
                 let symbol_index_bytes: [u8; 4] = v
                     .get(i..i + 4)

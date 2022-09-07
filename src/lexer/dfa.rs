@@ -2,8 +2,8 @@ use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
 use super::{BSTree, GraphvizDot, SymbolTable};
 use crate::error::ParseError;
 use crate::grammar::Grammar;
-use fnv::{FnvHashMap, FnvHashSet};
 use maplit::btreeset;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
 
@@ -337,10 +337,10 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
     let mut indices = vec![symtable.epsilon_id(); (helper.value.index + 1) as usize];
     let mut followpos = vec![BTreeSet::new(); (helper.value.index + 1) as usize];
     //retrieve accepting nodes (they are embedded in the helper tree, we don't have NFA here)
-    let mut accepting_nodes = FnvHashMap::default();
+    let mut accepting_nodes = FxHashMap::default();
     dc_assign_index_to_literal(&helper, &mut indices, &mut accepting_nodes);
     dc_compute_followpos(&helper, &mut followpos);
-    let mut accept_map = FnvHashMap::default();
+    let mut accept_map = FxHashMap::default();
     let mut done = HashMap::new();
     done.insert(helper.value.firstpos.clone(), 0);
     // check the first node if it can be accepting, this is done in the loop at creation time.
@@ -356,7 +356,7 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
     }
     let mut index = 1;
     let mut unmarked = vec![helper.value.firstpos];
-    let mut tran = FnvHashMap::default();
+    let mut tran = FxHashMap::default();
     // loop, conceptually similar to subset construction, but uses followpos instead of NFA
     // (followpos is essentially an NFA without epsilon moves)
     while let Some(node_set) = unmarked.pop() {
@@ -390,7 +390,7 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
     for node in 0..index {
         let ids_no = symtable.ids() as usize;
         let mut next_nodes = Vec::with_capacity(ids_no);
-        let mut all_same = FnvHashSet::with_capacity_and_hasher(ids_no, Default::default());
+        let mut all_same = FxHashSet::with_capacity_and_hasher(ids_no, Default::default());
         for symbol in 0..symtable.ids() as u32 {
             let next = *tran.get(&(node, symbol)).unwrap_or(&sink);
             next_nodes.push(next);
@@ -545,7 +545,7 @@ fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>)
 fn dc_assign_index_to_literal(
     node: &BSTree<DCHelper>,
     indices: &mut Vec<u32>,
-    acc: &mut FnvHashMap<u32, u32>,
+    acc: &mut FxHashMap<u32, u32>,
 ) {
     if let Some(l) = &node.left {
         dc_assign_index_to_literal(l, indices, acc);
@@ -570,7 +570,7 @@ fn dc_assign_index_to_literal(
 /// A.Aho et al. (p.180 on 2nd edition).
 fn min_dfa(dfa: Dfa) -> Dfa {
     let mut partitions = init_partitions(&dfa);
-    let mut positions = FnvHashMap::default();
+    let mut positions = FxHashMap::default();
     for (partition_index, partition) in partitions.iter().enumerate() {
         for node in partition {
             positions.insert(*node, partition_index as u32);
@@ -608,7 +608,7 @@ fn min_dfa(dfa: Dfa) -> Dfa {
 ///
 /// Creates the initial partitions: non accepting nodes, and a partition for each group of accepting
 /// nodes announcing the same rule.
-fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<u32>> {
+fn init_partitions(dfa: &Dfa) -> Vec<FxHashSet<u32>> {
     // find how many announcing_rules exists
     let announced_max = dfa
         .accept
@@ -618,7 +618,7 @@ fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<u32>> {
         .max()
         .unwrap_or(0) as usize;
     // creates the various sets (+2 because last element is the non-accepting nodes)
-    let mut ret = vec![FnvHashSet::default(); announced_max + 2];
+    let mut ret = vec![FxHashSet::default(); announced_max + 2];
     for (announcing_state, announced_rule) in dfa.accept.iter().enumerate() {
         if *announced_rule != u32::MAX {
             ret[(*announced_rule) as usize].insert(announcing_state as u32);
@@ -633,11 +633,11 @@ fn init_partitions(dfa: &Dfa) -> Vec<FnvHashSet<u32>> {
 ///
 /// Splits a partition if two nodes goes to different partitions on the same symbol.
 fn split_partition(
-    partition: FnvHashSet<u32>,
-    position: &FnvHashMap<u32, u32>,
+    partition: FxHashSet<u32>,
+    position: &FxHashMap<u32, u32>,
     dfa: &Dfa,
-) -> (FnvHashSet<u32>, FnvHashSet<u32>) {
-    let mut split = FnvHashSet::default();
+) -> (FxHashSet<u32>, FxHashSet<u32>) {
+    let mut split = FxHashSet::default();
     if partition.len() > 1 {
         for symbol_id in 0..dfa.alphabet.ids() {
             let mut iter = partition.iter();
@@ -665,10 +665,10 @@ fn split_partition(
 
 /// Given the final set of partitions rewrites the transition table in order to get the efficient
 /// one.
-fn remap(partitions: Vec<FnvHashSet<u32>>, positions: FnvHashMap<u32, u32>, dfa: Dfa) -> Dfa {
+fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: Dfa) -> Dfa {
     //first record in which partitions is every node
-    let mut new_trans = FnvHashMap::default();
-    let mut accept_map = FnvHashMap::default();
+    let mut new_trans = FxHashMap::default();
+    let mut accept_map = FxHashMap::default();
     let mut in_degree = vec![0; partitions.len()];
     let mut out_degree = vec![0; partitions.len()];
     //remap accepting nodes

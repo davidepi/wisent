@@ -16,7 +16,7 @@ strip = true
 [dependencies]
 regex = "1.6"
 maplit = "1.0"
-fnv = "1.0"
+rustc-hash = "1.1"
 
 [dev-dependencies]
 criterion = "0.3"
