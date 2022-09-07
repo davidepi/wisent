@@ -3,7 +3,7 @@ use crate::grammar::Grammar;
 use maplit::btreeset;
 use std::collections::BTreeSet;
 use std::fmt::Write;
-use std::iter::{Enumerate, Peekable};
+use std::iter::Peekable;
 use std::str::Chars;
 
 #[derive(Copy, Clone)]
@@ -375,8 +375,9 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
 /// Transforms a regexp in a sequence of operands or operators.
 fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
     let mut tokenz = Vec::<RegexOp>::new();
-    let mut iter = regex.chars().peekable().enumerate();
-    while let Some((index, char)) = iter.next() {
+    let mut iter = regex.chars().peekable();
+    let mut index = 0;
+    while let Some(char) = iter.next() {
         let tp;
         let val;
         let priority;
@@ -434,6 +435,7 @@ fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
             value: val,
             priority,
         });
+        index += val.len();
     }
     tokenz
 }
@@ -441,7 +443,7 @@ fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
 //No clippy, this is not more readable.
 #[allow(clippy::useless_let_if_seq)]
 /// Returns the slice of the regexp representing the token as 'a' or 'a'..'b' or '[a-z]'.
-fn read_token<'a>(input: &'a str, first: char, it: &mut Enumerate<Peekable<Chars>>) -> &'a str {
+fn read_token<'a>(input: &'a str, first: char, it: &mut Peekable<Chars>) -> &'a str {
     match first {
         '.' => &input[..1],
         '[' => {
@@ -497,21 +499,22 @@ fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
 }
 
 /// Consumes the input (accounting for escaped chars) until the `until` character is found.
-fn consume_counting_until(it: &mut Enumerate<Peekable<Chars>>, until: char) -> usize {
+/// Returns the number of bytes (u8) consumed.
+fn consume_counting_until(it: &mut Peekable<Chars>, until: char) -> usize {
     let mut escapes = 0;
     let mut skipped = 0;
     for skip in it {
-        if skip.1 == until {
+        if skip == until {
             if escapes % 2 == 0 {
                 break;
             }
             escapes = 0;
-        } else if skip.1 == '\\' {
+        } else if skip == '\\' {
             escapes += 1;
         } else {
             escapes = 0;
         }
-        skipped += skip.1.len_utf8();
+        skipped += skip.len_utf8();
     }
     skipped
 }
@@ -833,6 +836,19 @@ mod tests {
     }
 
     #[test]
+    fn regex_with_unicode_literals() {
+        // ANTLR does not support unicode literals in the grammar,
+        // but this library does for convenience.
+        let regex = "[あいうえお]|[アイウエオ]";
+        let tree = gen_precedence_tree(regex);
+        let str = format!("{}", &tree);
+        assert_eq!(
+            str,
+            r#"{"val":"|","left":{"val":"[あいうえお]"},"right":{"val":"[アイウエオ]"}}"#
+        )
+    }
+
+    #[test]
     //Asserts correctness in precedence evaluation when parentheses are not present
     fn regex_correct_precedence() {
         let mut expr;
@@ -844,8 +860,7 @@ mod tests {
         str = format!("{}", &tree);
         assert_eq!(
             str,
-            "{\"val\":\"|\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\
-    \"val\":\"*\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"'c'\"}}}"
+            r#"{"val":"|","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"*","left":{"val":"'b'"}},"right":{"val":"'c'"}}}"#
         );
 
         expr = "'a'*('b'|'c')*'d'";
@@ -853,9 +868,7 @@ mod tests {
         str = format!("{}", &tree);
         assert_eq!(
             str,
-            "{\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"'a'\"}},\"right\":\
-    {\"val\":\"&\",\"left\":{\"val\":\"*\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"'b'\"},\"rig\
-    ht\":{\"val\":\"'c'\"}}},\"right\":{\"val\":\"'d'\"}}}"
+            r#"{"val":"&","left":{"val":"*","left":{"val":"'a'"}},"right":{"val":"&","left":{"val":"*","left":{"val":"|","left":{"val":"'b'"},"right":{"val":"'c'"}}},"right":{"val":"'d'"}}}"#
         );
 
         expr = "('a')~'b'('c')('d')'e'";
@@ -863,9 +876,7 @@ mod tests {
         str = format!("{}", &tree);
         assert_eq!(
             str,
-            "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\
-    \"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\
-    \"right\":{\"val\":\"&\",\"left\":{\"val\":\"'d'\"},\"right\":{\"val\":\"'e'\"}}}}}"
+            r#"{"val":"&","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"~","left":{"val":"'b'"}},"right":{"val":"&","left":{"val":"'c'"},"right":{"val":"&","left":{"val":"'d'"},"right":{"val":"'e'"}}}}}"#
         );
 
         expr = "'a'~'b''c'('d')";
@@ -873,9 +884,7 @@ mod tests {
         str = format!("{}", &tree);
         assert_eq!(
             str,
-            "{\"val\":\"&\",\"left\":{\"val\":\"'a'\"},\"right\":{\"val\":\"&\",\"left\":{\
-    \"val\":\"~\",\"left\":{\"val\":\"'b'\"}},\"right\":{\"val\":\"&\",\"left\":{\"val\":\"'c'\"},\
-    \"right\":{\"val\":\"'d'\"}}}}"
+            r#"{"val":"&","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"~","left":{"val":"'b'"}},"right":{"val":"&","left":{"val":"'c'"},"right":{"val":"'d'"}}}}"#
         );
 
         expr = "'a'?('b'*|'c'*)+'d'";
@@ -883,10 +892,7 @@ mod tests {
         str = format!("{}", &tree);
         assert_eq!(
             str,
-            "{\"val\":\"&\",\"left\":{\"val\":\"?\",\"left\":{\"val\":\"'a'\"}},\"right\":{\
-    \"val\":\"&\",\"left\":{\"val\":\"+\",\"left\":{\"val\":\"|\",\"left\":{\"val\":\"*\",\"left\":\
-    {\"val\":\"'b'\"}},\"right\":{\"val\":\"*\",\"left\":{\"val\":\"'c'\"}}}},\"right\":{\"val\":\"\
-    'd'\"}}}"
+            r#"{"val":"&","left":{"val":"?","left":{"val":"'a'"}},"right":{"val":"&","left":{"val":"+","left":{"val":"|","left":{"val":"*","left":{"val":"'b'"}},"right":{"val":"*","left":{"val":"'c'"}}}},"right":{"val":"'d'"}}}"#
         );
     }
 }
