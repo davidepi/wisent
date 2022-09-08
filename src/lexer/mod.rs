@@ -1,3 +1,4 @@
+use crate::error::ParseError;
 use rustc_hash::FxHashMap;
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
@@ -9,10 +10,8 @@ mod dfa;
 mod grammar_conversion;
 mod simulator;
 
-use crate::error::ParseError;
-
 pub use self::dfa::Dfa;
-pub use self::simulator::{DfaSimulator, Utf8CharReader};
+pub use self::simulator::DfaSimulator;
 
 /// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
 pub trait GraphvizDot {
