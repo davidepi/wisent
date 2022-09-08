@@ -1,9 +1,24 @@
 use crate::lexer::Dfa;
 use std::str::Chars;
 
+use super::SymbolTable;
+
 /// Buffer size for the lexer. Each buffer stores the lookahead tokens (as u32) so we don't want to
 /// store everything in memory but still keep a decently sized buffer.
 const BUFFER_SIZE: usize = 1024;
+
+#[derive(Debug, Copy, Clone)]
+/// Token retrieved by the lexical analyzer.
+pub struct Token {
+    /// The production ID (in the grammar used to build the DFA) associated with this token.
+    pub production: u32,
+    /// Beginning of the token in number of bytes since the beginning of the stream.
+    pub start: usize,
+    /// End of the token in number of bytes since the beginning of the stream.
+    /// If the last character of the token is a multi-byte character this value correspond to the
+    /// last byte of the character.
+    pub end: usize,
+}
 
 #[derive(Default, Copy, Clone)]
 /// Simple to struct to name indices for the lexeme_pos and forward_pos
@@ -29,9 +44,6 @@ pub struct DfaSimulator {
 
 impl DfaSimulator {
     /// Creates a new Lexical Analyzer with the given DFA and the given input.
-    /// # Examples
-    /// Retrieving letters and numbers from a string:
-    /// **TODO:** write an example when the public interface is available
     pub fn new(dfa: Dfa) -> Self {
         Self {
             buffers: [
@@ -44,12 +56,30 @@ impl DfaSimulator {
         }
     }
 
-    pub fn tokenize(&mut self, input: &mut Chars) -> Vec<u32> {
+    /// Runs the lexical analysis and retrieves the tokens composing a string.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use wisent::grammar::Grammar;
+    /// use wisent::lexer::{Dfa, DfaSimulator};
+    ///
+    /// let grammar = Grammar::new(&["([0-9])+", "([a-z])+"], &[], &["NUMBER", "WORD"]);
+    /// let dfa = Dfa::new(&grammar);
+    /// let input = "abc123";
+    /// let mut simulator = DfaSimulator::new(dfa);
+    /// let tokens = simulator.tokenize(&mut input.chars());
+    /// assert_eq!(tokens[0].production, 1);
+    /// assert_eq!(tokens[1].production, 0);
+    /// ```
+    pub fn tokenize(&mut self, input: &mut Chars) -> Vec<Token> {
         self.init_tokenize(input);
         let mut state = self.dfa.start();
+        let mut location_start = 0;
+        let mut location_end = 0;
         let mut last_accepted = None;
         let mut productions = Vec::new();
-        while let Some(char_id) = self.next_char(input) {
+        while let Some((char_id, bytes)) = self.next_char(input) {
+            location_end += bytes as usize;
             if let Some(next) = self.dfa.moove(state, char_id) {
                 //can advance
                 state = next;
@@ -57,21 +87,31 @@ impl DfaSimulator {
                     // if the new state is accepting, record the production and the current
                     // lexeme ending. DO NOT push the accepting state, as we try to greedily match
                     // other productions.
-                    last_accepted = Some((accepting_prod, self.forward_pos));
+                    last_accepted = Some((accepting_prod, self.forward_pos, location_end));
                 }
-            } else if let Some((accepted_prod, last_valid_state)) = last_accepted {
+            } else if let Some((production, last_valid_state, last_end)) = last_accepted {
                 // no other move available, but there was a previous accepted production.
                 // push the accepted production and roll back the head.
-                productions.push(accepted_prod);
+                productions.push(Token {
+                    production,
+                    start: location_start,
+                    end: last_end,
+                });
                 state = self.dfa.start();
                 self.lexeme_pos = last_valid_state;
                 self.forward_pos = last_valid_state;
+                location_start = last_end;
+                location_end = last_end;
             } else {
-                break; // halt
+                break; // no moves and no accepting state reached. halt.
             }
         }
-        if let Some((production, _)) = last_accepted {
-            productions.push(production);
+        if let Some((production, _, last_end)) = last_accepted {
+            productions.push(Token {
+                production,
+                start: location_start,
+                end: last_end,
+            });
         }
         productions
     }
@@ -85,7 +125,7 @@ impl DfaSimulator {
         self.forward_pos = Default::default();
         let chars_it = input
             .take(self.buffers[0].capacity())
-            .map(|c| self.dfa.symbol_table().symbol_id(c));
+            .map(|c| encode_char_len(c, self.dfa.symbol_table()));
         self.buffers[0].extend(chars_it);
     }
 
@@ -94,12 +134,14 @@ impl DfaSimulator {
     /// Takes care of buffering the read and handling the buffers.
     ///
     /// DO NOT change the input `s` until EOF is returned!
-    fn next_char(&mut self, input: &mut Chars) -> Option<u32> {
+    ///
+    /// Returns the ID and the number of bytes used to represent it.
+    fn next_char(&mut self, input: &mut Chars) -> Option<(u32, u8)> {
         let mut current_buffer = &mut self.buffers[self.forward_pos.buffer_index as usize];
         if self.forward_pos.index == current_buffer.len() {
             let mut chars_it = input
                 .take(BUFFER_SIZE)
-                .map(|c| self.dfa.symbol_table().symbol_id(c))
+                .map(|c| encode_char_len(c, self.dfa.symbol_table()))
                 .peekable();
             // return if EOF
             chars_it.peek()?;
@@ -125,8 +167,22 @@ impl DfaSimulator {
         // current buffer not full (or just refilled), just fetch the next character
         let char = current_buffer[self.forward_pos.index as usize];
         self.forward_pos.index += 1;
-        Some(char)
+        Some(decode_char_len(char))
     }
+}
+
+/// In order to save space, the length of a char in bytes is written in the same value as the
+/// symtable ID (only 2 bits are used)
+fn encode_char_len(c: char, symtab: &SymbolTable) -> u32 {
+    // 0x3EFFFFFF: symbol id
+    // 0xC0000000: number of bytes to represent the char -1
+    (symtab.symbol_id(c) & 0x3EFFFFFF) | ((c.len_utf8() - 1) as u32) << 30
+}
+
+/// Inverse of the encode_char_len: retrieves the original symtable ID and the character len in
+/// bytes
+fn decode_char_len(v: u32) -> (u32, u8) {
+    (v & 0x3EFFFFFF, ((v & 0xC0000000) >> 30) as u8 + 1)
 }
 
 #[cfg(test)]
@@ -211,9 +267,43 @@ mod tests {
         let grammar = Grammar::new(&["(~[0-9 ])+", "' '+"], &[], &["NO_NUMBER", "SPACE"]);
         let dfa = Dfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
-        let expected = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
+        let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
+        let expected_end = vec![9, 10, 23, 24, 29, 30, 36, 37, 48, 49, 53];
         let mut simulator = DfaSimulator::new(dfa);
-        let prods = simulator.tokenize(&mut reader);
-        assert_eq!(prods, expected);
+        let tokens = simulator.tokenize(&mut reader); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        for (i, token) in tokens.into_iter().enumerate() {
+            assert_eq!(token.production, expected_prods[i]);
+            assert_eq!(token.start, expected_start[i]);
+            assert_eq!(token.end, expected_end[i]);
+        }
+    }
+
+    #[test]
+    fn simulator_tokenize_greedy_complete() {
+        let grammar = Grammar::new(&["([0-9])+", "([0-9])+'.'[0-9]+"], &[], &["INT", "REAL"]);
+        let dfa = Dfa::new(&grammar);
+        let input = "123.456789";
+        let mut reader = input.chars();
+        let mut simulator = DfaSimulator::new(dfa);
+        let tokens = simulator.tokenize(&mut reader); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].production, 1);
+        assert_eq!(tokens[0].start, 0);
+        assert_eq!(tokens[0].end, 10);
+    }
+
+    #[test]
+    fn simulator_tokenize_greedy_incomplete() {
+        let grammar = Grammar::new(&["([0-9])+", "([0-9])+'.'[0-9]+"], &[], &["INT", "REAL"]);
+        let dfa = Dfa::new(&grammar);
+        let input = "123.";
+        let mut reader = input.chars();
+        let mut simulator = DfaSimulator::new(dfa);
+        let tokens = simulator.tokenize(&mut reader); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].production, 0);
+        assert_eq!(tokens[0].start, 0);
+        assert_eq!(tokens[0].end, 3);
     }
 }
