@@ -41,31 +41,28 @@ struct GrammarInternal {
 fn reindex(mut grammar: GrammarInternal) -> Grammar {
     let mut terminals = Vec::with_capacity(grammar.terminals.len());
     let mut non_terminals = Vec::with_capacity(grammar.non_terminals.len());
-    let mut names = HashMap::with_capacity(grammar.terminals.len() + grammar.non_terminals.len());
+    let mut names_terminals = Vec::with_capacity(grammar.terminals.len());
+    let mut names_non_terminals = Vec::with_capacity(grammar.non_terminals.len());
     let mut actions = Vec::with_capacity(grammar.terminals.len());
     //the new order will be: first every terminal, then every non-terminal. In the original order.
     for head in grammar.order {
-        let idx;
-        let term;
         if let Some(body) = grammar.terminals.remove(&head) {
-            idx = terminals.len();
-            term = true;
             terminals.push(body);
             actions.push(grammar.actions.remove(&head).unwrap()); //this should exist
+            names_terminals.push(head);
         } else if let Some(body) = grammar.non_terminals.remove(&head) {
-            idx = non_terminals.len();
-            term = false;
             non_terminals.push(body);
+            names_non_terminals.push(head);
         } else {
             panic!("Expected production to be either in terminals or non terminals.");
         }
-        names.insert(head, (idx, term));
     }
     Grammar {
         terminals,
         non_terminals,
-        names,
         actions,
+        names_terminals,
+        names_non_terminals,
     }
 }
 
@@ -779,10 +776,8 @@ mod tests {
         let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
         let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
         let g = Grammar::new(&terminals, &non_terminals, &names);
-        assert_eq!(g[0], "[a-z]");
-        assert_eq!(g[1], "[A-Z]");
-        assert_eq!(g[2], "LETTER_UP | LETTER_LO");
-        assert_eq!(g[3], "word letter | letter");
+        assert_eq!(g.iter_term().collect::<Vec<_>>(), terminals);
+        assert_eq!(g.iter_nonterm().collect::<Vec<_>>(), non_terminals);
     }
 
     #[test]
@@ -891,37 +886,41 @@ mod tests {
     #[test]
     //Asserts that ALL the productions are parsed correctly
     fn get_production() {
-        match Grammar::parse_grammar("./resources/simple_grammar.txt") {
-            Ok(g) => {
-                assert_eq!(g.get("TEXT").unwrap(), "~[,\\n\\r\"]+");
-                assert_eq!(g.get("STRING").unwrap(), "'\"'('\"\"'|~'\"')*'\"'");
-                assert_eq!(g.get("csvFile").unwrap(), "hdr row+ ");
-                assert_eq!(g.get("hdr").unwrap(), "row ");
-                assert_eq!(g.get("row").unwrap(), "field (COMMA field)* CR? LF ");
-                assert_eq!(g.get("field").unwrap(), "TEXT| STRING|");
-            }
-            Err(_) => panic!("Simple grammar failed to parse"),
-        }
+        let g = Grammar::parse_grammar("./resources/simple_grammar.txt").unwrap();
+        let nterm = g.iter_nonterm().collect::<Vec<_>>();
+        let term = g.iter_term().collect::<Vec<_>>();
+        let expected_term = [
+            "~[,\\n\\r\"]+",
+            "'\"'('\"\"'|~'\"')*'\"'",
+            "','",
+            "'\\r'",
+            "'\\n'",
+        ];
+        let expected_nterm = [
+            "hdr row+ ",
+            "row ",
+            "field (COMMA field)* CR? LF ",
+            "TEXT| STRING|",
+        ];
+        assert_eq!(term, expected_term);
+        assert_eq!(nterm, expected_nterm);
     }
 
     #[test]
-    //Asserts that the order of the production is kept unchanged (between terminals and non-terminals)
-    //using the `at()` method
-    fn order_unchanged_at() {
-        match Grammar::parse_grammar("./resources/simple_grammar.txt") {
-            Ok(g) => {
-                assert_eq!(g[0], "~[,\\n\\r\"]+");
-                assert_eq!(g[1], "'\"'('\"\"'|~'\"')*'\"'");
-                assert_eq!(g[2], "','");
-                assert_eq!(g[3], "'\\r'");
-                assert_eq!(g[4], "'\\n'");
-                assert_eq!(g[5], "hdr row+ ");
-                assert_eq!(g[6], "row ");
-                assert_eq!(g[7], "field (COMMA field)* CR? LF ");
-                assert_eq!(g[8], "TEXT| STRING|");
-            }
-            Err(_) => panic!("Simple grammar failed to parse"),
-        }
+    //Asserts that the order of the production is kept unchanged
+    fn order_unchanged() {
+        let g = Grammar::parse_grammar("./resources/simple_grammar.txt").unwrap();
+        let nterm = g.iter_nonterm().collect::<Vec<_>>();
+        let term = g.iter_term().collect::<Vec<_>>();
+        assert_eq!(term[0], "~[,\\n\\r\"]+");
+        assert_eq!(term[1], "'\"'('\"\"'|~'\"')*'\"'");
+        assert_eq!(term[2], "','");
+        assert_eq!(term[3], "'\\r'");
+        assert_eq!(term[4], "'\\n'");
+        assert_eq!(nterm[0], "hdr row+ ");
+        assert_eq!(nterm[1], "row ");
+        assert_eq!(nterm[2], "field (COMMA field)* CR? LF ");
+        assert_eq!(nterm[3], "TEXT| STRING|");
     }
 
     #[test]
@@ -959,50 +958,41 @@ mod tests {
     fn parse_actions_simpler() {
         match Grammar::parse_grammar("./resources/lexer_actions_simpler.txt") {
             Ok(g) => {
+                assert_eq!(*g.action(0).iter().next().unwrap(), Action::SKIP);
+                assert_eq!(*g.action(1).iter().next().unwrap(), Action::MORE);
                 assert_eq!(
-                    *g.action("Skip").unwrap().iter().next().unwrap(),
-                    Action::SKIP
-                );
-                assert_eq!(
-                    *g.action("More").unwrap().iter().next().unwrap(),
-                    Action::MORE
-                );
-                assert_eq!(
-                    *g.action("PopMode").unwrap().iter().next().unwrap(),
-                    Action::POPMODE
-                );
-                assert_eq!(
-                    *g.action("TypeEmpty").unwrap().iter().next().unwrap(),
-                    Action::TYPE("".to_owned())
-                );
-                assert_eq!(
-                    *g.action("TypeFull").unwrap().iter().next().unwrap(),
+                    *g.action(2).iter().next().unwrap(),
                     Action::TYPE("TypeName".to_owned())
                 );
                 assert_eq!(
-                    *g.action("ChannelEmpty").unwrap().iter().next().unwrap(),
-                    Action::CHANNEL("".to_owned())
+                    *g.action(3).iter().next().unwrap(),
+                    Action::TYPE("".to_owned())
                 );
                 assert_eq!(
-                    *g.action("ChannelFull").unwrap().iter().next().unwrap(),
+                    *g.action(4).iter().next().unwrap(),
                     Action::CHANNEL("ChannelName".to_owned())
                 );
                 assert_eq!(
-                    *g.action("ModeEmpty").unwrap().iter().next().unwrap(),
-                    Action::MODE("".to_owned())
+                    *g.action(5).iter().next().unwrap(),
+                    Action::CHANNEL("".to_owned())
                 );
                 assert_eq!(
-                    *g.action("ModeFull").unwrap().iter().next().unwrap(),
+                    *g.action(6).iter().next().unwrap(),
                     Action::MODE("ChannelName".to_owned())
                 );
                 assert_eq!(
-                    *g.action("PushModeEmpty").unwrap().iter().next().unwrap(),
-                    Action::PUSHMODE("".to_owned())
+                    *g.action(7).iter().next().unwrap(),
+                    Action::MODE("".to_owned())
                 );
                 assert_eq!(
-                    *g.action("PushModeFull").unwrap().iter().next().unwrap(),
+                    *g.action(8).iter().next().unwrap(),
                     Action::PUSHMODE("ChannelName".to_owned())
                 );
+                assert_eq!(
+                    *g.action(9).iter().next().unwrap(),
+                    Action::PUSHMODE("".to_owned())
+                );
+                assert_eq!(*g.action(10).iter().next().unwrap(), Action::POPMODE);
             }
             Err(_) => panic!("grammar failed to parse"),
         }
@@ -1014,27 +1004,15 @@ mod tests {
     fn parse_actions_harder() {
         match Grammar::parse_grammar("./resources/lexer_actions_harder.txt") {
             Ok(g) => {
-                assert!(g.action("Dashbrack").unwrap().is_empty());
-                assert_eq!(g.action("Whitespace").unwrap().len(), 2);
-                let mut ws_iter = g.action("Whitespace").unwrap().iter();
+                assert_eq!(g.action(1).len(), 2); // whitespace action
+                let mut ws_iter = g.action(1).iter();
                 assert_eq!(*ws_iter.next().unwrap(), Action::MORE);
                 assert_eq!(
                     *ws_iter.next().unwrap(),
                     Action::CHANNEL("CHANNEL_NAME".to_owned())
                 );
-                assert_eq!(
-                    *g.action("Newline").unwrap().iter().next().unwrap(),
-                    Action::SKIP
-                );
-                assert_eq!(
-                    *g.action("Text").unwrap().iter().next().unwrap(),
-                    Action::MORE
-                );
-                assert_eq!(g.action_nth(0), g.action("Dashbrack").unwrap());
-                assert_eq!(g.action_nth(1), g.action("Whitespace").unwrap());
-                assert_eq!(g.action_nth(2), g.action("Newline").unwrap());
-                assert_eq!(g.action_nth(3), g.action("Text").unwrap());
-                assert_eq!(g.action("NONEXISTENT"), None);
+                assert_eq!(*g.action(2).iter().next().unwrap(), Action::SKIP);
+                assert_eq!(*g.action(3).iter().next().unwrap(), Action::MORE);
             }
             Err(_) => panic!("grammar failed to parse"),
         }
@@ -1046,8 +1024,8 @@ mod tests {
     fn terminal_cleaned() {
         match Grammar::parse_grammar("./resources/lexer_actions_harder.txt") {
             Ok(g) => {
-                assert_eq!(g.get("Dashbrack").unwrap(), "[a->b\\-\\]]+'->'|([ ]+)");
-                assert_eq!(g.get("Newline").unwrap(), "('\\r''\\n'?|'\\n')");
+                assert_eq!(g.iter_term().next().unwrap(), "[a->b\\-\\]]+'->'|([ ]+)");
+                assert_eq!(g.iter_term().nth(2).unwrap(), "('\\r''\\n'?|'\\n')");
             }
             Err(_) => panic!("grammar failed to parse"),
         }

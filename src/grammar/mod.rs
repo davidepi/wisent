@@ -1,6 +1,5 @@
 use crate::error::ParseError;
-use std::collections::{BTreeSet, HashMap};
-use std::ops::Index;
+use std::collections::BTreeSet;
 
 /// Code used to parse an ANTLR grammar with and ad-hoc parser
 mod bootstrap;
@@ -19,8 +18,10 @@ pub struct Grammar {
     pub(crate) actions: Vec<BTreeSet<Action>>,
     //vector containing the bodies of the non-terminal productions
     pub(crate) non_terminals: Vec<String>,
-    //map assigning a tuple (index, is_terminal?) to the productions' heads
-    pub(crate) names: HashMap<String, (usize, bool)>,
+    //vector recording the name of each terminal production
+    names_terminals: Vec<String>,
+    //vector recording the name of each non-terminal production
+    names_non_terminals: Vec<String>,
 }
 
 impl Grammar {
@@ -52,16 +53,20 @@ impl Grammar {
             .iter()
             .map(|x| x.to_string())
             .collect::<Vec<_>>();
-        let mut map = HashMap::new();
-        for (idx, item) in names.iter().enumerate() {
-            let term = idx < terminals.len();
-            map.insert(item.to_string(), (idx, term));
-        }
+        let names_terminals = names[..terminals.len()]
+            .iter()
+            .map(|n| n.to_string())
+            .collect();
+        let names_non_terminals = names[terminals.len()..]
+            .iter()
+            .map(|n| n.to_string())
+            .collect();
         Grammar {
             terminals: terms,
             non_terminals: nterms,
             actions: Vec::new(),
-            names: map,
+            names_terminals,
+            names_non_terminals,
         }
     }
 
@@ -135,10 +140,14 @@ impl Grammar {
         self.terminals.is_empty() && self.non_terminals.is_empty()
     }
 
-    /// Returns the production body associated to a given head.
+    /// Returns the name of the nth terminal production.
     ///
-    /// Productions are expressed in the form `head: body;`. This method takes the `head` and
-    /// returns the given `body` or None if the production does not exists.
+    /// Productions are expressed in the form `head: body;` and assigned an index (the order in
+    /// which they appear in the grammar file. This method takes that index  and returns the `head`
+    /// for terminals or `None` if the index was not found.
+    ///
+    /// The index correspond to the one found within the result of the [`Grammar::iter_term`]
+    /// method.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -146,52 +155,34 @@ impl Grammar {
     /// LETTER_UPPERCASE: [A-Z];
     /// LETTER_LOWERCASE: [a-z];";
     /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
-    /// let body = grammar.get("LETTER_LOWERCASE").unwrap();
-    /// assert_eq!(body, "[a-z]");
+    /// let head = grammar.name_term(1).unwrap();
+    /// assert_eq!(head, "LETTER_LOWERCASE");
     /// ```
-    pub fn get(&self, head: &str) -> Option<&str> {
-        if let Some(found) = self.names.get(head) {
-            if found.1 {
-                Some(&self.terminals[found.0])
-            } else {
-                Some(&self.non_terminals[found.0])
-            }
-        } else {
-            None
-        }
+    pub fn name_term(&self, index: usize) -> Option<&String> {
+        self.names_terminals.get(index)
     }
 
-    /// Returns the lexer action for a given terminal name.
+    /// Returns the name of the nth non-terminal production.
     ///
-    /// Lexer actions are an ANTLR-specific, language independent feature useful only to the lexer.
-    /// For more information refer to the ANTLR specification.
+    /// Productions are expressed in the form `head: body;` and assigned an index (the order in
+    /// which they appear in the grammar file. This method takes that index  and returns the `head`
+    /// for terminals or `None` if the index was not found.
     ///
-    /// This method exprects the production name as input and returns a set containing the actions
-    /// for the given production.
-    ///
-    /// If the requested name does not exists, None is returned.
+    /// The index correspond to the one found within the result of the [`Grammar::iter_nonterm`]
+    /// method.
     /// # Examples
     /// Basic usage:
     /// ```
     /// let g = "grammar g;
-    ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
-    ///     LETTER_LOWERCASE: [a-z];";
+    ///          letter: LETTER_UP | LETTER_LO;
+    ///          LETTER_UP: [A-Z];
+    ///          LETTER_LO: [a-z];";
     /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
-    /// let act_lo = grammar.action("LETTER_LOWERCASE").unwrap();
-    /// let mut act_up = grammar.action("LETTER_UPPERCASE").unwrap().iter();
-    /// assert_eq!(*act_up.next().unwrap(), wisent::grammar::Action::MORE);
-    /// assert_eq!(
-    ///     *act_up.next().unwrap(),
-    ///     wisent::grammar::Action::MODE("NEW_MODE".to_owned())
-    /// );
-    /// assert!(act_lo.is_empty());
+    /// let head = grammar.name_nonterm(0).unwrap();
+    /// assert_eq!(head, "letter");
     /// ```
-    pub fn action(&self, head: &str) -> Option<&BTreeSet<Action>> {
-        if let Some(found) = self.names.get(head) {
-            Some(&self.actions[found.0])
-        } else {
-            None
-        }
+    pub fn name_nonterm(&self, index: usize) -> Option<&String> {
+        self.names_non_terminals.get(index)
     }
 
     /// Returns the lexer action for a given terminal index.
@@ -210,8 +201,8 @@ impl Grammar {
     ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
     ///     LETTER_LOWERCASE: [a-z];";
     /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
-    /// let mut actions0 = grammar.action_nth(0).iter();
-    /// let actions1 = grammar.action_nth(1);
+    /// let mut actions0 = grammar.action(0).iter();
+    /// let actions1 = grammar.action(1);
     /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MORE);
     /// assert_eq!(
     ///     *actions0.next().unwrap(),
@@ -219,7 +210,7 @@ impl Grammar {
     /// );
     /// assert!(actions1.is_empty());
     /// ```
-    pub fn action_nth(&self, index: usize) -> &BTreeSet<Action> {
+    pub fn action(&self, index: usize) -> &BTreeSet<Action> {
         &self.actions[index]
     }
 
@@ -296,21 +287,6 @@ impl Grammar {
     /// ```
     pub fn parse_string(content: &str) -> Result<Grammar, ParseError> {
         bootstrap_parse_string(content)
-    }
-}
-
-impl Index<usize> for Grammar {
-    type Output = String;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        let idx;
-        if index < self.terminals.len() {
-            idx = index;
-            &self.terminals[idx]
-        } else {
-            idx = index - self.terminals.len();
-            &self.non_terminals[idx]
-        }
     }
 }
 
