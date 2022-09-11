@@ -668,6 +668,17 @@ mod tests {
     use crate::grammar::{Action, Grammar};
     use std::collections::BTreeSet;
 
+    const COMMENT_RICH_GRAMMAR: &str = include_str!("../../resources/comment_rich_grammar.txt");
+    const C_GRAMMAR: &str = include_str!("../../resources/c_grammar.txt");
+    const FRAGMENTS_CASE_ERR: &str = include_str!("../../resources/fragments_case_err.txt");
+    const FRAGMENTS_CONTAINS_NT: &str = include_str!("../../resources/fragments_contains_nt.txt");
+    const FRAGMENTS_GRAMMAR: &str = include_str!("../../resources/fragments_grammar.txt");
+    const LEXER_ACTIONS_HARDER: &str = include_str!("../../resources/lexer_actions_harder.txt");
+    const LEXER_ACTIONS_SIMPLER: &str = include_str!("../../resources/lexer_actions_simpler.txt");
+    const LEXER_CYCLIC: &str = include_str!("../../resources/lexer_cyclic.txt");
+    const LEXER_INVALID_ACTION: &str = include_str!("../../resources/lexer_invalid_action.txt");
+    const SIMPLE_GRAMMAR: &str = include_str!("../../resources/simple_grammar.txt");
+
     #[test]
     //Asserts that a DAG return correctly a topological sort
     fn topological_sort_dag() {
@@ -824,7 +835,7 @@ mod tests {
     #[test]
     //Asserts that the file is parsed correctly even with high number of escape chars
     fn parse_highly_escaped() {
-        match Grammar::parse_grammar("./resources/comment_rich_grammar.txt") {
+        match Grammar::parse_string(COMMENT_RICH_GRAMMAR) {
             Ok(g) => {
                 assert_eq!(g.len(), 5);
             }
@@ -835,7 +846,7 @@ mod tests {
     #[test]
     //Asserts that the fragment using non-terminals generates syntax error
     fn parse_fragments_nonterminal() {
-        match Grammar::parse_grammar("./resources/fragments_contains_nt.txt") {
+        match Grammar::parse_string(FRAGMENTS_CONTAINS_NT) {
             Ok(_) => panic!("Expected a syntax error!"),
             Err(e) => assert_eq!(
                 e.to_string(),
@@ -847,7 +858,7 @@ mod tests {
     #[test]
     //Asserts that the fragment using wrong naming generates syntax error
     fn parse_fragments_lowercase_naming() {
-        match Grammar::parse_grammar("./resources/fragments_case_err.txt") {
+        match Grammar::parse_string(FRAGMENTS_CASE_ERR) {
             Ok(_) => panic!("Expected a syntax error!"),
             Err(e) => assert_eq!(
                 e.to_string(),
@@ -859,7 +870,7 @@ mod tests {
     #[test]
     //Asserts that the fragments are replaced correctly
     fn parse_recursive_fragments() {
-        match Grammar::parse_grammar("./resources/fragments_grammar.txt") {
+        match Grammar::parse_string(FRAGMENTS_GRAMMAR) {
             Ok(g) => {
                 assert_eq!(g.len(), 2);
             }
@@ -870,10 +881,7 @@ mod tests {
     #[test]
     //Asserts that a simple grammar is parsed correctly.
     fn parse_simple_grammar_correctly() {
-        match Grammar::parse_grammar(
-            "./resources/simple_grammar\
-    .txt",
-        ) {
+        match Grammar::parse_string(SIMPLE_GRAMMAR) {
             Ok(g) => assert_eq!(
                 g.len(),
                 9,
@@ -886,7 +894,7 @@ mod tests {
     #[test]
     //Asserts that ALL the productions are parsed correctly
     fn get_production() {
-        let g = Grammar::parse_grammar("./resources/simple_grammar.txt").unwrap();
+        let g = Grammar::parse_string(SIMPLE_GRAMMAR).unwrap();
         let nterm = g.iter_nonterm().collect::<Vec<_>>();
         let term = g.iter_term().collect::<Vec<_>>();
         let expected_term = [
@@ -909,7 +917,7 @@ mod tests {
     #[test]
     //Asserts that the order of the production is kept unchanged
     fn order_unchanged() {
-        let g = Grammar::parse_grammar("./resources/simple_grammar.txt").unwrap();
+        let g = Grammar::parse_string(SIMPLE_GRAMMAR).unwrap();
         let nterm = g.iter_nonterm().collect::<Vec<_>>();
         let term = g.iter_term().collect::<Vec<_>>();
         assert_eq!(term[0], "~[,\\n\\r\"]+");
@@ -926,7 +934,7 @@ mod tests {
     #[test]
     //Asserts that the order of the production is kept unchanged by iterating terminals
     fn order_iter_term() {
-        match Grammar::parse_grammar("./resources/simple_grammar.txt") {
+        match Grammar::parse_string(SIMPLE_GRAMMAR) {
             Ok(g) => {
                 let vec = g.iter_term().as_slice();
                 //0, 1, 2 are replaced literals
@@ -940,7 +948,7 @@ mod tests {
     #[test]
     //Asserts that the order of the production is kept unchanged by iterating non-terminals
     fn order_unchanged_iter_nonterm() {
-        match Grammar::parse_grammar("./resources/simple_grammar.txt") {
+        match Grammar::parse_string(SIMPLE_GRAMMAR) {
             Ok(g) => {
                 let vec = g.iter_nonterm().as_slice();
                 assert_eq!(vec[0], "hdr row+ ");
@@ -956,7 +964,7 @@ mod tests {
     //Asserts that a grammar is parsed and the actions extracted correctly.
     //Simpler version with trivial body and single action.
     fn parse_actions_simpler() {
-        match Grammar::parse_grammar("./resources/lexer_actions_simpler.txt") {
+        match Grammar::parse_string(LEXER_ACTIONS_SIMPLER) {
             Ok(g) => {
                 assert_eq!(*g.action(0).iter().next().unwrap(), Action::SKIP);
                 assert_eq!(*g.action(1).iter().next().unwrap(), Action::MORE);
@@ -1002,7 +1010,7 @@ mod tests {
     //Asserts that a grammar is parsed and the actions extracted correctly.
     //Harder version with multiple actions and tricky -> productions
     fn parse_actions_harder() {
-        match Grammar::parse_grammar("./resources/lexer_actions_harder.txt") {
+        match Grammar::parse_string(LEXER_ACTIONS_HARDER) {
             Ok(g) => {
                 assert_eq!(g.action(1).len(), 2); // whitespace action
                 let mut ws_iter = g.action(1).iter();
@@ -1022,7 +1030,7 @@ mod tests {
     //Asserts that terminal productions are cleaned up of spaces and embedded productions
     //this should be done also in recursive replacement of terminals
     fn terminal_cleaned() {
-        match Grammar::parse_grammar("./resources/lexer_actions_harder.txt") {
+        match Grammar::parse_string(LEXER_ACTIONS_HARDER) {
             Ok(g) => {
                 assert_eq!(g.iter_term().next().unwrap(), "[a->b\\-\\]]+'->'|([ ]+)");
                 assert_eq!(g.iter_term().nth(2).unwrap(), "('\\r''\\n'?|'\\n')");
@@ -1034,7 +1042,7 @@ mod tests {
     #[test]
     //Asserts that invalid lexer actions are reported as errors
     fn invalid_lexer_actions() {
-        match Grammar::parse_grammar("./resources/lexer_invalid_action.txt") {
+        match Grammar::parse_string(LEXER_INVALID_ACTION) {
             Ok(_) => panic!("Invalid lexer actions should not be able to parse correctly"),
             Err(e) => assert_eq!(e.to_string(), "SyntaxError: invalid action `channel(name`"),
         }
@@ -1043,7 +1051,7 @@ mod tests {
     #[test]
     //Asserts that the C ANTLR grammar is parsed correctly. This grammar is longer than the CSV one.
     fn parse_c_grammar_correctly() {
-        match Grammar::parse_grammar("./resources/c_grammar.txt") {
+        match Grammar::parse_string(C_GRAMMAR) {
             Ok(g) => assert_eq!(
                 g.len(),
                 205,
@@ -1056,7 +1064,7 @@ mod tests {
     #[test]
     //Asserts that cyclic rules like S->S; cannot be solved in the lexer
     fn lexer_rules_cycles_err() {
-        match Grammar::parse_grammar("./resources/lexer_cyclic.txt") {
+        match Grammar::parse_string(LEXER_CYCLIC) {
             Ok(_) => panic!("expected a failure"),
             Err(e) => assert_eq!(
                 e.to_string(),
