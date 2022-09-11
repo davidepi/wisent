@@ -264,7 +264,15 @@ impl GraphvizDot for Dfa {
             for symbol in 0..self.alphabet.ids() {
                 let dst = self.transition[state as usize][symbol as usize];
                 if dst != self.sink {
-                    let symbol_label = self.alphabet.label(symbol).replace('"', "\\\"");
+                    let symbol_label = self
+                        .alphabet
+                        .label(symbol)
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\t', "<TAB>")
+                        .replace('\n', "<LF>")
+                        .replace('\r', "<CR>")
+                        .replace(' ', "<SPACE>");
                     transitions[dst as usize].push_str(&symbol_label);
                 }
             }
@@ -272,6 +280,7 @@ impl GraphvizDot for Dfa {
             for dst in 0..self.states_no {
                 let label = &transitions[dst as usize];
                 if !label.is_empty() {
+                    // !empty = not sink
                     writeln!(f, "    {}->{}[label=\"{}\"];", state, dst, label).unwrap();
                 }
             }
