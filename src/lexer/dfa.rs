@@ -690,50 +690,46 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
             new_trans.insert((new_src, symbol), new_dst);
         }
     }
-    let start = *positions.get(&dfa.start).unwrap();
-    let sink = *positions.get(&dfa.sink).unwrap();
+    let mut start = *positions.get(&dfa.start).unwrap();
     // remove unreachable states (and non-accepting sinks)
-    //broken: no in-edges and no start state OR no out-edges and not accepting, excluding self-loops
-    //        and sink
-    let broken_states = (0_u32..)
+    // broken: no in-edges and no start OR no out-edges and not accepting, excluding self-loops
+    // this removes also the sink but that will be readded later
+    let broken_partitions = (0_u32..)
         .take(partitions.len())
         .filter(|x| {
             (in_degree[*x as usize] == 0 && *x != start)
-                || (out_degree[*x as usize] == 0 && !accept_map.contains_key(x) && *x != sink)
+                || (out_degree[*x as usize] == 0 && !accept_map.contains_key(x))
         })
         .collect::<BTreeSet<_>>();
-    let mut remapped_indices = vec![0; dfa.states_no as usize];
+    // index remapping required because some states will be removed
+    let mut remapped_indices = vec![0; partitions.len()];
     let mut new_index = 0_u32;
-    for index in 0..dfa.states_no {
-        if !broken_states.contains(&index) {
+    for index in 0..partitions.len() as u32 {
+        if !broken_partitions.contains(&index) {
             remapped_indices[index as usize] = new_index;
             new_index += 1;
         }
     }
     // now that the number of states is fixed it's time to change map to table.
-    // Unlike the direct consturction, this time we need to reindex nodes.
-    let states_no = (partitions.len() - broken_states.len()) as u32;
-    let mut transition = Vec::with_capacity(states_no as usize);
-    for node in 0..dfa.states_no {
-        if !broken_states.contains(&node) {
-            let ids_no = dfa.alphabet.ids() as usize;
-            let mut next_nodes = Vec::with_capacity(ids_no);
-            for symbol in 0..dfa.alphabet.ids() as u32 {
-                let next = *new_trans.get(&(node, symbol)).unwrap_or(&sink);
-                if !broken_states.contains(&next) {
-                    let next_remapped = remapped_indices[next as usize];
-                    next_nodes.push(next_remapped);
-                }
-            }
-            transition.push(next_nodes);
+    start = remapped_indices[start as usize];
+    let sink = (partitions.len() - broken_partitions.len()) as u32;
+    let states_no = sink + 1;
+    let mut transition = vec![vec![sink; dfa.alphabet.ids() as usize]; states_no as usize];
+    for ((state, symbol), next) in new_trans {
+        if !broken_partitions.contains(&state) && !broken_partitions.contains(&next) {
+            let remapped_state = remapped_indices[state as usize];
+            let remapped_next = remapped_indices[next as usize];
+            transition[remapped_state as usize][symbol as usize] = remapped_next;
         }
     }
     // converts the accepting states map into array
-    let mut accept = Vec::with_capacity(states_no as usize);
-    for i in 0..states_no {
-        match accept_map.entry(i) {
-            std::collections::hash_map::Entry::Occupied(val) => accept.push(*val.get()),
-            std::collections::hash_map::Entry::Vacant(_) => accept.push(u32::MAX),
+    let mut accept = vec![u32::MAX; states_no as usize];
+    for i in 0..partitions.len() as u32 {
+        if let Some(production) = accept_map.get(&i) {
+            if !broken_partitions.contains(&i) {
+                let remapped = remapped_indices[i as usize];
+                accept[remapped as usize] = *production;
+            }
         }
     }
     Dfa {
@@ -848,6 +844,23 @@ mod tests {
         let min_dfa = min_dfa(big_dfa.clone());
         assert_ne!(big_dfa.nodes(), min_dfa.nodes());
         assert_eq!(min_dfa.nodes(), 4);
+    }
+
+    #[test]
+    fn dfa_transition_correct_size() {
+        let grammar = Grammar::new(
+            &["('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*"],
+            &[],
+            &["SEQUENCE"],
+        );
+        let (canonical_trees, symtable) = canonical_trees(&grammar);
+        let merged_tree = merge_regex_trees(canonical_trees);
+        let big_dfa = direct_construction(merged_tree, symtable);
+        assert_eq!(big_dfa.states_no as usize, big_dfa.transition.len());
+        assert_eq!(big_dfa.states_no as usize, big_dfa.accept.len());
+        let min_dfa = min_dfa(big_dfa);
+        assert_eq!(min_dfa.states_no as usize, min_dfa.transition.len());
+        assert_eq!(min_dfa.states_no as usize, min_dfa.accept.len());
     }
 
     #[test]
