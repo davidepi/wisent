@@ -1,7 +1,6 @@
+use super::SymbolTable;
 use crate::lexer::Dfa;
 use std::str::Chars;
-
-use super::SymbolTable;
 
 /// Buffer size for the lexer. Each buffer stores the lookahead tokens (as u32) so we don't want to
 /// store everything in memory but still keep a decently sized buffer.
@@ -78,18 +77,22 @@ impl DfaSimulator {
         let mut location_end = 0;
         let mut last_accepted = None;
         let mut productions = Vec::new();
-        while let Some((char_id, bytes)) = self.next_char(input) {
-            location_end += bytes as usize;
-            if let Some(next) = self.dfa.moove(state, char_id) {
-                //can advance
-                state = next;
-                if let Some(accepting_prod) = self.dfa.accepting(state) {
-                    // if the new state is accepting, record the production and the current
-                    // lexeme ending. DO NOT push the accepting state, as we try to greedily match
-                    // other productions.
-                    last_accepted = Some((accepting_prod, self.forward_pos, location_end));
+        loop {
+            if let Some((char_id, bytes)) = self.next_char(input) {
+                location_end += bytes as usize;
+                if let Some(next) = self.dfa.moove(state, char_id) {
+                    //can advance
+                    state = next;
+                    if let Some(accepting_prod) = self.dfa.accepting(state) {
+                        // if the new state is accepting, record the production and the current
+                        // lexeme ending. DO NOT push the accepting state, as we try to greedily match
+                        // other productions.
+                        last_accepted = Some((accepting_prod, self.forward_pos, location_end));
+                    }
+                    continue; // avoid entering in the next if
                 }
-            } else if let Some((production, last_valid_state, last_end)) = last_accepted {
+            }
+            if let Some((production, last_valid_state, last_end)) = last_accepted {
                 // no other move available, but there was a previous accepted production.
                 // push the accepted production and roll back the head.
                 productions.push(Token {
@@ -102,16 +105,10 @@ impl DfaSimulator {
                 self.forward_pos = last_valid_state;
                 location_start = last_end;
                 location_end = last_end;
+                last_accepted = None;
             } else {
                 break; // no moves and no accepting state reached. halt.
             }
-        }
-        if let Some((production, _, last_end)) = last_accepted {
-            productions.push(Token {
-                production,
-                start: location_start,
-                end: last_end,
-            });
         }
         productions
     }
@@ -263,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn simulator_tokenize_non_greedy() {
+    fn simulator_tokenize() {
         let grammar = Grammar::new(&["(~[0-9 ])+", "' '+"], &[], &["NO_NUMBER", "SPACE"]);
         let dfa = Dfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
@@ -280,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn simulator_tokenize_greedy_complete() {
+    fn simulator_tokenize_match_longest() {
         let grammar = Grammar::new(&["([0-9])+", "([0-9])+'.'[0-9]+"], &[], &["INT", "REAL"]);
         let dfa = Dfa::new(&grammar);
         let input = "123.456789";
@@ -294,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn simulator_tokenize_greedy_incomplete() {
+    fn simulator_tokenize_match_longest_incomplete() {
         let grammar = Grammar::new(&["([0-9])+", "([0-9])+'.'[0-9]+"], &[], &["INT", "REAL"]);
         let dfa = Dfa::new(&grammar);
         let input = "123.";
@@ -305,5 +302,38 @@ mod tests {
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[0].start, 0);
         assert_eq!(tokens[0].end, 3);
+    }
+
+    #[test]
+    fn simulator_tokenize_greedy_complete() {
+        let grammar = Grammar::new(
+            &["'/*'.*'*/'", "[0-9]+", "[\n\t ]"],
+            &[],
+            &["COMMENT", "NUMBER", "SPACE"],
+        );
+        let dfa = Dfa::new(&grammar);
+        let mut simulator = DfaSimulator::new(dfa);
+        let input = "/* test comment */ 123456 /* test comment 2 */";
+        let tokens = simulator.tokenize(&mut input.chars());
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].production, 0);
+    }
+
+    #[test]
+    fn simulator_tokenize_greedy_incomplete() {
+        let grammar = Grammar::new(
+            &["'/*'.*'*/'", "[0-9]+", "[\n\t ]"],
+            &[],
+            &["COMMENT", "NUMBER", "SPACE"],
+        );
+        let dfa = Dfa::new(&grammar);
+        let mut simulator = DfaSimulator::new(dfa);
+        let input = "/* test comment */ 123456 ";
+        let tokens = simulator.tokenize(&mut input.chars());
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].production, 0);
+        assert_eq!(tokens[1].production, 2);
+        assert_eq!(tokens[2].production, 1);
+        assert_eq!(tokens[3].production, 2);
     }
 }

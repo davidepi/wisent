@@ -99,12 +99,18 @@ impl<T: std::fmt::Display> GraphvizDot for BSTree<T> {
 /// no other productions). So, each letter `'a'` in the input can be converted to a number,
 /// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively reducing
 /// the possible inputs to two single values instead of 26.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
     table: FxHashMap<char, u32>,
     // table for reverse lookup, given an ID prints the transition set (useful only for debug)
     reverse: FxHashMap<u32, BTreeSet<char>>,
+}
+
+impl std::fmt::Debug for SymbolTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SymbolTable{{ {:?} }}", self.reverse)
+    }
 }
 
 impl Default for SymbolTable {
