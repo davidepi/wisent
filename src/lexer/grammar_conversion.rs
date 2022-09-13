@@ -138,7 +138,7 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
     // collect the alphabet for DFA
     let alphabet = parse_trees
         .iter()
-        .flat_map(get_set_of_symbols)
+        .flat_map(alphabet_from_node)
         .collect::<BTreeSet<_>>();
     let symtable = SymbolTable::new(alphabet);
     // convert the parse tree into a canonical one (not ? or +, only *)
@@ -528,21 +528,12 @@ fn consume_counting_until(it: &mut Peekable<Chars>, until: char) -> usize {
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
 fn canonicalise(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
     match node.value {
-        ExLiteral::Value(i) => set_to_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
-        ExLiteral::AnyValue => set_to_literal_node(
-            symtable.symbols_ids_negated(&BTreeSet::new()),
-            symtable.epsilon_id(),
-        ),
+        ExLiteral::Value(i) => create_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
+        ExLiteral::AnyValue => create_literal_node(symtable.any_value_id(), symtable.epsilon_id()),
         ExLiteral::Operation(op) => {
             match op {
                 OpType::NOT => {
-                    //get the entire used alphabet for the only existing node
-                    let used_symbols = get_set_of_symbols(&node.left.unwrap())
-                        .into_iter()
-                        .flatten()
-                        .collect::<BTreeSet<_>>();
-                    let negated = symtable.symbols_ids_negated(&used_symbols);
-                    set_to_literal_node(negated, symtable.epsilon_id())
+                    create_literal_node(solve_negated(node, symtable), symtable.epsilon_id())
                 }
                 OpType::OR => {
                     let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
@@ -572,12 +563,11 @@ fn canonicalise(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> Canoni
                     }
                 }
                 OpType::QM => {
-                    let left = Some(Box::new(BSTree {
-                        value: Literal::Symbol(symtable.epsilon_id()),
-                        left: None,
-                        right: None,
-                    }));
-                    //it the node has a ? DEFINITELY it has only a left children
+                    // if the node has a ? DEFINITELY it has only a left children
+                    let left = Some(Box::new(create_literal_node(
+                        BTreeSet::new(),
+                        symtable.epsilon_id(),
+                    )));
                     let right = Some(Box::new(canonicalise(*node.left.unwrap(), symtable)));
                     BSTree {
                         value: Literal::OR,
@@ -605,7 +595,10 @@ fn canonicalise(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> Canoni
     }
 }
 
-fn set_to_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
+/// converts a set of IDs into a several nodes concatenated with the | operators.
+/// (e.g. from `[a,b,c]` to `'a'|'b'|'c'`.
+/// Returns epsilon if the set is empty.
+fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
     if set.is_empty() {
         BSTree {
             value: Literal::Symbol(epsilon_id),
@@ -636,8 +629,8 @@ fn set_to_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
     }
 }
 
-/// Returns the set of symbols for a given tree.
-fn get_set_of_symbols(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>> {
+/// Returns the set of symbols used in a given tree.
+fn alphabet_from_node(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>> {
     let mut ret = BTreeSet::new();
     let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {
@@ -660,10 +653,46 @@ fn get_set_of_symbols(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>
     ret
 }
 
+// Solve a node with a negated set, by returning the allowed set of literals.
+// panics in case an operator different from OR or NOT is encountered.
+fn solve_negated(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> BTreeSet<u32> {
+    debug_assert!(node.value == ExLiteral::Operation(OpType::NOT));
+    let entire_alphabet = symtable.any_value_id();
+    let mut descendant_alphabet = BTreeSet::new();
+    let mut todo = Vec::new();
+    if let Some(left) = node.left {
+        todo.push(left);
+    }
+    if let Some(right) = node.right {
+        todo.push(right);
+    }
+    while let Some(child) = todo.pop() {
+        match child.value {
+            ExLiteral::Value(v) => {
+                descendant_alphabet.extend(symtable.symbols_ids(&v));
+            }
+            ExLiteral::AnyValue => {
+                descendant_alphabet.extend(symtable.any_value_id());
+            }
+            ExLiteral::Operation(OpType::OR) => {
+                todo.extend([child.left.unwrap(), child.right.unwrap()]);
+            }
+            ExLiteral::Operation(OpType::NOT) => {
+                descendant_alphabet.extend(solve_negated(*child, symtable));
+            }
+            _ => panic!("Operation not supported in a negated set"),
+        }
+    }
+    entire_alphabet
+        .difference(&descendant_alphabet)
+        .copied()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::lexer::grammar_conversion::{
-        canonicalise, expand_literals, gen_precedence_tree, get_set_of_symbols, OpType, RegexOp,
+        alphabet_from_node, canonicalise, expand_literals, gen_precedence_tree, OpType, RegexOp,
     };
     use crate::lexer::{BSTree, SymbolTable};
 
@@ -671,7 +700,7 @@ mod tests {
     fn canonical_tree_any() {
         let expr = "('a'*.)*'a'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = get_set_of_symbols(&tree);
+        let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
         let new_tree = canonicalise(tree, &symtable);
         let str = format!("{}", new_tree);
@@ -685,7 +714,7 @@ mod tests {
     fn canonical_tree_plus() {
         let expr = "('a'*'b')+'a'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = get_set_of_symbols(&tree);
+        let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
         let new_tree = canonicalise(tree, &symtable);
         let str = format!("{}", new_tree);
@@ -699,7 +728,7 @@ mod tests {
     fn canonical_tree_qm() {
         let expr = "('a'*'b')?'a'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = get_set_of_symbols(&tree);
+        let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
         let new_tree = canonicalise(tree, &symtable);
         let str = format!("{}", new_tree);
@@ -713,7 +742,7 @@ mod tests {
     fn canonical_tree_neg() {
         let expr = "~[ab]('a'|'c')";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = get_set_of_symbols(&tree);
+        let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
         let new_tree = canonicalise(tree, &symtable);
         let str = format!("{}", new_tree);
@@ -721,6 +750,17 @@ mod tests {
             str,
             r#"{"val":"&","left":{"val":"|","left":{"val":"2"},"right":{"val":"3"}},"right":{"val":"|","left":{"val":"0"},"right":{"val":"2"}}}"#
         );
+    }
+
+    #[test]
+    fn canonical_tree_double_negation() {
+        let expr = "~(~[a-c])|'d'";
+        let tree = expand_literals(gen_precedence_tree(expr));
+        let alphabet = alphabet_from_node(&tree);
+        let symtable = SymbolTable::new(alphabet);
+        let new_tree = canonicalise(tree, &symtable);
+        let str = format!("{}", new_tree);
+        assert_eq!(str, r#"{"val":"|","left":{"val":"0"},"right":{"val":"1"}}"#)
     }
 
     #[test]

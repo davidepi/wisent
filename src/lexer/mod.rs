@@ -226,9 +226,38 @@ impl SymbolTable {
     /// and the NFA construction and simulation. As such, this method provides the epsilon value
     /// for the current symbol table.
     ///
-    /// Its ID is the highest ID found in the symbol table + 2.
+    /// This value is essentially and ID not used for any other symbol.
     pub fn epsilon_id(&self) -> u32 {
         self.reverse.len() as u32 + 1
+    }
+
+    /// Returns a set representing the entire set of IDs used by this symbol table.
+    ///
+    /// This set does not include the [Epsilon ID](SymbolTable::epsilon_id), as it is not
+    /// considered a symbol.
+    ///
+    /// This method is useful to replace the "any character" symbol `.`.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use wisent::lexer::SymbolTable;
+    ///
+    /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
+    /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
+    /// let symbol = SymbolTable::new(set);
+    ///
+    /// assert_eq!(
+    ///     symbol.any_value_id(),
+    ///     [0, 1].into_iter().collect::<BTreeSet<_>>()
+    /// );
+    /// ```
+    pub fn any_value_id(&self) -> BTreeSet<u32> {
+        self.reverse
+            .keys()
+            .copied()
+            .chain(std::iter::once(self.not_in_alphabet_id()))
+            .collect()
     }
 
     /// Returns the amount of unique IDs assigned to the symbols.
@@ -322,47 +351,6 @@ impl SymbolTable {
             };
         }
         ret
-    }
-
-    /// Returns all the IDs NOT associated with a specific set.
-    ///
-    /// This method returns values associated for negated sets, simulating cases like `[^a-z]`, or,
-    /// in ANTLR syntax, `~[a-z]`.
-    ///
-    /// **NOTE**: It is expected the input set to contain only symbols included in the table, so
-    /// [not in alphabet](SymbolTable::not_in_alphabet_id) will always be in the returned set.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
-    /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
-    /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
-    ///
-    /// let input_set = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let mut negated = symbol.symbols_ids_negated(&input_set).into_iter();
-    ///
-    /// assert!(negated.next().is_some()); //a
-    /// assert!(negated.next().is_some()); // IDs of "any other char"
-    /// assert!(negated.next().is_none());
-    /// ```
-    /// This example assigns three IDs to the symbols: `[a]`, `[b, c]` and `[d]`.
-    /// A set of `[b, c, d]`, corresponding to `[^bcd]` in regexp syntax, will return two
-    /// values, the one for `[a]` and the one for any other char not in table.
-    pub fn symbols_ids_negated(&self, symbols: &BTreeSet<char>) -> BTreeSet<u32> {
-        let mut accept = BTreeSet::new();
-        for symbol in &self.table {
-            // this fails if negating only "partial sets". however in a normal execution should
-            // NEVER happen (the same set passed as construction time should be passed here)
-            if !symbols.contains(symbol.0) {
-                accept.insert(*symbol.1);
-            }
-        }
-        accept.insert(self.not_in_alphabet_id());
-        accept
     }
 
     /// Converts a given ID to a list of chars
@@ -535,21 +523,6 @@ mod tests {
         assert_eq!(retrieve1.len(), 1); //[a, b, c] have the same value so only [0] returned
         let retrieve2 = symbol.symbols_ids(&btreeset! {'d', 'e', 'f'});
         assert_eq!(retrieve2.len(), 2); //[d, e] [f] are the sets so [1, 2] is returned
-    }
-
-    #[test]
-    fn symbol_table_get_negated() {
-        let set1 = btreeset! {'a', 'b', 'c'};
-        let set2 = btreeset! {'b', 'c', 'd'};
-        let symbol = SymbolTable::new(btreeset! {set1, set2});
-
-        let negate_me = btreeset! {'b','c'};
-        let negated = symbol.symbols_ids_negated(&negate_me);
-        assert!(negated.contains(&symbol.symbol_id('a')));
-        assert!(negated.contains(&symbol.symbol_id('d')));
-        assert!(negated.contains(&symbol.symbol_id('㊈')));
-        assert!(!negated.contains(&symbol.symbol_id('b')));
-        assert!(!negated.contains(&symbol.symbol_id('c')));
     }
 
     #[test]
