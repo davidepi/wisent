@@ -65,20 +65,20 @@ impl DfaSimulator {
     /// let grammar = Grammar::new(&["([0-9])+", "([a-z])+"], &[], &["NUMBER", "WORD"]);
     /// let dfa = Dfa::new(&grammar);
     /// let input = "abc123";
-    /// let mut simulator = DfaSimulator::new(dfa);
-    /// let tokens = simulator.tokenize(&mut input.chars());
+    /// let simulator = DfaSimulator::new(dfa);
+    /// let tokens = simulator.tokenize(input.chars());
     /// assert_eq!(tokens[0].production, 1);
     /// assert_eq!(tokens[1].production, 0);
     /// ```
-    pub fn tokenize(&mut self, input: &mut Chars) -> Vec<Token> {
-        self.init_tokenize(input);
+    pub fn tokenize(mut self, mut input: Chars) -> Vec<Token> {
+        self.init_tokenize(&mut input);
         let mut state = self.dfa.start();
         let mut location_start = 0;
         let mut location_end = 0;
         let mut last_accepted = None;
         let mut productions = Vec::new();
         loop {
-            if let Some((char_id, bytes)) = self.next_char(input) {
+            if let Some((char_id, bytes)) = self.next_char(&mut input) {
                 location_end += bytes as usize;
                 if let Some(next) = self.dfa.moove(state, char_id) {
                     //can advance
@@ -263,12 +263,11 @@ mod tests {
     fn simulator_tokenize() {
         let grammar = Grammar::new(&["(~[0-9 ])+", "' '+"], &[], &["NO_NUMBER", "SPACE"]);
         let dfa = Dfa::new(&grammar);
-        let mut reader = UTF8_INPUT.chars();
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
         let expected_end = vec![9, 10, 23, 24, 29, 30, 36, 37, 48, 49, 53];
-        let mut simulator = DfaSimulator::new(dfa);
-        let tokens = simulator.tokenize(&mut reader); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        let simulator = DfaSimulator::new(dfa);
+        let tokens = simulator.tokenize(UTF8_INPUT.chars());
         for (i, token) in tokens.into_iter().enumerate() {
             assert_eq!(token.production, expected_prods[i]);
             assert_eq!(token.start, expected_start[i]);
@@ -281,9 +280,8 @@ mod tests {
         let grammar = Grammar::new(&["([0-9])+", "([0-9])+'.'[0-9]+"], &[], &["INT", "REAL"]);
         let dfa = Dfa::new(&grammar);
         let input = "123.456789";
-        let mut reader = input.chars();
-        let mut simulator = DfaSimulator::new(dfa);
-        let tokens = simulator.tokenize(&mut reader); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        let simulator = DfaSimulator::new(dfa);
+        let tokens = simulator.tokenize(input.chars()); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 1);
         assert_eq!(tokens[0].start, 0);
@@ -295,9 +293,8 @@ mod tests {
         let grammar = Grammar::new(&["([0-9])+", "([0-9])+'.'[0-9]+"], &[], &["INT", "REAL"]);
         let dfa = Dfa::new(&grammar);
         let input = "123.";
-        let mut reader = input.chars();
-        let mut simulator = DfaSimulator::new(dfa);
-        let tokens = simulator.tokenize(&mut reader); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        let simulator = DfaSimulator::new(dfa);
+        let tokens = simulator.tokenize(input.chars()); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[0].start, 0);
@@ -312,9 +309,9 @@ mod tests {
             &["COMMENT", "NUMBER", "SPACE"],
         );
         let dfa = Dfa::new(&grammar);
-        let mut simulator = DfaSimulator::new(dfa);
+        let simulator = DfaSimulator::new(dfa);
         let input = "/* test comment */ 123456 /* test comment 2 */";
-        let tokens = simulator.tokenize(&mut input.chars());
+        let tokens = simulator.tokenize(input.chars());
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 0);
     }
@@ -327,9 +324,9 @@ mod tests {
             &["COMMENT", "NUMBER", "SPACE"],
         );
         let dfa = Dfa::new(&grammar);
-        let mut simulator = DfaSimulator::new(dfa);
+        let simulator = DfaSimulator::new(dfa);
         let input = "/* test comment */ 123456 ";
-        let tokens = simulator.tokenize(&mut input.chars());
+        let tokens = simulator.tokenize(input.chars());
         assert_eq!(tokens.len(), 4);
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[1].production, 2);

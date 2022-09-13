@@ -24,8 +24,8 @@ fn tokenize_c_file(c: &mut Criterion) {
     let dfa = Dfa::new(&g);
     c.bench_function("c simulation [tokenizing]", |b| {
         b.iter_batched(
-            || (DfaSimulator::new(dfa.clone()), C_EXAMPLE.chars()),
-            |(mut simulator, mut reader)| simulator.tokenize(&mut reader),
+            || DfaSimulator::new(dfa.clone()),
+            |simulator| simulator.tokenize(C_EXAMPLE.chars()),
             BatchSize::SmallInput,
         )
     });
