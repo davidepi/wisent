@@ -11,7 +11,7 @@ use std::str::Chars;
 /// This struct is used to build the regex parse tree with the correct priority.
 struct RegexOp<'a> {
     /// Type of operand/operator for the regex (for example concatenation, ?, *, (, id...).
-    r#type: OpType,
+    optype: OpType,
     /// Value of the operand as string slice. Used mostly for the various ID.
     value: &'a str,
     /// priority of the operator.
@@ -160,18 +160,23 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
     let tokens = regex_to_operands(regex);
     // for each in the sequence do the following actions
     for operator in tokens {
-        match operator.r#type {
+        match operator.optype {
             //operators after operand with highest priority -> solve immediately
+            //unless previous one was OpType::NOT
             OpType::KLEENE | OpType::QM | OpType::PL => {
+                if let Some(top) = operators.last() {
+                    if top.optype == OpType::NOT {
+                        combine_nodes(&mut operands, &mut operators);
+                    }
+                }
                 operators.push(operator);
                 combine_nodes(&mut operands, &mut operators);
             }
-            //operators before operand solve if precedent has higher priority and not (
+            //operators before operand solve if precedent has higher priority and is not OpType::LP
             //then push current
             OpType::NOT | OpType::OR | OpType::AND => {
-                if !operators.is_empty() {
-                    let top = operators.last().unwrap();
-                    if top.priority > operator.priority && top.r#type != OpType::LP {
+                if let Some(top) = operators.last() {
+                    if top.priority > operator.priority && top.optype != OpType::LP {
                         combine_nodes(&mut operands, &mut operators);
                     }
                 }
@@ -181,7 +186,7 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
             OpType::LP => operators.push(operator),
             // right parenthesis: combine all the nodes until left parenthesis is found.
             OpType::RP => {
-                while !operators.is_empty() && operators.last().unwrap().r#type != OpType::LP {
+                while !operators.is_empty() && operators.last().unwrap().optype != OpType::LP {
                     combine_nodes(&mut operands, &mut operators);
                 }
                 operators.pop();
@@ -210,7 +215,7 @@ fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec
     let operator = operators.pop().unwrap();
     let left;
     let right;
-    if operator.r#type == OpType::OR || operator.r#type == OpType::AND {
+    if operator.optype == OpType::OR || operator.optype == OpType::AND {
         //binary operator
         right = Some(Box::new(operands.pop().unwrap()));
         left = Some(Box::new(operands.pop().unwrap()));
@@ -230,7 +235,7 @@ fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec
 /// Transforms a precedence parse tree in a precedence parse tree where the groups like `[a-z]`
 /// are expanded in `a | b | c ... | y | z`
 fn expand_literals(node: PrecedenceTree) -> BSTree<ExLiteral<char>> {
-    match node.value.r#type {
+    match node.value.optype {
         OpType::ID => expand_literal_node(node.value.value),
         n => {
             let left = node.left.map(|l| Box::new(expand_literals(*l)));
@@ -423,15 +428,15 @@ fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
                 val = read_token(&regex[index..], char, &mut iter);
             }
         };
-        if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().r#type, &tp) {
+        if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().optype, &tp) {
             tokenz.push(RegexOp {
-                r#type: OpType::AND,
+                optype: OpType::AND,
                 value: "&",
                 priority: 2,
             })
         }
         tokenz.push(RegexOp {
-            r#type: tp,
+            optype: tp,
             value: val,
             priority,
         });
@@ -723,7 +728,7 @@ mod tests {
         let char_literal = "''";
         let mut tree = BSTree {
             value: RegexOp {
-                r#type: OpType::ID,
+                optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
@@ -741,7 +746,7 @@ mod tests {
         let char_literal = "'aaa'";
         let mut tree = BSTree {
             value: RegexOp {
-                r#type: OpType::ID,
+                optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
@@ -762,7 +767,7 @@ mod tests {
         let char_literal = "'a\\x24'";
         let mut tree = BSTree {
             value: RegexOp {
-                r#type: OpType::ID,
+                optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
@@ -783,7 +788,7 @@ mod tests {
         let unicode_seq = "'დოლორ'";
         let mut tree = BSTree {
             value: RegexOp {
-                r#type: OpType::ID,
+                optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
@@ -804,7 +809,7 @@ mod tests {
         let square = "[\\-a-d\\]]";
         let mut tree = BSTree {
             value: RegexOp {
-                r#type: OpType::ID,
+                optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
@@ -822,7 +827,7 @@ mod tests {
         let range = "'\\U16C3'..'\\u16C5'";
         let mut tree = BSTree {
             value: RegexOp {
-                r#type: OpType::ID,
+                optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
@@ -849,50 +854,79 @@ mod tests {
     }
 
     #[test]
-    //Asserts correctness in precedence evaluation when parentheses are not present
-    fn regex_correct_precedence() {
-        let mut expr;
-        let mut tree;
-        let mut str;
-
-        expr = "'a'|'b'*'c'";
-        tree = gen_precedence_tree(expr);
-        str = format!("{}", &tree);
+    fn regex_correct_precedence_or_klenee() {
+        let expr = "'a'|'b'*'c'";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
         assert_eq!(
             str,
             r#"{"val":"|","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"*","left":{"val":"'b'"}},"right":{"val":"'c'"}}}"#
         );
+    }
 
-        expr = "'a'*('b'|'c')*'d'";
-        tree = gen_precedence_tree(expr);
-        str = format!("{}", &tree);
+    #[test]
+    fn regex_correct_precedence_klenee_par() {
+        let expr = "'a'*('b'|'c')*'d'";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
         assert_eq!(
             str,
             r#"{"val":"&","left":{"val":"*","left":{"val":"'a'"}},"right":{"val":"&","left":{"val":"*","left":{"val":"|","left":{"val":"'b'"},"right":{"val":"'c'"}}},"right":{"val":"'d'"}}}"#
         );
+    }
 
-        expr = "('a')~'b'('c')('d')'e'";
-        tree = gen_precedence_tree(expr);
-        str = format!("{}", &tree);
+    #[test]
+    fn regex_correct_precedence_negation_par() {
+        let expr = "('a')~'b'('c')('d')'e'";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
         assert_eq!(
             str,
             r#"{"val":"&","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"~","left":{"val":"'b'"}},"right":{"val":"&","left":{"val":"'c'"},"right":{"val":"&","left":{"val":"'d'"},"right":{"val":"'e'"}}}}}"#
         );
+    }
 
-        expr = "'a'~'b''c'('d')";
-        tree = gen_precedence_tree(expr);
-        str = format!("{}", &tree);
+    #[test]
+    fn regex_correct_precedence_negation() {
+        let expr = "'a'~'b''c'('d')";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
         assert_eq!(
             str,
             r#"{"val":"&","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"~","left":{"val":"'b'"}},"right":{"val":"&","left":{"val":"'c'"},"right":{"val":"'d'"}}}}"#
         );
+    }
 
-        expr = "'a'?('b'*|'c'*)+'d'";
-        tree = gen_precedence_tree(expr);
-        str = format!("{}", &tree);
+    #[test]
+    fn regex_correct_precedence_question_plus_klenee_par() {
+        let expr = "'a'?('b'*|'c'*)+'d'";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
         assert_eq!(
             str,
             r#"{"val":"&","left":{"val":"?","left":{"val":"'a'"}},"right":{"val":"&","left":{"val":"+","left":{"val":"|","left":{"val":"*","left":{"val":"'b'"}},"right":{"val":"*","left":{"val":"'c'"}}}},"right":{"val":"'d'"}}}"#
+        );
+    }
+
+    #[test]
+    fn regex_precedence_negation_klenee() {
+        let expr = "~'a'*";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
+        assert_eq!(
+            str,
+            r#"{"val":"*","left":{"val":"~","left":{"val":"'a'"}}}"#
+        );
+    }
+
+    #[test]
+    fn regex_precedence_negation_klenee_or() {
+        let expr = "~'a'*|'b'";
+        let tree = gen_precedence_tree(expr);
+        let str = format!("{}", &tree);
+        assert_eq!(
+            str,
+            r#"{"val":"|","left":{"val":"*","left":{"val":"~","left":{"val":"'a'"}}},"right":{"val":"'b'"}}"#
         );
     }
 }
