@@ -59,9 +59,8 @@ impl DfaSimulator {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Dfa, DfaSimulator};
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::{Dfa, DfaSimulator};
     /// let grammar = Grammar::new(&["([0-9])+", "([a-z])+"], &[], &["NUMBER", "WORD"]);
     /// let dfa = Dfa::new(&grammar);
     /// let input = "abc123";

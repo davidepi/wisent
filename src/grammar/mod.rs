@@ -39,13 +39,14 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let terminals = vec!["[a-z]", "[A-Z]"];
     /// let non_terminals = vec![
     ///     "LETTER_UPPERCASE | LETTER_LOWERCASE",
     ///     "word letter | letter",
     /// ];
     /// let names = vec!["LETTER_LOWERCASE", "LETTER_UPPERCASE", "letter", "word"];
-    /// let grammar = wisent::grammar::Grammar::new(&terminals, &non_terminals, &names);
+    /// let grammar = Grammar::new(&terminals, &non_terminals, &names);
     /// ```
     pub fn new(terminals: &[&str], non_terminals: &[&str], names: &[&str]) -> Grammar {
         let terms = terminals.iter().map(|x| x.to_string()).collect::<Vec<_>>();
@@ -76,12 +77,13 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     ///     letter: LETTER_UP | LETTER_LO;
     ///     word: word letter | letter;
     ///     LETTER_UP: [A-Z];
     ///     LETTER_LO: [a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// assert_eq!(grammar.len(), 4);
     /// ```
     pub fn len(&self) -> usize {
@@ -95,12 +97,13 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     ///     letter: LETTER_UP | LETTER_LO;
     ///     word: word letter | letter;
     ///     LETTER_UP: [A-Z];
     ///     LETTER_LO: [a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// assert_eq!(grammar.len_term(), 2);
     /// ```
     pub fn len_term(&self) -> usize {
@@ -111,11 +114,12 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     ///          letter: LETTER_UP | LETTER_LO;
     ///          LETTER_UP: [A-Z];
     ///          LETTER_LO: [a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// assert_eq!(grammar.len_nonterm(), 1);
     /// ```
     pub fn len_nonterm(&self) -> usize {
@@ -129,7 +133,8 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// let grammar = wisent::grammar::Grammar::new(
+    /// # use wisent::grammar::Grammar;
+    /// let grammar = Grammar::new(
     ///     Vec::new().as_slice(),
     ///     Vec::new().as_slice(),
     ///     Vec::new().as_slice(),
@@ -151,10 +156,11 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     /// LETTER_UPPERCASE: [A-Z];
     /// LETTER_LOWERCASE: [a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// let head = grammar.name_term(1).unwrap();
     /// assert_eq!(head, "LETTER_LOWERCASE");
     /// ```
@@ -173,11 +179,12 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     ///          letter: LETTER_UP | LETTER_LO;
     ///          LETTER_UP: [A-Z];
     ///          LETTER_LO: [a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// let head = grammar.name_nonterm(0).unwrap();
     /// assert_eq!(head, "letter");
     /// ```
@@ -197,16 +204,17 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::{Grammar,Action};
     /// let g = "grammar g;
     ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
     ///     LETTER_LOWERCASE: [a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// let mut actions0 = grammar.action(0).iter();
     /// let actions1 = grammar.action(1);
     /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MORE);
     /// assert_eq!(
     ///     *actions0.next().unwrap(),
-    ///     wisent::grammar::Action::MODE("NEW_MODE".to_owned())
+    ///     Action::MODE("NEW_MODE".to_owned())
     /// );
     /// assert!(actions1.is_empty());
     /// ```
@@ -220,12 +228,13 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     ///     letter: LETTER_UP | LETTER_LO;
     ///     word: word letter | letter;
     ///     LETTER_LO: [a-z];
     ///     LETTER_UP: [A-Z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// let mut iterator = grammar.iter_term();
     /// assert_eq!(iterator.next(), Some(&"[a-z]".to_owned()));
     /// assert_eq!(iterator.next(), Some(&"[A-Z]".to_owned()));
@@ -241,11 +250,12 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
     ///     letter:LT_LO | LT_UP;
     ///     LT_LO: [a-z];
     ///     LT_U: [A-Z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_string(g).unwrap();
     /// let mut iterator = grammar.iter_nonterm();
     /// assert_eq!(iterator.next(), Some(&"LT_LO | LT_UP".to_owned()));
     /// assert_eq!(iterator.next(), None);
@@ -265,7 +275,8 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```no_run
-    /// let grammar = wisent::grammar::Grammar::parse_grammar("Rust.g4").unwrap();
+    /// # use wisent::grammar::Grammar;
+    /// let grammar = Grammar::parse_grammar("Rust.g4").unwrap();
     /// ```
     pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
         let grammar_content = std::fs::read_to_string(path)?;
@@ -281,8 +292,9 @@ impl Grammar {
     /// # Examples
     /// Basic usage:
     /// ```
+    /// # use wisent::grammar::Grammar;
     /// let cont = "grammar g; letter:[a-z];";
-    /// let grammar = wisent::grammar::Grammar::parse_string(cont).unwrap();
+    /// let grammar = Grammar::parse_string(cont).unwrap();
     /// assert_eq!(grammar.len(), 1);
     /// ```
     pub fn parse_string(content: &str) -> Result<Grammar, ParseError> {

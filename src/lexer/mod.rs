@@ -19,9 +19,8 @@ pub trait GraphvizDot {
     /// # Examples
     /// Implementation of the [`Dfa`] class:
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::{Dfa, GraphvizDot};
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::{Dfa, GraphvizDot};
     /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     /// let dfa = Dfa::new(&grammar);
     /// dfa.to_dot();
@@ -143,9 +142,8 @@ impl SymbolTable {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
     /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
     /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
     /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
@@ -240,9 +238,8 @@ impl SymbolTable {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
     /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
     /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
@@ -270,9 +267,8 @@ impl SymbolTable {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
     /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
     /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);
@@ -294,9 +290,8 @@ impl SymbolTable {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
     /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
     /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
     /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
@@ -325,9 +320,8 @@ impl SymbolTable {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
     /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
     /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
     /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
@@ -357,14 +351,13 @@ impl SymbolTable {
     ///
     /// [Epsilon](SymbolTable::epsilon_id) is represented with `ϵ` and
     /// [not in alphabet](SymbolTable::not_in_alphabet_id) is represented with `⊙`.
-    /// If an ID that does not match anything in the symbol table, nor epsilon or not in alphabet
-    /// is provided, this function returns `�`.
+    /// If an ID that does not match anything in the symbol table, neither epsilon not
+    /// not in alphabet is provided, this function returns `�`.
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use std::collections::BTreeSet;
-    /// use wisent::lexer::SymbolTable;
-    ///
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
     /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
     /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
     /// let symbol = SymbolTable::new(set);

@@ -19,7 +19,7 @@ use std::fmt::Write;
 pub struct Dfa {
     /// Number of states.
     states_no: u32,
-    /// Transition function: [node][symbol] -> node.
+    /// Transition function: (node,symbol) -> node.
     transition: Vec<Vec<u32>>,
     /// Set of symbols in the language.
     alphabet: SymbolTable,
@@ -60,9 +60,8 @@ impl Dfa {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::Dfa;
     /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     /// let dfa = Dfa::new(&grammar);
     /// ```
@@ -152,9 +151,8 @@ impl Dfa {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::Dfa;
     /// let grammar = Grammar::new(&[], &[], &[]);
     /// let dfa = Dfa::new(&grammar);
     ///
@@ -168,9 +166,8 @@ impl Dfa {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::Dfa;
     /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     /// let dfa = Dfa::new(&grammar);
     ///
@@ -199,9 +196,8 @@ impl Dfa {
     /// exist in the DFA.
     /// # Examples
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::Dfa;
     /// let grammar = Grammar::new(&["'a'", "'b'"], &[], &["LETTER_A", "LETTER_B"]);
     /// let dfa = Dfa::new(&grammar);
     /// let a_id = dfa.symbol_table().symbol_id('a');
@@ -224,9 +220,8 @@ impl Dfa {
     /// Panics if the given state does not exist in the DFA.
     /// # Examples
     /// ```
-    /// use wisent::grammar::Grammar;
-    /// use wisent::lexer::Dfa;
-    ///
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::Dfa;
     /// let grammar = Grammar::new(&["'a'", "'b'"], &[], &["LETTER_A", "LETTER_B"]);
     /// let dfa = Dfa::new(&grammar);
     /// assert!(dfa.accepting(dfa.start()).is_none());
