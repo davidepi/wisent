@@ -33,51 +33,54 @@ pub trait GraphvizDot {
     }
 }
 
-/// A Binary Search Tree.
-#[derive(Clone)]
-struct BSTree<T> {
+/// A Tree data structure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Tree<T> {
     /// The value contained in the tree.
     value: T,
-    /// The left child of the tree.
-    left: Option<Box<BSTree<T>>>,
     /// The right child of the tree.
-    right: Option<Box<BSTree<T>>>,
+    children: Vec<Tree<T>>,
 }
 
-impl<T: std::fmt::Display> std::fmt::Display for BSTree<T> {
-    /// Prints the JSON representation of the tree.
-    ///
-    /// Each node is formatted as `{val:XXX,left:{...},right:{...}}`.
-    /// The `left:{...}` or `right:{...}` parts are omitted if missing.
-    /// This method requires the type of the tree to implement the Display trait.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{\"val\":\"{}\"", &self.value)?;
-        if let Some(left) = &self.left {
-            write!(f, ",\"left\":{}", *left)?;
+impl<T> Tree<T> {
+    /// Creates a new leaf node with the given value.
+    pub fn new_leaf(value: T) -> Self {
+        Self {
+            value,
+            children: Vec::new(),
         }
-        if let Some(right) = &self.right {
-            write!(f, ",\"right\":{}", *right)?;
-        }
-        write!(f, "}}")
+    }
+    /// Creates a new node with the given value and children.
+    pub fn new_node(value: T, children: Vec<Tree<T>>) -> Self {
+        Self { value, children }
+    }
+
+    /// Retrieves the value contained inside the node.
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// Consumes the node and iterates its children.
+    pub fn into_children(self) -> impl Iterator<Item = Self> {
+        self.children.into_iter()
+    }
+
+    /// Iterator visiting references to the node children.
+    pub fn children(&self) -> impl Iterator<Item = &Self> {
+        self.children.iter()
     }
 }
 
-impl<T: std::fmt::Display> GraphvizDot for BSTree<T> {
+impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
     fn to_dot(&self) -> String {
-        let mut retval = "digraph BST {\n".to_string();
+        let mut retval = "digraph Tree {\n".to_string();
         let mut next_id = 0;
         let mut nodes = vec![(self, next_id)];
         next_id += 1;
         while let Some((node, id)) = nodes.pop() {
             writeln!(retval, "    {}[label=\"{}\"];", id, node.value).unwrap();
-            if let Some(left) = node.left.as_ref() {
-                nodes.push((left.as_ref(), next_id));
-                writeln!(retval, "    {}->{}", id, next_id).unwrap();
-                next_id += 1;
-            } else {
-            }
-            if let Some(right) = node.right.as_ref() {
-                nodes.push((right.as_ref(), next_id));
+            for child in node.children() {
+                nodes.push((child, next_id));
                 writeln!(retval, "    {}->{}", id, next_id).unwrap();
                 next_id += 1;
             }

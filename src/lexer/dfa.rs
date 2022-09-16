@@ -1,5 +1,5 @@
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
-use super::{BSTree, GraphvizDot, SymbolTable};
+use super::{GraphvizDot, SymbolTable, Tree};
 use crate::error::ParseError;
 use crate::grammar::Grammar;
 use maplit::btreeset;
@@ -288,31 +288,22 @@ impl GraphvizDot for Dfa {
 /// Merges different canonical trees into a single canonical tree with multiple accepting nodes.
 /// Accepting states are labeled with a new node in the canonical tree.
 fn merge_regex_trees(nodes: Vec<CanonicalTree>) -> CanonicalTree {
-    let mut roots = Vec::new();
-    for (node_no, node) in nodes.into_iter().enumerate() {
-        let right = BSTree {
-            value: Literal::Acc(node_no as u32),
-            left: None,
-            right: None,
-        };
-        let root = BSTree {
-            value: Literal::AND,
-            left: Some(Box::new(node)),
-            right: Some(Box::new(right)),
-        };
-        roots.push(root);
+    // for each regex assign an acceptance node with ID
+    let mut roots = nodes
+        .into_iter()
+        .enumerate()
+        .map(|(node_no, root)| {
+            Tree::new_node(
+                Literal::AND,
+                vec![root, Tree::new_leaf(Literal::Acc(node_no as u32))],
+            )
+        })
+        .collect::<Vec<_>>();
+    if roots.len() > 1 {
+        Tree::new_node(Literal::OR, roots)
+    } else {
+        roots.pop().unwrap()
     }
-    while roots.len() > 1 {
-        let right = roots.pop().unwrap();
-        let left = roots.pop().unwrap();
-        let new_root = BSTree {
-            value: Literal::OR,
-            left: Some(Box::new(left)),
-            right: Some(Box::new(right)),
-        };
-        roots.push(new_root);
-    }
-    roots.pop().unwrap()
 }
 
 /// Helper for the direct construction of the DFA.
@@ -429,25 +420,20 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
 ///
 /// - `node`: the root of the tree (it's a recursive function)
 /// - `start_index`: starting index of the output DFA (0 for the first invocation)
-fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> BSTree<DCHelper> {
+fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> Tree<DCHelper> {
     //postorder because I need to build it bottom up
     let mut index = start_index;
-    let mut children = [&node.left, &node.right]
-        .iter()
-        .map(|x| match x {
-            Some(c) => {
-                let helper = build_dc_helper(c, index, epsilon_id);
-                index = helper.value.index + 1;
-                Some(Box::new(helper))
-            }
-            None => None,
+    let children = node
+        .children()
+        .map(|c| {
+            let helper = build_dc_helper(c, index, epsilon_id);
+            index = helper.value.index + 1;
+            helper
         })
         .collect::<Vec<_>>();
-    let right = children.pop().unwrap();
-    let left = children.pop().unwrap();
     let nullable;
-    let firstpos;
-    let lastpos;
+    let mut firstpos;
+    let mut lastpos;
     match &node.value {
         Literal::Symbol(val) => {
             if *val == epsilon_id {
@@ -461,32 +447,39 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> B
             }
         }
         Literal::KLEENE => {
-            let c1 = &left.as_ref().unwrap().value;
+            let c1 = &children[0].value;
             nullable = true;
             firstpos = c1.firstpos.clone();
             lastpos = c1.lastpos.clone();
         }
         Literal::AND => {
-            let c1 = &left.as_ref().unwrap().value;
-            let c2 = &right.as_ref().unwrap().value;
-            nullable = c1.nullable && c2.nullable;
-            firstpos = if c1.nullable {
-                c1.firstpos.union(&c2.firstpos).cloned().collect()
-            } else {
-                c1.firstpos.clone()
-            };
-            lastpos = if c2.nullable {
-                c1.lastpos.union(&c2.lastpos).cloned().collect()
-            } else {
-                c2.lastpos.clone()
-            };
+            nullable = children.iter().all(|c| c.value().nullable);
+            firstpos = Default::default();
+            lastpos = Default::default();
+            // the firstpos computation is valid only for children == 2
+            // otherwise followpos needs to recalculate them (for children c2, c3..) and it is ugly
+            debug_assert!(children.len() == 2, "AND node can have up to 2 children");
+            for child in &children {
+                firstpos.extend(child.value().firstpos.iter().cloned());
+                if !child.value().nullable {
+                    break;
+                }
+            }
+            for child in children.iter().rev() {
+                lastpos.extend(child.value().lastpos.iter().cloned());
+                if !child.value().nullable {
+                    break;
+                }
+            }
         }
         Literal::OR => {
-            let c1 = &left.as_ref().unwrap().value;
-            let c2 = &right.as_ref().unwrap().value;
-            nullable = c1.nullable || c2.nullable;
-            firstpos = c1.firstpos.union(&c2.firstpos).cloned().collect();
-            lastpos = c1.lastpos.union(&c2.lastpos).cloned().collect();
+            nullable = children.iter().any(|c| c.value().nullable);
+            firstpos = Default::default();
+            lastpos = Default::default();
+            for child in &children {
+                firstpos.extend(child.value().firstpos.iter().cloned());
+                lastpos.extend(child.value().lastpos.iter().cloned());
+            }
         }
         Literal::Acc(_) => {
             nullable = false;
@@ -494,50 +487,38 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> B
             lastpos = btreeset! {index};
         }
     }
-    BSTree {
-        value: DCHelper {
-            ttype: node.value,
-            index,
-            nullable,
-            firstpos,
-            lastpos,
-        },
-        left,
-        right,
-    }
+    let new_value = DCHelper {
+        ttype: node.value,
+        index,
+        nullable,
+        firstpos,
+        lastpos,
+    };
+    Tree::new_node(new_value, children)
 }
 
 /// Part of the direct DFA construction:
 ///
-/// Computes `followpos` set. Each index of the output vector is the index of the DFA node, and the
+/// Computes `followpos` set. Each index of the `graph` vector is the index of the DFA node, and the
 /// content of that cell is the followpos set.
-fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
-    if let Some(l) = &node.left {
-        dc_compute_followpos(l, graph);
-    }
-    if let Some(r) = &node.right {
-        dc_compute_followpos(r, graph);
-    }
+fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
+    node.children().for_each(|c| dc_compute_followpos(c, graph));
     match &node.value.ttype {
         Literal::Symbol(_) => {}
         Literal::Acc(_) => {}
         Literal::OR => {}
         Literal::AND => {
-            let c1 = &**node.left.as_ref().unwrap();
-            let c2 = &**node.right.as_ref().unwrap();
-            for i in &c1.value.lastpos {
-                graph[*i as usize] = graph[*i as usize]
-                    .union(&c2.value.firstpos)
-                    .cloned()
-                    .collect();
+            debug_assert!(
+                node.children().count() == 2,
+                "AND node can have up to 2 children"
+            );
+            for i in &node.children[0].value.lastpos {
+                graph[*i as usize].extend(node.children[1].value.firstpos.iter().copied());
             }
         }
         Literal::KLEENE => {
             for i in &node.value.lastpos {
-                graph[*i as usize] = graph[*i as usize]
-                    .union(&node.value.firstpos)
-                    .cloned()
-                    .collect();
+                graph[*i as usize].extend(node.value.firstpos.iter().copied());
             }
         }
     }
@@ -547,16 +528,12 @@ fn dc_compute_followpos(node: &BSTree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>)
 /// Assigns an unique index to each node of the parse tree (required by the algorithm) and records
 /// the production number for each accepting node.
 fn dc_assign_index_to_literal(
-    node: &BSTree<DCHelper>,
+    node: &Tree<DCHelper>,
     indices: &mut Vec<u32>,
     acc: &mut FxHashMap<u32, u32>,
 ) {
-    if let Some(l) = &node.left {
-        dc_assign_index_to_literal(l, indices, acc);
-    }
-    if let Some(r) = &node.right {
-        dc_assign_index_to_literal(r, indices, acc);
-    }
+    node.children()
+        .for_each(|c| dc_assign_index_to_literal(c, indices, acc));
     match &node.value.ttype {
         Literal::Symbol(val) => indices[node.value.index as usize] = *val,
         Literal::Acc(prod) => {
@@ -748,13 +725,12 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
 
 #[cfg(test)]
 mod tests {
+    use super::{direct_construction, merge_regex_trees};
     use crate::error::ParseError;
     use crate::grammar::Grammar;
     use crate::lexer::dfa::min_dfa;
     use crate::lexer::grammar_conversion::canonical_trees;
     use crate::lexer::Dfa;
-
-    use super::{direct_construction, merge_regex_trees};
 
     #[test]
     fn dfa_conflicts_resolution() {

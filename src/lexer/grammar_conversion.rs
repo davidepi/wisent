@@ -1,4 +1,4 @@
-use super::{BSTree, SymbolTable};
+use super::{SymbolTable, Tree};
 use crate::grammar::Grammar;
 use maplit::btreeset;
 use std::collections::BTreeSet;
@@ -119,9 +119,9 @@ impl std::fmt::Display for Literal {
 }
 
 /// Parse tree for the regex operands, accounting for precedence.
-type PrecedenceTree<'a> = BSTree<RegexOp<'a>>;
+type PrecedenceTree<'a> = Tree<RegexOp<'a>>;
 /// Parse tree for the regex with only *, AND, OR. Thus removing + or ? or ^.
-pub(super) type CanonicalTree = BSTree<Literal>;
+pub(super) type CanonicalTree = Tree<Literal>;
 
 /// Generates a canonical tree from the lexer productions of a grammar.
 ///
@@ -193,11 +193,7 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
             }
             // id: push to stack
             OpType::ID => {
-                let leaf = BSTree {
-                    value: operator,
-                    left: None,
-                    right: None,
-                };
+                let leaf = Tree::new_leaf(operator);
                 operands.push(leaf);
             }
         }
@@ -213,38 +209,27 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
 /// in the stack.
 fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec<RegexOp<'a>>) {
     let operator = operators.pop().unwrap();
-    let left;
-    let right;
-    if operator.optype == OpType::OR || operator.optype == OpType::AND {
+    let children = if operator.optype == OpType::OR || operator.optype == OpType::AND {
         //binary operator
-        right = Some(Box::new(operands.pop().unwrap()));
-        left = Some(Box::new(operands.pop().unwrap()));
+        let right = operands.pop().unwrap();
+        let left = operands.pop().unwrap();
+        vec![left, right]
     } else {
         // unary operator
-        left = Some(Box::new(operands.pop().unwrap()));
-        right = None;
+        vec![operands.pop().unwrap()]
     };
-    let ret = BSTree {
-        value: operator,
-        left,
-        right,
-    };
-    operands.push(ret);
+    let node = Tree::new_node(operator, children);
+    operands.push(node);
 }
 
 /// Transforms a precedence parse tree in a precedence parse tree where the groups like `[a-z]`
 /// are expanded in `a | b | c ... | y | z`
-fn expand_literals(node: PrecedenceTree) -> BSTree<ExLiteral<char>> {
+fn expand_literals(node: PrecedenceTree) -> Tree<ExLiteral<char>> {
     match node.value.optype {
         OpType::ID => expand_literal_node(node.value.value),
         n => {
-            let left = node.left.map(|l| Box::new(expand_literals(*l)));
-            let right = node.right.map(|r| Box::new(expand_literals(*r)));
-            BSTree {
-                value: ExLiteral::Operation(n),
-                left,
-                right,
-            }
+            let children = node.into_children().map(expand_literals).collect();
+            Tree::new_node(ExLiteral::Operation(n), children)
         }
     }
 }
@@ -252,13 +237,9 @@ fn expand_literals(node: PrecedenceTree) -> BSTree<ExLiteral<char>> {
 /// Expands a single node containing sets like `[a-z]` in a set with all the simbols like
 /// `{a, b, c, d....}`. Replace also the . symbol with the special placeholder to represent any
 /// value and any eventual set with .
-fn expand_literal_node(literal: &str) -> BSTree<ExLiteral<char>> {
+fn expand_literal_node(literal: &str) -> Tree<ExLiteral<char>> {
     if literal == "." {
-        BSTree {
-            value: ExLiteral::AnyValue,
-            left: None,
-            right: None,
-        }
+        Tree::new_leaf(ExLiteral::AnyValue)
     } else {
         let mut charz = Vec::new();
         let mut iter = literal.chars();
@@ -315,30 +296,18 @@ fn expand_literal_node(literal: &str) -> BSTree<ExLiteral<char>> {
         }
         // set of characters will be transformed into an "or" by the Symbol table later
         if is_set || charz.is_empty() {
-            BSTree {
-                value: ExLiteral::Value(charz.into_iter().collect::<BTreeSet<_>>()),
-                left: None,
-                right: None,
-            }
+            Tree::new_leaf(ExLiteral::Value(charz.into_iter().collect()))
         } else {
-            // concatenation instead must be performed here
+            // concatenation instead must be addressed here
             let mut done = charz
                 .into_iter()
-                .map(|x| BSTree {
-                    value: ExLiteral::Value(btreeset! {x}),
-                    left: None,
-                    right: None,
-                })
+                .map(|x| Tree::new_leaf(ExLiteral::Value(btreeset! {x})))
                 .collect::<Vec<_>>();
             while done.len() > 1 {
-                let right = Some(Box::new(done.pop().unwrap()));
-                let left = Some(Box::new(done.pop().unwrap()));
-                let concat = BSTree {
-                    value: ExLiteral::Operation(OpType::AND),
-                    left,
-                    right,
-                };
-                done.push(concat);
+                let right = done.pop().unwrap();
+                let left = done.pop().unwrap();
+                let new = Tree::new_node(ExLiteral::Operation(OpType::AND), vec![left, right]);
+                done.push(new);
             }
             done.pop().unwrap()
         }
@@ -526,68 +495,58 @@ fn consume_counting_until(it: &mut Peekable<Chars>, until: char) -> usize {
 
 /// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
-fn canonicalise(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
+fn canonicalise(node: Tree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
     match node.value {
         ExLiteral::Value(i) => create_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
         ExLiteral::AnyValue => create_literal_node(symtable.any_value_id(), symtable.epsilon_id()),
         ExLiteral::Operation(op) => {
             match op {
                 OpType::NOT => {
-                    create_literal_node(solve_negated(node, symtable), symtable.epsilon_id())
+                    create_literal_node(solve_negated(&node, symtable), symtable.epsilon_id())
                 }
                 OpType::OR => {
-                    let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
-                    let right = node.right.map(|r| Box::new(canonicalise(*r, symtable)));
-                    BSTree {
-                        value: Literal::OR,
-                        left,
-                        right,
-                    }
+                    let children = node
+                        .into_children()
+                        .map(|c| canonicalise(c, symtable))
+                        .collect();
+                    Tree::new_node(Literal::OR, children)
                 }
                 OpType::AND => {
-                    let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
-                    let right = node.right.map(|r| Box::new(canonicalise(*r, symtable)));
-                    BSTree {
-                        value: Literal::AND,
-                        left,
-                        right,
-                    }
+                    let children = node
+                        .into_children()
+                        .map(|c| canonicalise(c, symtable))
+                        .collect();
+                    Tree::new_node(Literal::AND, children)
                 }
                 OpType::KLEENE => {
-                    let left = node.left.map(|l| Box::new(canonicalise(*l, symtable)));
-                    let right = node.right.map(|r| Box::new(canonicalise(*r, symtable)));
-                    BSTree {
-                        value: Literal::KLEENE,
-                        left,
-                        right,
-                    }
+                    let children = node
+                        .into_children()
+                        .map(|c| canonicalise(c, symtable))
+                        .collect();
+                    Tree::new_node(Literal::KLEENE, children)
                 }
                 OpType::QM => {
-                    // if the node has a ? DEFINITELY it has only a left children
-                    let left = Some(Box::new(create_literal_node(
+                    // if the node has a ? DEFINITELY it has only one child
+                    debug_assert!(node.children().count() == 1);
+                    let old_children = node.into_children().map(|c| canonicalise(c, symtable));
+                    let children = std::iter::once(create_literal_node(
                         BTreeSet::new(),
                         symtable.epsilon_id(),
-                    )));
-                    let right = Some(Box::new(canonicalise(*node.left.unwrap(), symtable)));
-                    BSTree {
-                        value: Literal::OR,
-                        left,
-                        right,
-                    }
+                    ))
+                    .chain(old_children)
+                    .collect();
+                    Tree::new_node(Literal::OR, children)
                 }
                 OpType::PL => {
-                    //it the node has a + DEFINITELY it has only a left children
-                    let left = canonicalise(*node.left.unwrap(), symtable);
-                    let right = BSTree {
-                        value: Literal::KLEENE,
-                        left: Some(Box::new(left.clone())),
-                        right: None,
-                    };
-                    BSTree {
-                        value: Literal::AND,
-                        left: Some(Box::new(left)),
-                        right: Some(Box::new(right)),
-                    }
+                    //it the node has a + DEFINITELY it has only one child
+                    debug_assert!(node.children().count() == 1);
+                    let mut children = node
+                        .into_children()
+                        .map(|c| canonicalise(c, symtable))
+                        .collect::<Vec<_>>();
+                    let right = Tree::new_node(Literal::KLEENE, children.clone());
+                    children.push(right);
+                    Tree::new_node(Literal::AND, children)
                 }
                 n => panic!("Unexpected operation {}", n),
             }
@@ -600,37 +559,20 @@ fn canonicalise(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> Canoni
 /// Returns epsilon if the set is empty.
 fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
     if set.is_empty() {
-        BSTree {
-            value: Literal::Symbol(epsilon_id),
-            left: None,
-            right: None,
-        }
+        Tree::new_leaf(Literal::Symbol(epsilon_id))
+    } else if set.len() == 1 {
+        Tree::new_leaf(Literal::Symbol(set.into_iter().next().unwrap()))
     } else {
-        let mut nodes = Vec::new();
-        for val in set {
-            let node = BSTree {
-                value: Literal::Symbol(val),
-                left: None,
-                right: None,
-            };
-            nodes.push(node);
-        }
-        while nodes.len() > 1 {
-            let right = nodes.pop().unwrap();
-            let left = nodes.pop().unwrap();
-            let node = BSTree {
-                value: Literal::OR,
-                left: Some(Box::new(left)),
-                right: Some(Box::new(right)),
-            };
-            nodes.push(node);
-        }
-        nodes.pop().unwrap()
+        let children = set
+            .into_iter()
+            .map(|val| Tree::new_leaf(Literal::Symbol(val)))
+            .collect();
+        Tree::new_node(Literal::OR, children)
     }
 }
 
 /// Returns the set of symbols used in a given tree.
-fn alphabet_from_node(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>> {
+fn alphabet_from_node(root: &Tree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>> {
     let mut ret = BTreeSet::new();
     let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {
@@ -640,13 +582,7 @@ fn alphabet_from_node(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>
             }
             ExLiteral::AnyValue => {}
             ExLiteral::Operation(_) => {
-                //nothing to do with the "operation" itself, but this is the only non-leaf type node
-                if let Some(left) = &node.left {
-                    todo_nodes.push(left);
-                }
-                if let Some(right) = &node.right {
-                    todo_nodes.push(right);
-                }
+                todo_nodes.extend(node.children());
             }
         }
     }
@@ -655,30 +591,24 @@ fn alphabet_from_node(root: &BSTree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>
 
 // Solve a node with a negated set, by returning the allowed set of literals.
 // panics in case an operator different from OR or NOT is encountered.
-fn solve_negated(node: BSTree<ExLiteral<char>>, symtable: &SymbolTable) -> BTreeSet<u32> {
+fn solve_negated(node: &Tree<ExLiteral<char>>, symtable: &SymbolTable) -> BTreeSet<u32> {
     debug_assert!(node.value == ExLiteral::Operation(OpType::NOT));
     let entire_alphabet = symtable.any_value_id();
     let mut descendant_alphabet = BTreeSet::new();
-    let mut todo = Vec::new();
-    if let Some(left) = node.left {
-        todo.push(left);
-    }
-    if let Some(right) = node.right {
-        todo.push(right);
-    }
+    let mut todo = node.children().collect::<Vec<_>>();
     while let Some(child) = todo.pop() {
-        match child.value {
+        match &child.value {
             ExLiteral::Value(v) => {
-                descendant_alphabet.extend(symtable.symbols_ids(&v));
+                descendant_alphabet.extend(symtable.symbols_ids(v));
             }
             ExLiteral::AnyValue => {
                 descendant_alphabet.extend(symtable.any_value_id());
             }
             ExLiteral::Operation(OpType::OR) => {
-                todo.extend([child.left.unwrap(), child.right.unwrap()]);
+                todo.extend(child.children());
             }
             ExLiteral::Operation(OpType::NOT) => {
-                descendant_alphabet.extend(solve_negated(*child, symtable));
+                descendant_alphabet.extend(solve_negated(child, symtable));
             }
             _ => panic!("Operation not supported in a negated set"),
         }
@@ -694,7 +624,20 @@ mod tests {
     use crate::lexer::grammar_conversion::{
         alphabet_from_node, canonicalise, expand_literals, gen_precedence_tree, OpType, RegexOp,
     };
-    use crate::lexer::{BSTree, SymbolTable};
+    use crate::lexer::{SymbolTable, Tree};
+    use std::fmt::Write;
+
+    /// encoded representation of a tree in form of string
+    /// otherwise the formatted version takes a lot of space (macros too, given the tree generics)
+    fn as_str<T: std::fmt::Display>(node: &Tree<T>) -> String {
+        let mut string = String::new();
+        let children = node.children().map(as_str).collect::<Vec<_>>();
+        write!(&mut string, "{}", node.value()).unwrap();
+        if !children.is_empty() {
+            write!(&mut string, "[{}]", children.join(",")).unwrap();
+        }
+        string
+    }
 
     #[test]
     fn canonical_tree_any() {
@@ -702,12 +645,9 @@ mod tests {
         let tree = expand_literals(gen_precedence_tree(expr));
         let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
-        let new_tree = canonicalise(tree, &symtable);
-        let str = format!("{}", new_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"*","left":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"|","left":{"val":"0"},"right":{"val":"1"}}}},"right":{"val":"0"}}"#
-        );
+        let canonical_tree = canonicalise(tree, &symtable);
+        let expected = "&[*[&[*[0],|[0,1]]],0]";
+        assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
@@ -716,12 +656,9 @@ mod tests {
         let tree = expand_literals(gen_precedence_tree(expr));
         let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
-        let new_tree = canonicalise(tree, &symtable);
-        let str = format!("{}", new_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"&","left":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"1"}},"right":{"val":"*","left":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"1"}}}},"right":{"val":"0"}}"#
-        );
+        let canonical_tree = canonicalise(tree, &symtable);
+        let expected = "&[&[&[*[0],1],*[&[*[0],1]]],0]";
+        assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
@@ -730,12 +667,9 @@ mod tests {
         let tree = expand_literals(gen_precedence_tree(expr));
         let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
-        let new_tree = canonicalise(tree, &symtable);
-        let str = format!("{}", new_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"|","left":{"val":"3"},"right":{"val":"&","left":{"val":"*","left":{"val":"0"}},"right":{"val":"1"}}},"right":{"val":"0"}}"#
-        );
+        let canonical_tree = canonicalise(tree, &symtable);
+        let expected = "&[|[3,&[*[0],1]],0]";
+        assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
@@ -744,12 +678,9 @@ mod tests {
         let tree = expand_literals(gen_precedence_tree(expr));
         let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
-        let new_tree = canonicalise(tree, &symtable);
-        let str = format!("{}", new_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"|","left":{"val":"2"},"right":{"val":"3"}},"right":{"val":"|","left":{"val":"0"},"right":{"val":"2"}}}"#
-        );
+        let canonical_tree = canonicalise(tree, &symtable);
+        let expected = "&[|[2,3],|[0,2]]";
+        assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
@@ -758,126 +689,112 @@ mod tests {
         let tree = expand_literals(gen_precedence_tree(expr));
         let alphabet = alphabet_from_node(&tree);
         let symtable = SymbolTable::new(alphabet);
-        let new_tree = canonicalise(tree, &symtable);
-        let str = format!("{}", new_tree);
-        assert_eq!(str, r#"{"val":"|","left":{"val":"0"},"right":{"val":"1"}}"#)
+        let canonical_tree = canonicalise(tree, &symtable);
+        let expected = "|[0,1]";
+        assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn identify_literal_empty() {
         let char_literal = "''";
-        let mut tree = BSTree {
+        let mut tree = Tree {
             value: RegexOp {
                 optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
-            left: None,
-            right: None,
+            children: vec![],
         };
         tree.value.value = char_literal;
-        let ret_tree = expand_literals(tree);
-        let str = format!("{}", &ret_tree);
-        assert_eq!(str, r#"{"val":"VALUE([])"}"#);
+        let expanded_tree = expand_literals(tree);
+        let expected = "VALUE([])";
+        assert_eq!(as_str(&expanded_tree), expected);
     }
 
     #[test]
     fn identify_literal_basic_concat() {
         let char_literal = "'aaa'";
-        let mut tree = BSTree {
+        let mut tree = Tree {
             value: RegexOp {
                 optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
-            left: None,
-            right: None,
+            children: vec![],
         };
         tree.value.value = char_literal;
-        let ret_tree = expand_literals(tree);
-        let str = format!("{}", &ret_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"OP(&)","left":{"val":"VALUE([a])"},"right":{"val":"OP(&)","left":{"val":"VALUE([a])"},"right":{"val":"VALUE([a])"}}}"#
-        );
+        let expanded_tree = expand_literals(tree);
+        let expected = "OP(&)[VALUE([a]),OP(&)[VALUE([a]),VALUE([a])]]";
+        assert_eq!(as_str(&expanded_tree), expected);
     }
 
     #[test]
     fn identify_literal_escaped() {
         let char_literal = "'a\\x24'";
-        let mut tree = BSTree {
+        let mut tree = Tree {
             value: RegexOp {
                 optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
-            left: None,
-            right: None,
+            children: vec![],
         };
         tree.value.value = char_literal;
-        let ret_tree = expand_literals(tree);
-        let str = format!("{}", &ret_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"OP(&)","left":{"val":"VALUE([a])"},"right":{"val":"VALUE([$])"}}"#
-        );
+        let expanded_tree = expand_literals(tree);
+        let expected = "OP(&)[VALUE([a]),VALUE([$])]";
+        assert_eq!(as_str(&expanded_tree), expected);
     }
 
     #[test]
     fn identify_literal_unicode_seq() {
         let unicode_seq = "'დოლორ'";
-        let mut tree = BSTree {
+        let mut tree = Tree {
             value: RegexOp {
                 optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
-            left: None,
-            right: None,
+            children: vec![],
         };
         tree.value.value = unicode_seq;
-        let ret_tree = expand_literals(tree);
-        let str = format!("{}", &ret_tree);
-        assert_eq!(
-            str,
-            r#"{"val":"OP(&)","left":{"val":"VALUE([დ])"},"right":{"val":"OP(&)","left":{"val":"VALUE([ო])"},"right":{"val":"OP(&)","left":{"val":"VALUE([ლ])"},"right":{"val":"OP(&)","left":{"val":"VALUE([ო])"},"right":{"val":"VALUE([რ])"}}}}}"#
-        );
+        let expanded_tree = expand_literals(tree);
+        let expected =
+            "OP(&)[VALUE([დ]),OP(&)[VALUE([ო]),OP(&)[VALUE([ლ]),OP(&)[VALUE([ო]),VALUE([რ])]]]]";
+        assert_eq!(as_str(&expanded_tree), expected);
     }
 
     #[test]
     fn identify_literal_escaped_range() {
         let square = "[\\-a-d\\]]";
-        let mut tree = BSTree {
+        let mut tree = Tree {
             value: RegexOp {
                 optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
-            left: None,
-            right: None,
+            children: vec![],
         };
         tree.value.value = square;
-        let ret_tree = expand_literals(tree);
-        let str = format!("{}", &ret_tree);
-        assert_eq!(str, r#"{"val":"VALUE([-]abcd])"}"#);
+        let expanded_tree = expand_literals(tree);
+        let expected = "VALUE([-]abcd])";
+        assert_eq!(as_str(&expanded_tree), expected);
     }
 
     #[test]
     fn identify_literal_unicode_range() {
         let range = "'\\U16C3'..'\\u16C5'";
-        let mut tree = BSTree {
+        let mut tree = Tree {
             value: RegexOp {
                 optype: OpType::ID,
                 value: "",
                 priority: 0,
             },
-            left: None,
-            right: None,
+            children: vec![],
         };
         tree.value.value = range;
-        let ret_tree = expand_literals(tree);
-        let str = format!("{}", &ret_tree);
-        assert_eq!(str, r#"{"val":"VALUE([ᛃᛄᛅ])"}"#);
+        let expanded_tree = expand_literals(tree);
+        let expected = "VALUE([ᛃᛄᛅ])";
+        assert_eq!(as_str(&expanded_tree), expected);
     }
 
     #[test]
@@ -885,88 +802,64 @@ mod tests {
         // ANTLR does not support unicode literals in the grammar,
         // but this library does for convenience.
         let regex = "[あいうえお]|[アイウエオ]";
-        let tree = gen_precedence_tree(regex);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"|","left":{"val":"[あいうえお]"},"right":{"val":"[アイウエオ]"}}"#
-        )
+        let prec_tree = gen_precedence_tree(regex);
+        let expected = "|[[あいうえお],[アイウエオ]]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_correct_precedence_or_klenee() {
         let expr = "'a'|'b'*'c'";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"|","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"*","left":{"val":"'b'"}},"right":{"val":"'c'"}}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "|['a',&[*['b'],'c']]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_correct_precedence_klenee_par() {
         let expr = "'a'*('b'|'c')*'d'";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"*","left":{"val":"'a'"}},"right":{"val":"&","left":{"val":"*","left":{"val":"|","left":{"val":"'b'"},"right":{"val":"'c'"}}},"right":{"val":"'d'"}}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[*['a'],&[*[|['b','c']],'d']]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_correct_precedence_negation_par() {
         let expr = "('a')~'b'('c')('d')'e'";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"~","left":{"val":"'b'"}},"right":{"val":"&","left":{"val":"'c'"},"right":{"val":"&","left":{"val":"'d'"},"right":{"val":"'e'"}}}}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&['a',&[~['b'],&['c',&['d','e']]]]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_correct_precedence_negation() {
         let expr = "'a'~'b''c'('d')";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"'a'"},"right":{"val":"&","left":{"val":"~","left":{"val":"'b'"}},"right":{"val":"&","left":{"val":"'c'"},"right":{"val":"'d'"}}}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&['a',&[~['b'],&['c','d']]]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_correct_precedence_question_plus_klenee_par() {
         let expr = "'a'?('b'*|'c'*)+'d'";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"&","left":{"val":"?","left":{"val":"'a'"}},"right":{"val":"&","left":{"val":"+","left":{"val":"|","left":{"val":"*","left":{"val":"'b'"}},"right":{"val":"*","left":{"val":"'c'"}}}},"right":{"val":"'d'"}}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[?['a'],&[+[|[*['b'],*['c']]],'d']]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_precedence_negation_klenee() {
         let expr = "~'a'*";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"*","left":{"val":"~","left":{"val":"'a'"}}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*[~['a']]";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 
     #[test]
     fn regex_precedence_negation_klenee_or() {
         let expr = "~'a'*|'b'";
-        let tree = gen_precedence_tree(expr);
-        let str = format!("{}", &tree);
-        assert_eq!(
-            str,
-            r#"{"val":"|","left":{"val":"*","left":{"val":"~","left":{"val":"'a'"}}},"right":{"val":"'b'"}}"#
-        );
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "|[*[~['a']],'b']";
+        assert_eq!(as_str(&prec_tree), expected);
     }
 }

@@ -16,7 +16,7 @@ fn parse_c_grammar(c: &mut Criterion) {
 
 fn lex_c_grammar(c: &mut Criterion) {
     let g = Grammar::parse_string(C_GRAMMAR).unwrap();
-    c.bench_function("c grammar [lex grammar]", |b| b.iter(|| Dfa::new(&g)));
+    c.bench_function("c grammar [build dfa]", |b| b.iter(|| Dfa::new(&g)));
 }
 
 fn tokenize_c_file(c: &mut Criterion) {
