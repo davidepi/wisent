@@ -7,6 +7,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
 
+/// Bit indicating a non-greedy production
+const NG_FLAG: u32 = 0x80000000;
+
 /// A Deterministic Finite Automaton for lexical analysis.
 ///
 /// A DFA is an automaton where each state has a single transaction for a given input symbol, and
@@ -33,7 +36,7 @@ pub struct Dfa {
 
 impl std::fmt::Display for Dfa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DFA({})", self.nodes())
+        write!(f, "DFA({})", self.states())
     }
 }
 
@@ -66,7 +69,7 @@ impl Dfa {
     /// let dfa = Dfa::new(&grammar);
     /// ```
     pub fn new(grammar: &Grammar) -> Dfa {
-        let (canonical_trees, symtable) = canonical_trees(grammar);
+        let (canonical_trees, symtable, nongreedy) = canonical_trees(grammar);
         if canonical_trees.is_empty() {
             // no production found, return default DFA
             Dfa::default()
@@ -76,7 +79,16 @@ impl Dfa {
             // build the dfa
             let big_dfa = direct_construction(merged_tree, symtable);
             // minimize the dfa
-            min_dfa(big_dfa)
+            let mut dfa = min_dfa(big_dfa);
+            // mark nongreedy productions
+            for state in 0..dfa.states_no {
+                if let Some(prod) = dfa.accepting(state) {
+                    if nongreedy[prod as usize] {
+                        dfa.accept[state as usize] |= NG_FLAG;
+                    }
+                }
+            }
+            dfa
         }
     }
 
@@ -162,7 +174,7 @@ impl Dfa {
         self.transition.len() <= 1
     }
 
-    /// Returns the number of nodes in the DFA, excluding the eventual sink node.
+    /// Returns the number of states in the DFA, excluding the eventual sink state.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -171,9 +183,9 @@ impl Dfa {
     /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
     /// let dfa = Dfa::new(&grammar);
     ///
-    /// assert_eq!(dfa.nodes(), 3);
+    /// assert_eq!(dfa.states(), 3);
     /// ```
-    pub fn nodes(&self) -> u32 {
+    pub fn states(&self) -> u32 {
         self.states_no - 1
     }
 
@@ -234,20 +246,36 @@ impl Dfa {
         if prod == u32::MAX {
             None
         } else {
-            Some(prod)
+            Some(prod & !NG_FLAG)
         }
+    }
+
+    /// Returns true if the current state is a non-greedy production or not-accepting.
+    ///
+    /// Returns false if the current state is a greedy production.
+    ///
+    /// # Panics
+    /// Panics if the given state does not exist in the DFA.
+    pub fn non_greedy(&self, state: u32) -> bool {
+        let prod = self.accept[state as usize];
+        (prod & NG_FLAG) != 0
     }
 }
 
 impl GraphvizDot for Dfa {
     fn to_dot(&self) -> String {
         let mut f = "digraph DFA {\n    start[shape=point];\n".to_string();
-        for (state, accepted_rule) in self.accept.iter().enumerate() {
-            if *accepted_rule != u32::MAX {
+        for state in 0..self.states_no {
+            if let Some(accepted_rule) = self.accepting(state) {
+                let acc_label = if self.non_greedy(state) {
+                    "ACC_NG"
+                } else {
+                    "ACC"
+                };
                 writeln!(
                     f,
-                    "    {}[shape=doublecircle;xlabel=\"ACC({})\"];",
-                    state, accepted_rule
+                    "    {}[shape=doublecircle;xlabel=\"{}({})\"];",
+                    state, acc_label, accepted_rule
                 )
                 .unwrap();
             }
@@ -748,9 +776,9 @@ mod tests {
         );
         let dfa2 = Dfa::new(&grammar2);
         assert!(!dfa1.is_empty());
-        assert_eq!(dfa1.nodes(), 6);
+        assert_eq!(dfa1.states(), 6);
         assert!(!dfa2.is_empty());
-        assert_eq!(dfa2.nodes(), 4);
+        assert_eq!(dfa2.states(), 4);
     }
 
     #[test]
@@ -760,7 +788,7 @@ mod tests {
         let grammar = Grammar::new(&[terminal], &[], &[names]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
-        assert_eq!(dfa.nodes(), 4);
+        assert_eq!(dfa.states(), 4);
     }
 
     #[test]
@@ -768,14 +796,14 @@ mod tests {
         let grammar = Grammar::new(&["[0-9]", "[0-9]+"], &[], &["digit", "more_digits"]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
-        assert_eq!(dfa.nodes(), 3);
+        assert_eq!(dfa.states(), 3);
     }
 
     #[test]
     fn dfa_direct_construction_set_productions() {
         let grammar = Grammar::new(&["[a-c]([b-d]?[e-g])*", "[fg]+"], &[], &["LONG1", "LONG2"]);
         let dfa = Dfa::new(&grammar);
-        assert_eq!(dfa.nodes(), 4);
+        assert_eq!(dfa.states(), 4);
     }
 
     #[test]
@@ -783,7 +811,7 @@ mod tests {
         let grammar = Grammar::new(&["'ab'*"], &[], &["ABSTAR"]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
-        assert_eq!(dfa.nodes(), 2);
+        assert_eq!(dfa.states(), 2);
     }
 
     #[test]
@@ -793,7 +821,7 @@ mod tests {
         let grammar = Grammar::new(&[terminal], &[], &[names]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
-        assert_eq!(dfa.nodes(), 5);
+        assert_eq!(dfa.states(), 5);
     }
 
     #[test]
@@ -801,7 +829,7 @@ mod tests {
         let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
-        assert_eq!(dfa.nodes(), 3);
+        assert_eq!(dfa.states(), 3);
     }
 
     #[test]
@@ -818,12 +846,12 @@ mod tests {
             &[],
             &["SEQUENCE"],
         );
-        let (canonical_trees, symtable) = canonical_trees(&grammar);
+        let (canonical_trees, symtable, _) = canonical_trees(&grammar);
         let merged_tree = merge_regex_trees(canonical_trees);
         let big_dfa = direct_construction(merged_tree, symtable);
         let min_dfa = min_dfa(big_dfa.clone());
-        assert_ne!(big_dfa.nodes(), min_dfa.nodes());
-        assert_eq!(min_dfa.nodes(), 4);
+        assert_ne!(big_dfa.states(), min_dfa.states());
+        assert_eq!(min_dfa.states(), 4);
     }
 
     #[test]
@@ -833,7 +861,7 @@ mod tests {
             &[],
             &["SEQUENCE"],
         );
-        let (canonical_trees, symtable) = canonical_trees(&grammar);
+        let (canonical_trees, symtable, _) = canonical_trees(&grammar);
         let merged_tree = merge_regex_trees(canonical_trees);
         let big_dfa = direct_construction(merged_tree, symtable);
         assert_eq!(big_dfa.states_no as usize, big_dfa.transition.len());
@@ -882,5 +910,21 @@ mod tests {
         let deserialized = Dfa::from_bytes(&serialized)?;
         assert_eq!(dfa, deserialized);
         Ok(())
+    }
+
+    #[test]
+    fn nongreedy_rule() {
+        let grammar = Grammar::new(&["'a'+", "'b'+?"], &[], &["GREEDY", "NONGREEDY"]);
+        let dfa = Dfa::new(&grammar);
+        assert!(dfa.accepting(dfa.start()).is_none());
+        assert!(dfa.non_greedy(dfa.start()));
+        let greedy_state = dfa
+            .moove(dfa.start(), dfa.symbol_table().symbol_id('a'))
+            .unwrap();
+        let ng_state = dfa
+            .moove(dfa.start(), dfa.symbol_table().symbol_id('b'))
+            .unwrap();
+        assert!(dfa.non_greedy(ng_state));
+        assert!(!dfa.non_greedy(greedy_state));
     }
 }

@@ -87,10 +87,16 @@ impl DfaSimulator {
                         // lexeme ending. DO NOT push the accepting state, as we try to greedily match
                         // other productions.
                         last_accepted = Some((accepting_prod, self.forward_pos, location_end));
+                        if !self.dfa.non_greedy(state) {
+                            // if the current accepting state is greedy, continue looping
+                            continue;
+                        }
+                    } else {
+                        continue; // avoid entering in the next if
                     }
-                    continue; // avoid entering in the next if
                 }
             }
+            // this if serves to push the accepted state
             if let Some((production, last_valid_state, last_end)) = last_accepted {
                 // no other move available, but there was a previous accepted production.
                 // push the accepted production and roll back the head.
@@ -303,7 +309,7 @@ mod tests {
     #[test]
     fn simulator_tokenize_greedy_complete() {
         let grammar = Grammar::new(
-            &["'/*'.*'*/'", "[0-9]+", "[\n\t ]"],
+            &["'/*'.*'*/'", "[0-9]+", "[\r\n\t ]"],
             &[],
             &["COMMENT", "NUMBER", "SPACE"],
         );
@@ -331,5 +337,19 @@ mod tests {
         assert_eq!(tokens[1].production, 2);
         assert_eq!(tokens[2].production, 1);
         assert_eq!(tokens[3].production, 2);
+    }
+
+    #[test]
+    fn simulator_tokenize_nongreedy_kleene() {
+        let grammar = Grammar::new(
+            &["'/*'.*?'*/'", "[\r\n\t ]", "'\"'~'\"'*'\"'"],
+            &[],
+            &["COMMENT", "SPACE", "LITERAL"],
+        );
+        let dfa = Dfa::new(&grammar);
+        let simulator = DfaSimulator::new(dfa);
+        let input = "/* test comment */ \"/*this is not a comment*/\"";
+        let tokens = simulator.tokenize(input.chars());
+        assert_eq!(tokens.len(), 3, "The simulator greedily matched everything");
     }
 }

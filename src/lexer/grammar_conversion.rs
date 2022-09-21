@@ -127,7 +127,9 @@ pub(super) type CanonicalTree = Tree<Literal>;
 ///
 /// A canonical tree is a tree with only * & and | operations. The SymbolTable contains the
 /// alphabet of the grammar.
-pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolTable) {
+///
+/// Returns also if each production is non-greedy
+pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolTable, Vec<bool>) {
     // Convert a grammar into a series of parse trees, then expand the sets
     let parse_trees = grammar
         .iter_term()
@@ -135,6 +137,7 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
         .map(gen_precedence_tree)
         .map(expand_literals)
         .collect::<Vec<_>>();
+    let nongreedy = parse_trees.iter().map(is_nongreedy).collect();
     // collect the alphabet for DFA
     let alphabet = parse_trees
         .iter()
@@ -146,7 +149,7 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
         .into_iter()
         .map(|x| canonicalise(x, &symtable))
         .collect::<Vec<_>>();
-    (canonical_trees, symtable)
+    (canonical_trees, symtable, nongreedy)
 }
 
 /// Creates a parse tree with correct precedence given the input regex.
@@ -493,8 +496,28 @@ fn consume_counting_until(it: &mut Peekable<Chars>, until: char) -> usize {
     skipped
 }
 
+/// Checks if a parsing tree contains non-greedy productions
+fn is_nongreedy(node: &Tree<ExLiteral<char>>) -> bool {
+    let mut nodes = vec![node];
+    while let Some(node) = nodes.pop() {
+        if node.value == ExLiteral::Operation(OpType::QM) {
+            let child = node.children().next().expect("? node must have a child");
+            match child.value {
+                ExLiteral::Operation(OpType::KLEENE)
+                | ExLiteral::Operation(OpType::QM)
+                | ExLiteral::Operation(OpType::PL) => return true,
+                _ => (),
+            }
+        }
+        nodes.extend(node.children());
+    }
+    false
+}
+
 /// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
+/// **note** that non-greediness of a rule is removed by this function, so it must be recorded
+/// somewhere else beforehand.
 fn canonicalise(node: Tree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
     match node.value {
         ExLiteral::Value(i) => create_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
@@ -519,34 +542,38 @@ fn canonicalise(node: Tree<ExLiteral<char>>, symtable: &SymbolTable) -> Canonica
                     Tree::new_node(Literal::AND, children)
                 }
                 OpType::KLEENE => {
-                    let children = node
+                    let child = node
                         .into_children()
                         .map(|c| canonicalise(c, symtable))
-                        .collect();
-                    Tree::new_node(Literal::KLEENE, children)
+                        .next()
+                        .expect("* node must have a child node");
+                    Tree::new_node(Literal::KLEENE, vec![child])
                 }
                 OpType::QM => {
-                    // if the node has a ? DEFINITELY it has only one child
-                    debug_assert!(node.children().count() == 1);
-                    let old_children = node.into_children().map(|c| canonicalise(c, symtable));
-                    let children = std::iter::once(create_literal_node(
-                        BTreeSet::new(),
-                        symtable.epsilon_id(),
-                    ))
-                    .chain(old_children)
-                    .collect();
-                    Tree::new_node(Literal::OR, children)
+                    let child = node
+                        .into_children()
+                        .next()
+                        .expect("? node must have a child node");
+                    if child.value == ExLiteral::Operation(OpType::KLEENE)
+                        || child.value == ExLiteral::Operation(OpType::QM)
+                        || child.value == ExLiteral::Operation(OpType::PL)
+                    {
+                        // non-greedy rule, just remove the ?
+                        canonicalise(child, symtable)
+                    } else {
+                        let canonical_child = canonicalise(child, symtable);
+                        let epsilon = create_literal_node(BTreeSet::new(), symtable.epsilon_id());
+                        Tree::new_node(Literal::OR, vec![epsilon, canonical_child])
+                    }
                 }
                 OpType::PL => {
-                    //it the node has a + DEFINITELY it has only one child
-                    debug_assert!(node.children().count() == 1);
-                    let mut children = node
+                    let child = node
                         .into_children()
                         .map(|c| canonicalise(c, symtable))
-                        .collect::<Vec<_>>();
-                    let right = Tree::new_node(Literal::KLEENE, children.clone());
-                    children.push(right);
-                    Tree::new_node(Literal::AND, children)
+                        .next()
+                        .expect("+ node must have a child node");
+                    let right = Tree::new_node(Literal::KLEENE, vec![child.clone()]);
+                    Tree::new_node(Literal::AND, vec![child, right])
                 }
                 n => panic!("Unexpected operation {}", n),
             }
@@ -627,6 +654,8 @@ mod tests {
     use crate::lexer::{SymbolTable, Tree};
     use std::fmt::Write;
 
+    use super::is_nongreedy;
+
     /// encoded representation of a tree in form of string
     /// otherwise the formatted version takes a lot of space (macros too, given the tree generics)
     fn as_str<T: std::fmt::Display>(node: &Tree<T>) -> String {
@@ -692,6 +721,54 @@ mod tests {
         let canonical_tree = canonicalise(tree, &symtable);
         let expected = "|[0,1]";
         assert_eq!(as_str(&canonical_tree), expected);
+    }
+
+    #[test]
+    fn canonical_tree_ignores_nongreedy_kleene() {
+        // nongreedines is handled by the DFA and DFA simulator, not the grammar
+        let expr_greedy = "'a'.*'a'";
+        let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let alphabet_greedy = alphabet_from_node(&tree_greedy);
+        let symtable_greedy = SymbolTable::new(alphabet_greedy);
+        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
+        let expr_nongreedy = "'a'.*?'a'";
+        let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy);
+        let symtable_nongreedy = SymbolTable::new(alphabet_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
+        assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
+    }
+
+    #[test]
+    fn canonical_tree_ignores_nongreedy_plus() {
+        // nongreedines is handled by the DFA and DFA simulator, not the grammar
+        let expr_greedy = "'a'.+'a'";
+        let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let alphabet_greedy = alphabet_from_node(&tree_greedy);
+        let symtable_greedy = SymbolTable::new(alphabet_greedy);
+        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
+        let expr_nongreedy = "'a'.+?'a'";
+        let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy);
+        let symtable_nongreedy = SymbolTable::new(alphabet_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
+        assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
+    }
+
+    #[test]
+    fn canonical_tree_ignores_nongreedy_qm() {
+        // nongreedines is handled by the DFA and DFA simulator, not the grammar
+        let expr_greedy = "'a'.?'a'";
+        let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let alphabet_greedy = alphabet_from_node(&tree_greedy);
+        let symtable_greedy = SymbolTable::new(alphabet_greedy);
+        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
+        let expr_nongreedy = "'a'.??'a'";
+        let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy);
+        let symtable_nongreedy = SymbolTable::new(alphabet_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
+        assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
 
     #[test]
@@ -798,6 +875,36 @@ mod tests {
     }
 
     #[test]
+    fn identify_nongreedy_kleene() {
+        let expr_greedy = "'a'.*'a'";
+        let expr_nongreedy = "'a'.*?'a'";
+        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        assert!(!is_nongreedy(&prec_greedy));
+        assert!(is_nongreedy(&prec_nongreedy));
+    }
+
+    #[test]
+    fn identify_nongreedy_qm() {
+        let expr_greedy = "'a'.?'a'";
+        let expr_nongreedy = "'a'.??'a'";
+        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        assert!(!is_nongreedy(&prec_greedy));
+        assert!(is_nongreedy(&prec_nongreedy));
+    }
+
+    #[test]
+    fn identify_nongreedy_plus() {
+        let expr_greedy = "'a'.+'a'";
+        let expr_nongreedy = "'a'.+?'a'";
+        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        assert!(!is_nongreedy(&prec_greedy));
+        assert!(is_nongreedy(&prec_nongreedy));
+    }
+
+    #[test]
     fn regex_with_unicode_literals() {
         // ANTLR does not support unicode literals in the grammar,
         // but this library does for convenience.
@@ -840,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn regex_correct_precedence_question_plus_klenee_par() {
+    fn regex_correct_precedence_qm_plus_klenee_par() {
         let expr = "'a'?('b'*|'c'*)+'d'";
         let prec_tree = gen_precedence_tree(expr);
         let expected = "&[?['a'],&[+[|[*['b'],*['c']]],'d']]";
@@ -860,6 +967,22 @@ mod tests {
         let expr = "~'a'*|'b'";
         let prec_tree = gen_precedence_tree(expr);
         let expected = "|[*[~['a']],'b']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_precedence_literal_negation_literal() {
+        let expr = "'a'~'a'*'a'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&['a',&[*[~['a']],'a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_nongreedy_negation() {
+        let expr = "'a'~'a'*?'a'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&['a',&[?[*[~['a']]],'a']]";
         assert_eq!(as_str(&prec_tree), expected);
     }
 }
