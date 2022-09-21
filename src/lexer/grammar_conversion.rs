@@ -461,18 +461,16 @@ fn read_token<'a>(input: &'a str, first: char, it: &mut Peekable<Chars>) -> &'a 
 /// |last|`|`|`~`|`*`|`(`|`)`| ID|
 ///  |---|---|---|---|---|---|---|
 ///  |`|`|`/`|`/`|`/`|`/`|`/`|`✗`|
-///  |`~`|`/`|`✗`|`/`|`✗`|`/`|`✗`|
-///  |`*`|`/`|`/`|`/`|`✓`|`✗`|`✓`|
-///  |`(`|`/`|`✗`|`/`|`✗`|`✗`|`✗`|
+///  |`*`|`/`|`✓`|`/`|`✓`|`✗`|`✓`|
 ///  |`)`|`✗`|`✓`|`✗`|`✓`|`✗`|`✓`|
+///  |`~`|`/`|`✗`|`/`|`✗`|`/`|`✗`|
+///  |`(`|`/`|`✗`|`/`|`✗`|`✗`|`✗`|
 ///  |ID |`✗`|`✓`|`✗`|`✓`|`✗`|`✓`|
 fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
     let last_is_kleene_family =
         *last == OpType::KLEENE || *last == OpType::PL || *last == OpType::QM;
-    let cur_is_lp_or_id = *current == OpType::LP || *current == OpType::ID;
-    (last_is_kleene_family && cur_is_lp_or_id)
-        || (*last == OpType::RP && (*current == OpType::NOT || cur_is_lp_or_id))
-        || (*last == OpType::ID && (*current == OpType::NOT || cur_is_lp_or_id))
+    let not_lp_id = *current == OpType::LP || *current == OpType::ID || *current == OpType::NOT;
+    (*last == OpType::ID || *last == OpType::RP || last_is_kleene_family) && not_lp_id
 }
 
 /// Consumes the input (accounting for escaped chars) until the `until` character is found.
@@ -983,6 +981,13 @@ mod tests {
         let expr = "'a'~'a'*?'a'";
         let prec_tree = gen_precedence_tree(expr);
         let expected = "&['a',&[?[*[~['a']]],'a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+    #[test]
+    fn regression_disappearing_literal() {
+        let expr = "'a'*~'b'*";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[*['a'],*[~['b']]]";
         assert_eq!(as_str(&prec_tree), expected);
     }
 }
