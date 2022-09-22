@@ -710,9 +710,8 @@ mod tests {
         let n5: BTreeSet<usize> = vec![].into_iter().collect();
 
         let graph = vec![n0, n1, n2, n3, n4, n5];
-        match topological_sort(&graph) {
-            Some(_) => panic!("A graph with cycles should not have a topological order"),
-            None => (), // everything ok!
+        if topological_sort(&graph).is_some() {
+            panic!("A graph with cycles should not have a topological order");
         }
     }
 

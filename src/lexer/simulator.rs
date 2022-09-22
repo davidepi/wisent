@@ -64,7 +64,7 @@ impl<'a> DfaSimulator<'a> {
     /// let grammar = Grammar::new(&["([0-9])+", "([a-z])+"], &[], &["NUMBER", "WORD"]);
     /// let dfa = Dfa::new(&grammar);
     /// let input = "abc123";
-    /// let simulator = DfaSimulator::new(dfa);
+    /// let simulator = DfaSimulator::new(&dfa);
     /// let tokens = simulator.tokenize(input.chars());
     /// assert_eq!(tokens[0].production, 1);
     /// assert_eq!(tokens[1].production, 0);
