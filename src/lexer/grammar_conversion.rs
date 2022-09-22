@@ -6,22 +6,10 @@ use std::fmt::Write;
 use std::iter::Peekable;
 use std::str::Chars;
 
-#[derive(Copy, Clone)]
-/// Operands/Operators that can be found in a Regex along with their value and priority.
-/// This struct is used to build the regex parse tree with the correct priority.
-struct RegexOp<'a> {
-    /// Type of operand/operator for the regex (for example concatenation, ?, *, (, id...).
-    optype: OpType,
-    /// Value of the operand as string slice. Used mostly for the various ID.
-    value: &'a str,
-    /// priority of the operator.
-    priority: u8,
-}
-
 ///Operators for a regex (and an operand, ID).
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(clippy::upper_case_acronyms)]
-enum OpType {
+enum OpType<'a> {
     /// Kleenee star `*`.
     KLEENE,
     /// Question mark `?`.
@@ -39,16 +27,41 @@ enum OpType {
     /// Concatenation of two operands.
     AND,
     /// An Operand.
-    ID,
+    Id(&'a str),
 }
 
-impl std::fmt::Display for RegexOp<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value)
+impl OpType<'_> {
+    /// Returns the number of operands required for each operator.
+    fn required_operands(&self) -> u8 {
+        match self {
+            OpType::LP | OpType::RP | OpType::Id(_) => 0,
+            OpType::KLEENE | OpType::QM | OpType::PL | OpType::NOT => 1,
+            OpType::OR | OpType::AND => 2,
+        }
+    }
+
+    // returns true if the operator is instead an ID (simplifies syntax)
+    fn is_id(&self) -> bool {
+        matches!(self, OpType::Id(_))
+    }
+
+    /// Returns the operator precedence priority of this operator.
+    fn priority(&self) -> u8 {
+        match self {
+            OpType::LP => 5,
+            OpType::RP => 5,
+            OpType::NOT => 4,
+            OpType::KLEENE => 3,
+            OpType::QM => 3,
+            OpType::PL => 3,
+            OpType::AND => 2,
+            OpType::OR => 1,
+            OpType::Id(_) => 0,
+        }
     }
 }
 
-impl std::fmt::Display for OpType {
+impl std::fmt::Display for OpType<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OpType::KLEENE => write!(f, "*"),
@@ -59,7 +72,7 @@ impl std::fmt::Display for OpType {
             OpType::NOT => write!(f, "~"),
             OpType::OR => write!(f, "|"),
             OpType::AND => write!(f, "&"),
-            OpType::ID => write!(f, "ID"),
+            OpType::Id(i) => write!(f, "{}", i),
         }
     }
 }
@@ -67,13 +80,13 @@ impl std::fmt::Display for OpType {
 /// Extended Literal: exacltly like RegexOp but does not depend on the string slice
 /// (because every set has been expanded to a single letter).
 #[derive(PartialEq, Debug, Clone)]
-enum ExLiteral<T> {
+enum ExLiteral<'a, T> {
     Value(BTreeSet<T>),
     AnyValue,
-    Operation(OpType),
+    Operation(OpType<'a>),
 }
 
-impl<T: std::fmt::Display> std::fmt::Display for ExLiteral<T> {
+impl<T: std::fmt::Display> std::fmt::Display for ExLiteral<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExLiteral::Value(i) => {
@@ -119,7 +132,7 @@ impl std::fmt::Display for Literal {
 }
 
 /// Parse tree for the regex operands, accounting for precedence.
-type PrecedenceTree<'a> = Tree<RegexOp<'a>>;
+type PrecedenceTree<'a> = Tree<OpType<'a>>;
 /// Parse tree for the regex with only *, AND, OR. Thus removing + or ? or ^.
 pub(super) type CanonicalTree = Tree<Literal>;
 
@@ -158,17 +171,17 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
 /// All non-unary operators are left associative.
 fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
     let mut operands = Vec::new();
-    let mut operators: Vec<RegexOp> = Vec::new();
+    let mut operators: Vec<OpType> = Vec::new();
     // first get a sequence of operands and operators
-    let tokens = regex_to_operands(regex);
+    let mut tokens = regex_to_operands(regex).into_iter().peekable();
     // for each in the sequence do the following actions
-    for operator in tokens {
-        match operator.optype {
+    while let Some(operator) = tokens.next() {
+        match operator {
             //operators: solve if precedent has higher priority and is not OpType::LP then push cur
             OpType::NOT | OpType::OR | OpType::AND | OpType::KLEENE | OpType::QM | OpType::PL => {
                 while !operators.is_empty()
-                    && operators.last().unwrap().optype != OpType::LP
-                    && operators.last().unwrap().priority >= operator.priority
+                    && operators.last().unwrap() != &OpType::LP
+                    && operators.last().unwrap().priority() >= operator.priority()
                 {
                     combine_nodes(&mut operands, &mut operators);
                 }
@@ -178,13 +191,23 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
             OpType::LP => operators.push(operator),
             // right parenthesis: combine all the nodes until left parenthesis is found.
             OpType::RP => {
-                while !operators.is_empty() && operators.last().unwrap().optype != OpType::LP {
+                // corner case: avoid *)? ?)? +)? to become *? ?? +?, these are different ops
+                if let Some(next) = tokens.peek() {
+                    if let Some(top) = operators.last() {
+                        if let Some(update) = avoid_unwanted_nongreedy(*top, *next) {
+                            *operators.last_mut().unwrap() = update;
+                            tokens.next(); // skip the next ?
+                        }
+                    }
+                }
+                // normal case
+                while !operators.is_empty() && operators.last().unwrap() != &OpType::LP {
                     combine_nodes(&mut operands, &mut operators);
                 }
                 operators.pop();
             }
             // id: push to stack
-            OpType::ID => {
+            OpType::Id(_) => {
                 let leaf = Tree::new_leaf(operator);
                 operands.push(leaf);
             }
@@ -199,26 +222,44 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
 
 /// Complementary to the function gen_precedence_tree, combines two nodes with the last operator
 /// in the stack.
-fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec<RegexOp<'a>>) {
+fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec<OpType<'a>>) {
     let operator = operators.pop().unwrap();
-    let children = if operator.optype == OpType::OR || operator.optype == OpType::AND {
+    let children = if operator.required_operands() == 2 {
         //binary operator
         let right = operands.pop().unwrap();
         let left = operands.pop().unwrap();
         vec![left, right]
     } else {
         // unary operator
+        debug_assert!(operator.required_operands() == 1);
         vec![operands.pop().unwrap()]
     };
     let node = Tree::new_node(operator, children);
     operands.push(node);
 }
 
+/// Used in the gen_precedence_tree function.
+/// If last is */?/+ next is ? and current is ), the parenthesis removal will introduce an unwanted
+/// non-greedy operation. This function simplifies the `last` and `next` operators so the meaning
+/// is the intended one
+fn avoid_unwanted_nongreedy<'a, 'b>(last: OpType<'a>, next: OpType<'b>) -> Option<OpType<'a>> {
+    if next == OpType::QM {
+        match last {
+            OpType::KLEENE => Some(last),
+            OpType::QM => Some(last),
+            OpType::PL => Some(OpType::KLEENE),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 /// Transforms a precedence parse tree in a precedence parse tree where the groups like `[a-z]`
 /// are expanded in `a | b | c ... | y | z`
 fn expand_literals(node: PrecedenceTree) -> Tree<ExLiteral<char>> {
-    match node.value.optype {
-        OpType::ID => expand_literal_node(node.value.value),
+    match node.value {
+        OpType::Id(lit) => expand_literal_node(lit),
         n => {
             let children = node.into_children().map(expand_literals).collect();
             Tree::new_node(ExLiteral::Operation(n), children)
@@ -339,69 +380,30 @@ fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> c
 }
 
 /// Transforms a regexp in a sequence of operands or operators.
-fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
-    let mut tokenz = Vec::<RegexOp>::new();
+fn regex_to_operands(regex: &str) -> Vec<OpType> {
+    let mut tokenz = Vec::<OpType>::new();
     let mut iter = regex.chars().peekable();
     let mut index = 0;
     while let Some(char) = iter.next() {
-        let tp;
-        let val;
-        let priority;
-        match char {
-            '*' => {
-                tp = OpType::KLEENE;
-                val = &regex[index..index + 1];
-                priority = 3;
-            }
-            '|' => {
-                tp = OpType::OR;
-                val = &regex[index..index + 1];
-                priority = 1;
-            }
-            '?' => {
-                tp = OpType::QM;
-                val = &regex[index..index + 1];
-                priority = 3;
-            }
-            '+' => {
-                tp = OpType::PL;
-                val = &regex[index..index + 1];
-                priority = 3;
-            }
-            '~' => {
-                tp = OpType::NOT;
-                val = &regex[index..index + 1];
-                priority = 4;
-            }
-            '(' => {
-                tp = OpType::LP;
-                val = &regex[index..index + 1];
-                priority = 5;
-            }
-            ')' => {
-                tp = OpType::RP;
-                val = &regex[index..index + 1];
-                priority = 5;
-            }
+        let op = match char {
+            '*' => OpType::KLEENE,
+            '|' => OpType::OR,
+            '?' => OpType::QM,
+            '+' => OpType::PL,
+            '~' => OpType::NOT,
+            '(' => OpType::LP,
+            ')' => OpType::RP,
             _ => {
-                tp = OpType::ID;
-                priority = 0;
-                val = read_token(&regex[index..], char, &mut iter);
+                let val = read_token(&regex[index..], char, &mut iter);
+                index += val.len() - 1;
+                OpType::Id(val)
             }
         };
-        if !tokenz.is_empty() && implicit_concatenation(&tokenz.last().unwrap().optype, &tp) {
-            tokenz.push(RegexOp {
-                optype: OpType::AND,
-                value: "&",
-                priority: 2,
-            })
+        if !tokenz.is_empty() && implicit_concatenation(tokenz.last().unwrap(), &op) {
+            tokenz.push(OpType::AND);
         }
-        tokenz.push(RegexOp {
-            optype: tp,
-            value: val,
-            priority,
-        });
-        index += val.len();
+        index += 1;
+        tokenz.push(op);
     }
     tokenz
 }
@@ -458,8 +460,8 @@ fn read_token<'a>(input: &'a str, first: char, it: &mut Peekable<Chars>) -> &'a 
 fn implicit_concatenation(last: &OpType, current: &OpType) -> bool {
     let last_is_kleene_family =
         *last == OpType::KLEENE || *last == OpType::PL || *last == OpType::QM;
-    let not_lp_id = *current == OpType::LP || *current == OpType::ID || *current == OpType::NOT;
-    (*last == OpType::ID || *last == OpType::RP || last_is_kleene_family) && not_lp_id
+    let not_lp_id = *current == OpType::LP || current.is_id() || *current == OpType::NOT;
+    (last.is_id() || *last == OpType::RP || last_is_kleene_family) && not_lp_id
 }
 
 /// Consumes the input (accounting for escaped chars) until the `until` character is found.
@@ -636,12 +638,11 @@ fn solve_negated(node: &Tree<ExLiteral<char>>, symtable: &SymbolTable) -> BTreeS
 #[cfg(test)]
 mod tests {
     use crate::lexer::grammar_conversion::{
-        alphabet_from_node, canonicalise, expand_literals, gen_precedence_tree, OpType, RegexOp,
+        alphabet_from_node, canonicalise, expand_literals, gen_precedence_tree, is_nongreedy,
+        OpType,
     };
     use crate::lexer::{SymbolTable, Tree};
     use std::fmt::Write;
-
-    use super::is_nongreedy;
 
     /// encoded representation of a tree in form of string
     /// otherwise the formatted version takes a lot of space (macros too, given the tree generics)
@@ -761,15 +762,10 @@ mod tests {
     #[test]
     fn identify_literal_empty() {
         let char_literal = "''";
-        let mut tree = Tree {
-            value: RegexOp {
-                optype: OpType::ID,
-                value: "",
-                priority: 0,
-            },
+        let tree = Tree {
+            value: OpType::Id(char_literal),
             children: vec![],
         };
-        tree.value.value = char_literal;
         let expanded_tree = expand_literals(tree);
         let expected = "VALUE([])";
         assert_eq!(as_str(&expanded_tree), expected);
@@ -778,15 +774,10 @@ mod tests {
     #[test]
     fn identify_literal_basic_concat() {
         let char_literal = "'aaa'";
-        let mut tree = Tree {
-            value: RegexOp {
-                optype: OpType::ID,
-                value: "",
-                priority: 0,
-            },
+        let tree = Tree {
+            value: OpType::Id(char_literal),
             children: vec![],
         };
-        tree.value.value = char_literal;
         let expanded_tree = expand_literals(tree);
         let expected = "OP(&)[VALUE([a]),OP(&)[VALUE([a]),VALUE([a])]]";
         assert_eq!(as_str(&expanded_tree), expected);
@@ -795,15 +786,10 @@ mod tests {
     #[test]
     fn identify_literal_escaped() {
         let char_literal = "'a\\x24'";
-        let mut tree = Tree {
-            value: RegexOp {
-                optype: OpType::ID,
-                value: "",
-                priority: 0,
-            },
+        let tree = Tree {
+            value: OpType::Id(char_literal),
             children: vec![],
         };
-        tree.value.value = char_literal;
         let expanded_tree = expand_literals(tree);
         let expected = "OP(&)[VALUE([a]),VALUE([$])]";
         assert_eq!(as_str(&expanded_tree), expected);
@@ -812,15 +798,10 @@ mod tests {
     #[test]
     fn identify_literal_unicode_seq() {
         let unicode_seq = "'დოლორ'";
-        let mut tree = Tree {
-            value: RegexOp {
-                optype: OpType::ID,
-                value: "",
-                priority: 0,
-            },
+        let tree = Tree {
+            value: OpType::Id(unicode_seq),
             children: vec![],
         };
-        tree.value.value = unicode_seq;
         let expanded_tree = expand_literals(tree);
         let expected =
             "OP(&)[VALUE([დ]),OP(&)[VALUE([ო]),OP(&)[VALUE([ლ]),OP(&)[VALUE([ო]),VALUE([რ])]]]]";
@@ -830,15 +811,10 @@ mod tests {
     #[test]
     fn identify_literal_escaped_range() {
         let square = "[\\-a-d\\]]";
-        let mut tree = Tree {
-            value: RegexOp {
-                optype: OpType::ID,
-                value: "",
-                priority: 0,
-            },
+        let tree = Tree {
+            value: OpType::Id(square),
             children: vec![],
         };
-        tree.value.value = square;
         let expanded_tree = expand_literals(tree);
         let expected = "VALUE([-]abcd])";
         assert_eq!(as_str(&expanded_tree), expected);
@@ -847,15 +823,10 @@ mod tests {
     #[test]
     fn identify_literal_unicode_range() {
         let range = "'\\U16C3'..'\\u16C5'";
-        let mut tree = Tree {
-            value: RegexOp {
-                optype: OpType::ID,
-                value: "",
-                priority: 0,
-            },
+        let tree = Tree {
+            value: OpType::Id(range),
             children: vec![],
         };
-        tree.value.value = range;
         let expanded_tree = expand_literals(tree);
         let expected = "VALUE([ᛃᛄᛅ])";
         assert_eq!(as_str(&expanded_tree), expected);
@@ -972,6 +943,47 @@ mod tests {
         let expected = "&[&['a',?[*[~['a']]]],'a']";
         assert_eq!(as_str(&prec_tree), expected);
     }
+
+    #[test]
+    fn regex_simplify_kleene_qm() {
+        let expr = "(('a')*)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*['a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_not_kleene_qm() {
+        let expr = "(~('a')*)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*[~['a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_qm_qm() {
+        let expr = "(('a')?)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "?['a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_plus_qm() {
+        let expr = "(('a')+)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*['a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_dont_simplify_nongreedy() {
+        let expr = "('a')+?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "?[+['a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
     #[test]
     fn regression_disappearing_literal() {
         let expr = "'a'*~'b'*";
