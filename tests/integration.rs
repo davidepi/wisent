@@ -22,7 +22,7 @@ fn match_longest() -> Result<(), ParseError> {
     let grammar = Grammar::parse_string(g4)?;
     let dfa = Dfa::new(&grammar);
     let input = "34.";
-    let tokens = DfaSimulator::new(dfa).tokenize(input.chars());
+    let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0].production, 2);
     Ok(())
@@ -35,7 +35,7 @@ fn match_first() -> Result<(), ParseError> {
     let grammar = Grammar::parse_string(g4)?;
     let dfa = Dfa::new(&grammar);
     let input = "/** foo */";
-    let tokens = DfaSimulator::new(dfa).tokenize(input.chars());
+    let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0].production, 0);
     Ok(())
@@ -49,7 +49,7 @@ fn match_nongreedy() -> Result<(), ParseError> {
     let grammar = Grammar::parse_string(g4)?;
     let dfa = Dfa::new(&grammar);
     let input = "<<foo>>>>";
-    let tokens = DfaSimulator::new(dfa).tokenize(input.chars());
+    let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
     assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0].production, 0);
     assert_eq!(tokens[1].production, 1);

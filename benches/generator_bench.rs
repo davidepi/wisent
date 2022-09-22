@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::{BatchSize, Criterion};
+use criterion::Criterion;
 use wisent::grammar::Grammar;
 use wisent::lexer::{Dfa, DfaSimulator};
 
@@ -23,11 +23,7 @@ fn tokenize_c_file(c: &mut Criterion) {
     let g = Grammar::parse_string(C_GRAMMAR).unwrap();
     let dfa = Dfa::new(&g);
     c.bench_function("c simulation [tokenizing]", |b| {
-        b.iter_batched(
-            || DfaSimulator::new(dfa.clone()),
-            |simulator| simulator.tokenize(C_EXAMPLE.chars()),
-            BatchSize::SmallInput,
-        )
+        b.iter(|| DfaSimulator::new(&dfa).tokenize(C_EXAMPLE.chars()))
     });
 }
 
