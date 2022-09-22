@@ -34,10 +34,13 @@ struct BufferIndexer {
 pub struct DfaSimulator<'a> {
     /// Buffer and its len (capacity is BUFFER_SIZE, len is the second value in the tuple)
     buffers: [Vec<u32>; 2],
+    /// true if the forward_pos backtracked to a different buffer
+    backtracked: bool,
     /// Position of the next lexeme to read and the buffer where it is
     lexeme_pos: BufferIndexer,
     /// Position of the next lookahead character to read and the buffer where it is
     forward_pos: BufferIndexer,
+    /// DFA containing the moves and alphabet
     dfa: &'a Dfa,
 }
 
@@ -49,6 +52,7 @@ impl<'a> DfaSimulator<'a> {
                 Vec::with_capacity(BUFFER_SIZE),
                 Vec::with_capacity(BUFFER_SIZE),
             ],
+            backtracked: false,
             lexeme_pos: Default::default(),
             forward_pos: Default::default(),
             dfa,
@@ -106,6 +110,14 @@ impl<'a> DfaSimulator<'a> {
                     end: last_end,
                 });
                 state = self.dfa.start();
+                if self.forward_pos.buffer_index != last_valid_state.buffer_index {
+                    // the forward pos already loaded the next buffer, but is going back to
+                    // previous one. The flag is used to avoid reloading another buffer again.
+                    self.backtracked = true;
+                }
+                //FIXME: in case a lexeme ends exactly on the last cell of a buffer,
+                //last_valid_state will point to the next cell (that does not exist).
+                //next_char will then trigger a buffer extension instead of swap.
                 self.lexeme_pos = last_valid_state;
                 self.forward_pos = last_valid_state;
                 location_start = last_end;
@@ -123,6 +135,7 @@ impl<'a> DfaSimulator<'a> {
     fn init_tokenize(&mut self, input: &mut Chars) {
         self.buffers[0].clear();
         self.buffers[1].clear();
+        self.backtracked = false;
         self.lexeme_pos = Default::default();
         self.forward_pos = Default::default();
         let chars_it = input
@@ -141,30 +154,35 @@ impl<'a> DfaSimulator<'a> {
     fn next_char(&mut self, input: &mut Chars) -> Option<(u32, u8)> {
         let mut current_buffer = &mut self.buffers[self.forward_pos.buffer_index as usize];
         if self.forward_pos.index == current_buffer.len() {
-            let mut chars_it = input
-                .take(BUFFER_SIZE)
-                .map(|c| encode_char_len(c, self.dfa.symbol_table()))
-                .peekable();
-            // return if EOF
-            chars_it.peek()?;
-            // current buffer full: swap buffers and refill the other one
-            let forward_next = if self.lexeme_pos.buffer_index == self.forward_pos.buffer_index {
-                let next_buffer = (self.forward_pos.buffer_index + 1) % self.buffers.len() as u8;
-                self.buffers[next_buffer as usize].clear();
-                BufferIndexer {
-                    index: 0,
-                    buffer_index: next_buffer,
-                }
-            } else {
-                // can't swap buffers as the current token is larger than an entire buffer.
-                // extend the current buffer (this is not good for speed, as the
-                // buffer should be doubled, but this should not happen often)
-                self.forward_pos
+            let mut next_buffer = (self.forward_pos.buffer_index + 1) % self.buffers.len() as u8;
+            let mut forward_next = BufferIndexer {
+                index: 0,
+                buffer_index: next_buffer,
             };
+            // backtracked is true if forward pos returned back to the previous buffer after
+            // accepting a state. In that case the buffer does NOT need to be refilled, but the
+            // buffer index in forward_pos needs to be changed.
+            if !self.backtracked {
+                let mut chars_it = input
+                    .take(BUFFER_SIZE)
+                    .map(|c| encode_char_len(c, self.dfa.symbol_table()))
+                    .peekable();
+                // return None if EOF
+                chars_it.peek()?;
+                if next_buffer != self.lexeme_pos.buffer_index {
+                    //  swap buffers and refill the other one
+                    self.buffers[next_buffer as usize].clear();
+                } else {
+                    // can't swap buffers as the current token is larger than an entire buffer.
+                    // extend the current buffer and continue with current forward_pos.
+                    forward_next = self.forward_pos;
+                    next_buffer = self.forward_pos.buffer_index;
+                };
+                self.buffers[next_buffer as usize].extend(chars_it);
+            }
+            self.backtracked = false;
             self.forward_pos = forward_next;
-            let next_buffer = &mut self.buffers[self.forward_pos.buffer_index as usize];
-            next_buffer.extend(chars_it);
-            current_buffer = next_buffer;
+            current_buffer = &mut self.buffers[next_buffer as usize];
         }
         // current buffer not full (or just refilled), just fetch the next character
         let char = current_buffer[self.forward_pos.index as usize];
@@ -189,17 +207,18 @@ fn decode_char_len(v: u32) -> (u32, u8) {
 
 #[cfg(test)]
 mod tests {
-    use super::DfaSimulator;
     use crate::grammar::Grammar;
     use crate::lexer::simulator::BUFFER_SIZE;
-    use crate::lexer::Dfa;
+    use crate::lexer::{Dfa, DfaSimulator};
+    use std::iter::repeat;
 
     const UTF8_INPUT: &str = "Příliš žluťoučký kůň úpěl ďábelské ódy";
 
     #[test]
-    fn simulator_input_small() {
-        // input smaller than BUFFER_SIZE
-        let grammar = Grammar::new(&["(~[0-9])+", "' '*"], &[], &["NO_NUMBER", "SPACE"]);
+    fn simulator_next_char() {
+        // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the tokenize
+        // function
+        let grammar = Grammar::new(&["(~[ ])+", "' '+"], &[], &["NOT_SPACE", "SPACE"]);
         let dfa = Dfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
         let mut simulator = DfaSimulator::new(&dfa);
@@ -213,7 +232,7 @@ mod tests {
     #[test]
     fn simulator_multiple_eof() {
         // after next_char returns eof once, additional calls return always eof
-        let grammar = Grammar::new(&["(~[0-9])+", "' '*"], &[], &["NO_NUMBER", "SPACE"]);
+        let grammar = Grammar::new(&["(~[ ])+", "' '+"], &[], &["NOT_SPACE", "SPACE"]);
         let dfa = Dfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
         let mut simulator = DfaSimulator::new(&dfa);
@@ -225,48 +244,8 @@ mod tests {
     }
 
     #[test]
-    fn simulator_input_big() {
-        // input bigger than BUFFER_SIZE to allow a single buffer swap
-        // bigger inputs requires moving also the lexeme_pos
-        let grammar = Grammar::new(&["(~[0-9])+", "' '*"], &[], &["NO_NUMBER", "SPACE"]);
-        let dfa = Dfa::new(&grammar);
-        let mut input = String::new();
-        while input.chars().count() < BUFFER_SIZE as usize {
-            input.push_str(UTF8_INPUT);
-        }
-        let mut reader = input.chars();
-        let mut simulator = DfaSimulator::new(&dfa);
-        simulator.init_tokenize(&mut reader);
-        for _ in 0..input.chars().count() {
-            assert!(simulator.next_char(&mut reader).is_some());
-        }
-        assert!(simulator.next_char(&mut reader).is_none());
-    }
-
-    #[test]
-    fn simulator_lexeme_bigger_than_two_buffers() {
-        let piece = UTF8_INPUT
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>();
-        let mut input = String::new();
-        while input.chars().count() < 2 * BUFFER_SIZE as usize {
-            input.push_str(&piece);
-        }
-        let mut reader = input.chars();
-        let grammar = Grammar::new(&["(~' ')+"], &[], &["NOT_SPACE"]);
-        let dfa = Dfa::new(&grammar);
-        let mut simulator = DfaSimulator::new(&dfa);
-        simulator.init_tokenize(&mut reader);
-        for _ in 0..input.chars().count() {
-            assert!(simulator.next_char(&mut reader).is_some());
-        }
-        assert!(simulator.next_char(&mut reader).is_none());
-    }
-
-    #[test]
-    fn simulator_tokenize() {
-        let grammar = Grammar::new(&["(~[0-9 ])+", "' '+"], &[], &["NO_NUMBER", "SPACE"]);
+    fn simulator_tokenize_small() {
+        let grammar = Grammar::new(&["(~[ ])+", "' '+"], &[], &["NOT_SPACE", "SPACE"]);
         let dfa = Dfa::new(&grammar);
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
@@ -278,6 +257,37 @@ mod tests {
             assert_eq!(token.start, expected_start[i]);
             assert_eq!(token.end, expected_end[i]);
         }
+    }
+
+    #[test]
+    fn simulator_tokenize_big() {
+        // input bigger than BUFFER_SIZE to allow a single buffer swap
+        let grammar = Grammar::new(&["(~[ ])+", "' '+"], &[], &["NOT_SPACE", "SPACE"]);
+        let dfa = Dfa::new(&grammar);
+        let mut input = String::new();
+        let mut prods = 1;
+        while input.chars().count() < BUFFER_SIZE as usize {
+            input.push_str(UTF8_INPUT);
+            prods += 10;
+        }
+        let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
+        assert_eq!(tokens.len(), prods);
+    }
+
+    #[test]
+    fn simulator_single_lexeme_bigger_than_buffer() {
+        let piece = UTF8_INPUT
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+        let mut input = String::new();
+        while input.chars().count() < 2 * BUFFER_SIZE as usize {
+            input.push_str(&piece);
+        }
+        let grammar = Grammar::new(&["(~' ')+"], &[], &["NOT_SPACE"]);
+        let dfa = Dfa::new(&grammar);
+        let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
+        assert_eq!(tokens.len(), 1);
     }
 
     #[test]
@@ -351,5 +361,23 @@ mod tests {
         let input = "/* test comment */ \"/*this is not a comment*/\"";
         let tokens = simulator.tokenize(input.chars());
         assert_eq!(tokens.len(), 3, "The simulator greedily matched everything");
+    }
+
+    #[test]
+    fn simulator_backtrack_refresh() {
+        // asserts that after backtracking the buffer 2 does not get refreshed again
+        let grammar = Grammar::new(
+            &["'a'*", "'a'*'bbbbbb'", "'bbb'('c'*)"],
+            &[],
+            &["A", "AB", "BC"],
+        );
+        let dfa = Dfa::new(&grammar);
+        let input = repeat('a')
+            .take(BUFFER_SIZE - 3)
+            .chain(repeat('b').take(3))
+            .chain(repeat('c').take(50))
+            .collect::<String>();
+        let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
+        assert_eq!(tokens.len(), 2);
     }
 }
