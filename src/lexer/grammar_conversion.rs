@@ -154,8 +154,8 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
 
 /// Creates a parse tree with correct precedence given the input regex.
 ///
-/// This works similarly to the conversion to Reverse-Polish Notation: two stacks where to push
-/// or pop (operators and operands) based on the encountered operators.
+/// This is essentially the shunting yard algorithm.
+/// All non-unary operators are left associative.
 fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
     let mut operands = Vec::new();
     let mut operators: Vec<RegexOp> = Vec::new();
@@ -164,24 +164,13 @@ fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
     // for each in the sequence do the following actions
     for operator in tokens {
         match operator.optype {
-            //operators after operand with highest priority -> solve immediately
-            //unless previous one was OpType::NOT
-            OpType::KLEENE | OpType::QM | OpType::PL => {
-                if let Some(top) = operators.last() {
-                    if top.optype == OpType::NOT {
-                        combine_nodes(&mut operands, &mut operators);
-                    }
-                }
-                operators.push(operator);
-                combine_nodes(&mut operands, &mut operators);
-            }
-            //operators before operand solve if precedent has higher priority and is not OpType::LP
-            //then push current
-            OpType::NOT | OpType::OR | OpType::AND => {
-                if let Some(top) = operators.last() {
-                    if top.priority > operator.priority && top.optype != OpType::LP {
-                        combine_nodes(&mut operands, &mut operators);
-                    }
+            //operators: solve if precedent has higher priority and is not OpType::LP then push cur
+            OpType::NOT | OpType::OR | OpType::AND | OpType::KLEENE | OpType::QM | OpType::PL => {
+                while !operators.is_empty()
+                    && operators.last().unwrap().optype != OpType::LP
+                    && operators.last().unwrap().priority >= operator.priority
+                {
+                    combine_nodes(&mut operands, &mut operators);
                 }
                 operators.push(operator);
             }
@@ -362,7 +351,7 @@ fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
             '*' => {
                 tp = OpType::KLEENE;
                 val = &regex[index..index + 1];
-                priority = 4;
+                priority = 3;
             }
             '|' => {
                 tp = OpType::OR;
@@ -372,17 +361,17 @@ fn regex_to_operands(regex: &str) -> Vec<RegexOp> {
             '?' => {
                 tp = OpType::QM;
                 val = &regex[index..index + 1];
-                priority = 4;
+                priority = 3;
             }
             '+' => {
                 tp = OpType::PL;
                 val = &regex[index..index + 1];
-                priority = 4;
+                priority = 3;
             }
             '~' => {
                 tp = OpType::NOT;
                 val = &regex[index..index + 1];
-                priority = 3;
+                priority = 4;
             }
             '(' => {
                 tp = OpType::LP;
@@ -924,7 +913,7 @@ mod tests {
     fn regex_correct_precedence_klenee_par() {
         let expr = "'a'*('b'|'c')*'d'";
         let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[*['a'],&[*[|['b','c']],'d']]";
+        let expected = "&[&[*['a'],*[|['b','c']]],'d']";
         assert_eq!(as_str(&prec_tree), expected);
     }
 
@@ -932,7 +921,7 @@ mod tests {
     fn regex_correct_precedence_negation_par() {
         let expr = "('a')~'b'('c')('d')'e'";
         let prec_tree = gen_precedence_tree(expr);
-        let expected = "&['a',&[~['b'],&['c',&['d','e']]]]";
+        let expected = "&[&[&[&['a',~['b']],'c'],'d'],'e']";
         assert_eq!(as_str(&prec_tree), expected);
     }
 
@@ -940,7 +929,7 @@ mod tests {
     fn regex_correct_precedence_negation() {
         let expr = "'a'~'b''c'('d')";
         let prec_tree = gen_precedence_tree(expr);
-        let expected = "&['a',&[~['b'],&['c','d']]]";
+        let expected = "&[&[&['a',~['b']],'c'],'d']";
         assert_eq!(as_str(&prec_tree), expected);
     }
 
@@ -948,7 +937,7 @@ mod tests {
     fn regex_correct_precedence_qm_plus_klenee_par() {
         let expr = "'a'?('b'*|'c'*)+'d'";
         let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[?['a'],&[+[|[*['b'],*['c']]],'d']]";
+        let expected = "&[&[?['a'],+[|[*['b'],*['c']]]],'d']";
         assert_eq!(as_str(&prec_tree), expected);
     }
 
@@ -972,7 +961,7 @@ mod tests {
     fn regex_precedence_literal_negation_literal() {
         let expr = "'a'~'a'*'a'";
         let prec_tree = gen_precedence_tree(expr);
-        let expected = "&['a',&[*[~['a']],'a']]";
+        let expected = "&[&['a',*[~['a']]],'a']";
         assert_eq!(as_str(&prec_tree), expected);
     }
 
@@ -980,7 +969,7 @@ mod tests {
     fn regex_nongreedy_negation() {
         let expr = "'a'~'a'*?'a'";
         let prec_tree = gen_precedence_tree(expr);
-        let expected = "&['a',&[?[*[~['a']]],'a']]";
+        let expected = "&[&['a',?[*[~['a']]]],'a']";
         assert_eq!(as_str(&prec_tree), expected);
     }
     #[test]
