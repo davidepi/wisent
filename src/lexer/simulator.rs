@@ -205,12 +205,56 @@ fn decode_char_len(v: u32) -> (u32, u8) {
     (v & 0x3EFFFFFF, ((v & 0xC0000000) >> 30) as u8 + 1)
 }
 
+/// Error representing a partially complete tokenization. If this error is produced, the lexer
+/// didn't reach EOF, but some tokens may have been recognized.
+#[derive(Debug, Clone)]
+pub struct IncompleteParse {
+    /// The list of partially recognized tokens.
+    pub partial: Vec<Token>,
+}
+
+/// Tokenize a string with a given DFA.
+///
+/// This utility function is a wrapper that creates a [DfaSimulator], calls its
+/// [tokenize](DfaSimulator::tokenize) method and checks whether the simulator reached EOF or not.
+///
+/// If EOF was not reached, it is still possible to find the matched tokens inside the Error.
+/// # Examples
+/// Tokenize string:
+/// ```
+/// # use wisent::grammar::Grammar;
+/// # use wisent::lexer::{Dfa, DfaSimulator, tokenize};
+/// let grammar = Grammar::new(&["([0-9])+", "([a-z])+"], &[], &["NUMBER", "WORD"]);
+/// let dfa = Dfa::new(&grammar);
+/// let input = "abc123";
+/// let result = tokenize(&dfa, &input);
+/// assert!(result.is_ok());
+/// ```
+pub fn tokenize(dfa: &Dfa, input: &str) -> Result<Vec<Token>, IncompleteParse> {
+    if !input.is_empty() {
+        let tokens = DfaSimulator::new(dfa).tokenize(input.chars());
+        if let Some(last) = tokens.last() {
+            if last.end == input.len() {
+                Ok(tokens)
+            } else {
+                Err(IncompleteParse { partial: tokens })
+            }
+        } else {
+            Err(IncompleteParse { partial: tokens })
+        }
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::grammar::Grammar;
     use crate::lexer::simulator::BUFFER_SIZE;
     use crate::lexer::{Dfa, DfaSimulator};
     use std::iter::repeat;
+
+    use super::tokenize;
 
     const UTF8_INPUT: &str = "Příliš žluťoučký kůň úpěl ďábelské ódy";
 
@@ -379,5 +423,43 @@ mod tests {
             .collect::<String>();
         let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
         assert_eq!(tokens.len(), 2);
+    }
+
+    #[test]
+    fn tokenize_empty() {
+        let grammar = Grammar::new(&["'a'", "'b'"], &[], &["A", "B"]);
+        let dfa = Dfa::new(&grammar);
+        let input = "";
+        let res = tokenize(&dfa, input);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn tokenize_full() {
+        let grammar = Grammar::new(&["'a'", "'b'"], &[], &["A", "B"]);
+        let dfa = Dfa::new(&grammar);
+        let input = "aaabb";
+        let res = tokenize(&dfa, input).unwrap();
+        assert_eq!(res.len(), 5);
+    }
+
+    #[test]
+    fn tokenize_err_no_partial() {
+        let grammar = Grammar::new(&["'a'", "'b'"], &[], &["A", "B"]);
+        let dfa = Dfa::new(&grammar);
+        let input = "d";
+        let res = tokenize(&dfa, input);
+        assert!(res.is_err());
+        assert!(res.err().unwrap().partial.is_empty());
+    }
+
+    #[test]
+    fn tokenize_err_some_partial() {
+        let grammar = Grammar::new(&["'a'", "'b'"], &[], &["A", "B"]);
+        let dfa = Dfa::new(&grammar);
+        let input = "aad";
+        let res = tokenize(&dfa, input);
+        assert!(res.is_err());
+        assert_eq!(res.err().unwrap().partial.len(), 2);
     }
 }

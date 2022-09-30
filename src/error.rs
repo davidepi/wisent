@@ -1,3 +1,5 @@
+use crate::lexer::{IncompleteParse, Token};
+
 /// Error wrapping all the possible kind of errors encountered during parsing.
 ///
 /// The possible errors can be:
@@ -11,12 +13,18 @@ pub enum ParseError {
     IOError(std::io::Error),
     SyntaxError { message: String },
     DeserializeError { message: String },
-    LexerSimulationError { message: String },
+    IncompleteParseError { partial: Vec<Token> },
 }
 
 impl From<std::io::Error> for ParseError {
     fn from(e: std::io::Error) -> Self {
         ParseError::IOError(e)
+    }
+}
+
+impl From<IncompleteParse> for ParseError {
+    fn from(e: IncompleteParse) -> Self {
+        ParseError::IncompleteParseError { partial: e.partial }
     }
 }
 
@@ -30,8 +38,8 @@ impl std::fmt::Display for ParseError {
             ParseError::DeserializeError { message } => {
                 write!(buffer, "DeserializeError: {}", message)
             }
-            ParseError::LexerSimulationError { message } => {
-                write!(buffer, "LexerSimulationError: {}", message)
+            ParseError::IncompleteParseError { .. } => {
+                write!(buffer, "IncompleteParseError: EOF not reached")
             }
         }
     }
