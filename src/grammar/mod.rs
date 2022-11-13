@@ -28,43 +28,39 @@ impl Grammar {
     /// Constructs a new Grammar with the given terminals and non terminals.
     ///
     /// No checks will be performed on the productions naming and no recursion will be resolved.
-    /// This method is used mostly for debug purposes, and `parse_grammar()` or `parse_string()`
+    /// This method is used mostly for debug purposes, and [`parse_grammar()`] or
+    /// [`parse_string()`]
     /// should be used.
     ///
     /// The following arguments are expected:
     /// * `terminals` - A slice of strings representing the terminal productions' bodies.
+    ///                 The tuple represents (*<terminal name>* | *<terminal>*)
     /// * `non_terminals` - A slice of strings representing the non_terminal productions' bodies.
-    /// * `names` - A slice of strings representing the names of every terminal and non terminal in
+    ///                     The tuple represents (*<non_terminal name>* | *<non_terminal>*)
     /// order. First all the terminals are read, then the non-terminals.
     /// # Examples
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// let terminals = vec!["[a-z]", "[A-Z]"];
+    /// let terminals = vec![("LETTER_LOWERCASE", "[a-z]"), ("LETTER_UPPERCASE", "[A-Z]")];
     /// let non_terminals = vec![
-    ///     "LETTER_UPPERCASE | LETTER_LOWERCASE",
-    ///     "word letter | letter",
+    ///     ("letter", "LETTER_UPPERCASE | LETTER_LOWERCASE"),
+    ///     ("word", "word letter | letter"),
     /// ];
-    /// let names = vec!["LETTER_LOWERCASE", "LETTER_UPPERCASE", "letter", "word"];
-    /// let grammar = Grammar::new(&terminals, &non_terminals, &names);
+    /// let grammar = Grammar::new(&terminals, &non_terminals);
     /// ```
-    pub fn new(terminals: &[&str], non_terminals: &[&str], names: &[&str]) -> Grammar {
-        let terms = terminals.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        let nterms = non_terminals
+    pub fn new(terminals: &[(&str, &str)], non_terminals: &[(&str, &str)]) -> Grammar {
+        let (names_terminals, terminals): (Vec<String>, Vec<String>) = terminals
             .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<_>>();
-        let names_terminals = names[..terminals.len()]
+            .map(|(x, y)| (x.to_string(), y.to_string()))
+            .unzip();
+        let (names_non_terminals, non_terminals): (Vec<String>, Vec<String>) = non_terminals
             .iter()
-            .map(|n| n.to_string())
-            .collect();
-        let names_non_terminals = names[terminals.len()..]
-            .iter()
-            .map(|n| n.to_string())
-            .collect();
+            .map(|(x, y)| (x.to_string(), y.to_string()))
+            .unzip();
         Grammar {
-            terminals: terms,
-            non_terminals: nterms,
+            terminals,
+            non_terminals,
             actions: Vec::new(),
             names_terminals,
             names_non_terminals,
@@ -134,11 +130,7 @@ impl Grammar {
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// let grammar = Grammar::new(
-    ///     Vec::new().as_slice(),
-    ///     Vec::new().as_slice(),
-    ///     Vec::new().as_slice(),
-    /// );
+    /// let grammar = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
     /// assert!(grammar.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {

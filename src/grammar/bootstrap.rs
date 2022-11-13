@@ -669,7 +669,6 @@ mod tests {
     use std::collections::BTreeSet;
 
     const COMMENT_RICH_GRAMMAR: &str = include_str!("../../resources/comment_rich_grammar.txt");
-    const C_GRAMMAR: &str = include_str!("../../resources/c_grammar.txt");
     const FRAGMENTS_CASE_ERR: &str = include_str!("../../resources/fragments_case_err.txt");
     const FRAGMENTS_CONTAINS_NT: &str = include_str!("../../resources/fragments_contains_nt.txt");
     const FRAGMENTS_GRAMMAR: &str = include_str!("../../resources/fragments_grammar.txt");
@@ -718,76 +717,76 @@ mod tests {
     #[test]
     //Asserts the method len() returns the sum of terminal and non terminals
     fn grammar_len() {
-        let g = Grammar::new(
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-        );
+        let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert_eq!(g.len(), 0);
-        let terminals = vec!["[a-z]", "[A-Z]"];
-        let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
-        let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
-        let g = Grammar::new(&terminals, &non_terminals, &names);
+        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let non_terminals = vec![
+            ("letter", "LETTER_UP | LETTER_LO"),
+            ("word", "word letter | letter"),
+        ];
+        let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(g.len(), 4);
     }
 
     #[test]
     //Asserts the method len() returns the sum of terminal and non terminals
     fn grammar_len_term() {
-        let g = Grammar::new(
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-        );
+        let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert_eq!(g.len(), 0);
-        let terminals = vec!["[a-z]", "[A-Z]"];
-        let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
-        let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
-        let g = Grammar::new(&terminals, &non_terminals, &names);
+        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let non_terminals = vec![
+            ("letter", "LETTER_UP | LETTER_LO"),
+            ("word", "word letter | letter"),
+        ];
+        let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(g.len_term(), 2);
     }
 
     #[test]
     //Asserts the method len() returns the sum of terminal and non terminals
     fn grammar_len_nonterm() {
-        let g = Grammar::new(
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-        );
+        let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert_eq!(g.len(), 0);
-        let terminals = vec!["[a-z]", "[A-Z]"];
-        let non_terminals = vec!["LETTER_UP | LETTER_LO"];
-        let names = vec!["LETTER_LO", "LETTER_UP", "letter"];
-        let g = Grammar::new(&terminals, &non_terminals, &names);
+        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let non_terminals = vec![("letter", "LETTER_UP | LETTER_LO")];
+        let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(g.len_nonterm(), 1);
     }
 
     #[test]
     //Asserts the method is_empty() works as expected
     fn grammar_is_empty() {
-        let g = Grammar::new(
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-            Vec::new().as_slice(),
-        );
+        let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert!(g.is_empty());
-        let terminals = vec!["[a-z]", "[A-Z]"];
-        let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
-        let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
-        let g = Grammar::new(&terminals, &non_terminals, &names);
+        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let non_terminals = vec![
+            ("letter", "LETTER_UP | LETTER_LO"),
+            ("word", "word letter | letter"),
+        ];
+        let g = Grammar::new(&terminals, &non_terminals);
         assert!(!g.is_empty());
     }
 
     #[test]
     //Asserts order and production correctness in a hand-crafted grammar
     fn grammar_crafted() {
-        let terminals = vec!["[a-z]", "[A-Z]"];
-        let non_terminals = vec!["LETTER_UP | LETTER_LO", "word letter | letter"];
-        let names = vec!["LETTER_LO", "LETTER_UP", "letter", "word"];
-        let g = Grammar::new(&terminals, &non_terminals, &names);
-        assert_eq!(g.iter_term().collect::<Vec<_>>(), terminals);
-        assert_eq!(g.iter_nonterm().collect::<Vec<_>>(), non_terminals);
+        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let non_terminals = vec![
+            ("letter", "LETTER_UP | LETTER_LO"),
+            ("word", "word letter | letter"),
+        ];
+        let g = Grammar::new(&terminals, &non_terminals);
+        assert_eq!(
+            g.iter_term().collect::<Vec<_>>(),
+            terminals.into_iter().map(|(_, x)| x).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            g.iter_nonterm().collect::<Vec<_>>(),
+            non_terminals
+                .into_iter()
+                .map(|(_, x)| x)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

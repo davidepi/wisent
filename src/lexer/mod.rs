@@ -22,7 +22,7 @@ pub trait GraphvizDot {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::{Dfa, GraphvizDot};
-    /// let grammar = Grammar::new(&["'a'", "'b'*"], &[], &["LETTER_A", "LETTER_B"]);
+    /// let grammar = Grammar::new(&[("LETTER_A", "'a'"), ("LETTER_B", "'b'*")], &[]);
     /// let dfa = Dfa::new(&grammar);
     /// dfa.to_dot();
     /// ```
