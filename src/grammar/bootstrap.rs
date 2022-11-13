@@ -1048,19 +1048,6 @@ mod tests {
     }
 
     #[test]
-    //Asserts that the C ANTLR grammar is parsed correctly. This grammar is longer than the CSV one.
-    fn parse_c_grammar_correctly() {
-        match Grammar::parse_string(C_GRAMMAR) {
-            Ok(g) => assert_eq!(
-                g.len(),
-                205,
-                "Grammar was parsed correctly, but a different number of production was expected"
-            ),
-            Err(_) => panic!("C grammar failed to parse"),
-        }
-    }
-
-    #[test]
     //Asserts that cyclic rules like S->S; cannot be solved in the lexer
     fn lexer_rules_cycles_err() {
         match Grammar::parse_string(LEXER_CYCLIC) {
