@@ -1,5 +1,6 @@
 use crate::error::ParseError;
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -101,7 +102,7 @@ impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
 /// no other productions). So, each letter `'a'` in the input can be converted to a number,
 /// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively reducing
 /// the possible inputs to two single values instead of 26.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
     table: FxHashMap<char, u32>,

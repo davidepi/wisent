@@ -4,6 +4,7 @@ use crate::error::ParseError;
 use crate::grammar::Grammar;
 use maplit::btreeset;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
 
@@ -18,7 +19,7 @@ const NG_FLAG: u32 = 0x80000000;
 /// An example of DFA recognizing the language `a|b*` is the following:
 ///
 /// ![DFA Example](../../../../doc/images/dfa.svg)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dfa {
     /// Number of states.
     states_no: u32,
@@ -259,6 +260,13 @@ impl Dfa {
     pub fn non_greedy(&self, state: u32) -> bool {
         let prod = self.accept[state as usize];
         (prod & NG_FLAG) != 0
+    }
+
+    /// Returns a String representing a Rust implementation of this DFA.
+    ///
+    /// The implementation can then be loaded in this runtime using [`Dfa::load`]
+    pub fn to_code(&self) -> (String, String) {
+        todo!()
     }
 }
 
