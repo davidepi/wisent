@@ -66,7 +66,10 @@ impl Dfa {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::Dfa;
-    /// let grammar = Grammar::new(&[("LETTER_A", "'a'"), ("LETTER_B", "'b'*")], &[]);
+    /// let grammar = Grammar::new(
+    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
+    ///     &[],
+    /// );
     /// let dfa = Dfa::new(&grammar);
     /// ```
     pub fn new(grammar: &Grammar) -> Dfa {
@@ -181,7 +184,10 @@ impl Dfa {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::Dfa;
-    /// let grammar = Grammar::new(&[("LETTER_A", "'a'"), ("LETTER_B", "'b'*")], &[]);
+    /// let grammar = Grammar::new(
+    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
+    ///     &[],
+    /// );
     /// let dfa = Dfa::new(&grammar);
     ///
     /// assert_eq!(dfa.states(), 3);
@@ -211,7 +217,10 @@ impl Dfa {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::Dfa;
-    /// let grammar = Grammar::new(&[("LETTER_A", "'a'"), ("LETTER_B", "'b'")], &[]);
+    /// let grammar = Grammar::new(
+    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'").into()],
+    ///     &[],
+    /// );
     /// let dfa = Dfa::new(&grammar);
     /// let a_id = dfa.symbol_table().symbol_id('a');
     /// let next = dfa.moove(dfa.start(), a_id);
@@ -235,7 +244,10 @@ impl Dfa {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::Dfa;
-    /// let grammar = Grammar::new(&[("LETTER_A", "'a'"), ("LETTER_B", "'b'")], &[]);
+    /// let grammar = Grammar::new(
+    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'").into()],
+    ///     &[],
+    /// );
     /// let dfa = Dfa::new(&grammar);
     /// assert!(dfa.accepting(dfa.start()).is_none());
     /// let a_id = dfa.symbol_table().symbol_id('a');
@@ -260,13 +272,6 @@ impl Dfa {
     pub fn non_greedy(&self, state: u32) -> bool {
         let prod = self.accept[state as usize];
         (prod & NG_FLAG) != 0
-    }
-
-    /// Returns a String representing a Rust implementation of this DFA.
-    ///
-    /// The implementation can then be loaded in this runtime using [`Dfa::load`]
-    pub fn to_code(&self) -> (String, String) {
-        todo!()
     }
 }
 
@@ -763,7 +768,7 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
 mod tests {
     use super::{direct_construction, merge_regex_trees};
     use crate::error::ParseError;
-    use crate::grammar::Grammar;
+    use crate::grammar::{Grammar, Production};
     use crate::lexer::dfa::min_dfa;
     use crate::lexer::grammar_conversion::canonical_trees;
     use crate::lexer::Dfa;
@@ -772,12 +777,20 @@ mod tests {
     fn dfa_conflicts_resolution() {
         //they should be different: the second accept abb as a*b+ (appearing first in the productions)
         let grammar1 = Grammar::new(
-            &[("A", "'a'"), ("ABB", "'abb'"), ("ASTARBPLUS", "'a'*'b'+")],
+            &[
+                ("A", "'a'").into(),
+                ("ABB", "'abb'").into(),
+                ("ASTARBPLUS", "'a'*'b'+").into(),
+            ],
             &[],
         );
         let dfa1 = Dfa::new(&grammar1);
         let grammar2 = Grammar::new(
-            &[("ASTARBPLUS", "'a'*'b'+"), ("ABB", "'abb'"), ("A", "'a'")],
+            &[
+                ("ASTARBPLUS", "'a'*'b'+").into(),
+                ("ABB", "'abb'").into(),
+                ("A", "'a'").into(),
+            ],
             &[],
         );
         let dfa2 = Dfa::new(&grammar2);
@@ -789,7 +802,7 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_no_sink() {
-        let terminal = ("PROD1", "('a'|'b')*'abb'");
+        let terminal = Production::from(("PROD1", "('a'|'b')*'abb'"));
         let grammar = Grammar::new(&[terminal], &[]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
@@ -798,7 +811,10 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_sink_accepting() {
-        let grammar = Grammar::new(&[("DIGIT", "[0-9]"), ("NUMBER", "[0-9]+")], &[]);
+        let grammar = Grammar::new(
+            &[("DIGIT", "[0-9]").into(), ("NUMBER", "[0-9]+").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 3);
@@ -806,14 +822,20 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_set_productions() {
-        let grammar = Grammar::new(&[("LONG1", "[a-c]([b-d]?[e-g])*"), ("LONG2", "[fg]+")], &[]);
+        let grammar = Grammar::new(
+            &[
+                ("LONG1", "[a-c]([b-d]?[e-g])*").into(),
+                ("LONG2", "[fg]+").into(),
+            ],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         assert_eq!(dfa.states(), 4);
     }
 
     #[test]
     fn dfa_direct_construction_start_accepting() {
-        let grammar = Grammar::new(&[("ABSTAR", "'ab'*")], &[]);
+        let grammar = Grammar::new(&[("ABSTAR", "'ab'*").into()], &[]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 2);
@@ -821,7 +843,7 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_single_acc() {
-        let terminal = ("PROD1", "(('a'*'b')|'c')?'c'");
+        let terminal = Production::from(("PROD1", "(('a'*'b')|'c')?'c'"));
         let grammar = Grammar::new(&[terminal], &[]);
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
@@ -830,7 +852,10 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_multi_production() {
-        let grammar = Grammar::new(&[("LETTER_A", "'a'"), ("LETTER_B", "'b'*")], &[]);
+        let grammar = Grammar::new(
+            &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 3);
@@ -849,7 +874,8 @@ mod tests {
             &[(
                 "SEQ",
                 "('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*",
-            )],
+            )
+                .into()],
             &[],
         );
         let (canonical_trees, symtable, _) = canonical_trees(&grammar);
@@ -866,7 +892,8 @@ mod tests {
             &[(
                 "SEQ",
                 "('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*",
-            )],
+            )
+                .into()],
             &[],
         );
         let (canonical_trees, symtable, _) = canonical_trees(&grammar);
@@ -881,7 +908,7 @@ mod tests {
 
     #[test]
     fn dfa_moves() {
-        let terminal = ("PROD1", "'c'*'ab'");
+        let terminal = Production::from(("PROD1", "'c'*'ab'"));
         let grammar = Grammar::new(&[terminal], &[]);
         let dfa = Dfa::new(&grammar);
         let a = dfa.symbol_table().symbol_id('a');
@@ -894,7 +921,7 @@ mod tests {
 
     #[test]
     fn dfa_accepting_single() {
-        let terminal = ("PROD1", "'a'");
+        let terminal = Production::from(("PROD1", "'a'"));
         let grammar = Grammar::new(&[terminal], &[]);
         let dfa = Dfa::new(&grammar);
         assert!(dfa.accepting(dfa.start()).is_none());
@@ -907,7 +934,10 @@ mod tests {
     #[test]
     fn dfa_serialization() -> Result<(), ParseError> {
         let grammar = Grammar::new(
-            &[("LONG1", "[a-c].?([b-d]?[e-g])*"), ("LONG2", "[fg]+")],
+            &[
+                ("LONG1", "[a-c].?([b-d]?[e-g])*").into(),
+                ("LONG2", "[fg]+").into(),
+            ],
             &[],
         );
         let dfa = Dfa::new(&grammar);
@@ -919,7 +949,10 @@ mod tests {
 
     #[test]
     fn nongreedy_rule() {
-        let grammar = Grammar::new(&[("GREEDY", "'a'+"), ("NON_GREEDY", "'b'+?")], &[]);
+        let grammar = Grammar::new(
+            &[("GREEDY", "'a'+").into(), ("NON_GREEDY", "'b'+?").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         assert!(dfa.accepting(dfa.start()).is_none());
         assert!(dfa.non_greedy(dfa.start()));

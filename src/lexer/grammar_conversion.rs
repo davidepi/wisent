@@ -146,7 +146,7 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
     // Convert a grammar into a series of parse trees, then expand the sets
     let parse_trees = grammar
         .iter_term()
-        .map(String::as_ref)
+        .map(|terminal| terminal.body.as_ref())
         .map(gen_precedence_tree)
         .map(expand_literals)
         .collect::<Vec<_>>();

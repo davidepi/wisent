@@ -1,28 +1,68 @@
 use crate::error::ParseError;
-use std::collections::BTreeSet;
+use maplit::hashmap;
+use std::collections::{BTreeSet, HashMap};
+use std::io::ErrorKind;
 
-/// Code used to parse an ANTLR grammar with and ad-hoc parser
+use self::bootstrap::bootstrap_parse_string;
+
+// load the manually written ANTLR g4 parser
 mod bootstrap;
-use bootstrap::bootstrap_parse_string;
+
+/// Struct representing a grammar production.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Production {
+    /// Name of the production.
+    pub head: String,
+    /// Body of the production.
+    pub body: String,
+    /// If this production belongs to a lexer, this field contains the lexer actions.
+    pub actions: Option<BTreeSet<Action>>,
+}
+
+impl<S: Into<String>> From<(S, S)> for Production {
+    fn from((head, body): (S, S)) -> Self {
+        Self {
+            head: head.into(),
+            body: body.into(),
+            actions: None,
+        }
+    }
+}
+
+impl<S: Into<String>> From<(S, S, BTreeSet<Action>)> for Production {
+    fn from((head, body, actions): (S, S, BTreeSet<Action>)) -> Self {
+        Self {
+            head: head.into(),
+            body: body.into(),
+            actions: Some(actions),
+        }
+    }
+}
 
 /// Struct representing a parsed grammar.
 ///
-/// This struct stores terminal and non-terminal productions in the form `head`:`body`; and allows
-/// to access every `body` given a particular `head`
+/// This struct stores terminal and non-terminal productions.
 /// This struct also record the lexer actions for each terminal production, but drops any embedded
 /// action as they are language dependent.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grammar {
-    //vector containing the bodies of the terminal productions
-    pub(crate) terminals: Vec<String>,
-    //lexer actions (ANTLR-specific feature for g4 grammars)
-    pub(crate) actions: Vec<BTreeSet<Action>>,
+    //vector containing the bodies of the terminal productions.
+    //the first dimension of the array represent the lexer mode (context).
+    terminals: Vec<Vec<Production>>,
     //vector containing the bodies of the non-terminal productions
-    pub(crate) non_terminals: Vec<String>,
-    //vector recording the name of each terminal production
-    names_terminals: Vec<String>,
-    //vector recording the name of each non-terminal production
-    names_non_terminals: Vec<String>,
+    non_terminals: Vec<Production>,
+    // map a mode name to a specific index, used in the first dimension of this struct lexer rules
+    modes_index: HashMap<String, usize>,
+}
+
+impl Default for Grammar {
+    fn default() -> Self {
+        Self {
+            modes_index: hashmap! {"DEFAULT_MODE".to_owned() => 0},
+            terminals: Default::default(),
+            non_terminals: Default::default(),
+        }
+    }
 }
 
 impl Grammar {
@@ -41,45 +81,33 @@ impl Grammar {
 
     /// Constructs a new Grammar with the given terminals and non terminals.
     ///
-    /// No checks will be performed on the productions naming and no recursion will be resolved.
-    /// This method is used mostly for debug purposes, and [`parse_grammar()`] or
-    /// [`parse_string()`]
-    /// should be used.
+    /// The set of terminals and non terminals will be added to the `DEFAULT_MODE`.
     ///
-    /// The following arguments are expected:
-    /// * `terminals` - A slice of strings representing the terminal productions' bodies.
-    ///                 The tuple represents (*<terminal name>* | *<terminal>*)
-    /// * `non_terminals` - A slice of strings representing the non_terminal productions' bodies.
-    ///                     The tuple represents (*<non_terminal name>* | *<non_terminal>*)
-    /// order. First all the terminals are read, then the non-terminals.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// let terminals = vec![("LETTER_LOWERCASE", "[a-z]"), ("LETTER_UPPERCASE", "[A-Z]")];
-    /// let non_terminals = vec![
-    ///     ("letter", "LETTER_UPPERCASE | LETTER_LOWERCASE"),
-    ///     ("word", "word letter | letter"),
-    /// ];
-    /// let grammar = Grammar::new(&terminals, &non_terminals);
-    /// ```
-    pub fn new(terminals: &[(&str, &str)], non_terminals: &[(&str, &str)]) -> Grammar {
-        let terminals_no = terminals.len();
-        let (names_terminals, terminals): (Vec<String>, Vec<String>) = terminals
-            .iter()
-            .map(|(x, y)| (x.to_string(), y.to_string()))
-            .unzip();
-        let (names_non_terminals, non_terminals): (Vec<String>, Vec<String>) = non_terminals
-            .iter()
-            .map(|(x, y)| (x.to_string(), y.to_string()))
-            .unzip();
+    /// No checks will be performed on the productions naming and no recursion will be resolved.
+    ///
+    /// Using [`Grammar::parse_antlr`] or [`Grammar::parse_grammar`] instead of this method is
+    /// **HIGHLY** recommended.
+    pub fn new(terminals: &[Production], non_terminals: &[Production]) -> Self {
         Grammar {
-            terminals,
-            non_terminals,
-            actions: vec![BTreeSet::new(); terminals_no],
-            names_terminals,
-            names_non_terminals,
+            terminals: vec![terminals.to_vec()],
+            non_terminals: non_terminals.to_vec(),
+            ..Default::default()
         }
+    }
+
+    /// Adds lexer productions to the grammar.
+    ///
+    /// Adds additional lexer productions to the grammar with the given mode.
+    ///
+    /// This method has the same limitations of [`Grammar::new`], being intended for debug
+    /// purposes, and [`Grammar::parse_antlr`] or [`Grammar::parse_grammar`] are suggested.
+    ///
+    /// The terminal tuple is similar to the one explained in [`Grammar::new`], with the
+    /// addition of the action set for each recognized terminal.
+    pub fn add_terminals(&mut self, mode: String, terminals: &[Production]) {
+        let next_mode = self.modes_index.len();
+        let mode_index = *self.modes_index.entry(mode).or_insert(next_mode);
+        self.terminals[mode_index].extend_from_slice(terminals);
     }
 
     /// Returns the total number of productions.
@@ -90,18 +118,18 @@ impl Grammar {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
-    ///     letter: LETTER_UP | LETTER_LO;
-    ///     word: word letter | letter;
-    ///     LETTER_UP: [A-Z];
-    ///     LETTER_LO: [a-z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
+    ///          letter: LETTER_UP | LETTER_LO;
+    ///          word: word letter | letter;
+    ///          LETTER_UP: [A-Z];
+    ///          LETTER_LO: [a-z];";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
     /// assert_eq!(grammar.len(), 4);
     /// ```
     pub fn len(&self) -> usize {
-        self.terminals.len() + self.non_terminals.len()
+        self.len_term() + self.len_nonterm()
     }
 
-    /// Returns the total number of terminal productions.
+    /// Returns the total number of terminal productions, in all modes.
     ///
     /// Note that fragments are excluded from the count, as they are merged within the terminals and
     /// non-terminals.
@@ -110,15 +138,43 @@ impl Grammar {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
-    ///     letter: LETTER_UP | LETTER_LO;
-    ///     word: word letter | letter;
-    ///     LETTER_UP: [A-Z];
-    ///     LETTER_LO: [a-z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
+    ///          letter: LETTER_UP | LETTER_LO;
+    ///          word: word letter | letter;
+    ///          LETTER_UP: [A-Z];
+    ///          LETTER_LO: [a-z];";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
     /// assert_eq!(grammar.len_term(), 2);
     /// ```
     pub fn len_term(&self) -> usize {
-        self.terminals.len()
+        self.terminals.iter().fold(0, |acc, term| acc + term.len())
+    }
+
+    /// Returns the total number of terminal production in the given mode.
+    ///
+    /// Note that fragments are excluded from the count, as they are merged within the terminals and
+    /// non-terminals.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// let g = "lexer grammar Strings;
+    ///          LQUOTE : '\"' -> more, mode(STR) ;
+    ///          WS : [ \r\t\n]+ -> skip ;
+    ///          mode STR;
+    ///          STRING : '\"' -> mode(DEFAULT_MODE) ; // token we want parser to see
+    ///          TEXT : . -> more ; // collect more text for string";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
+    ///
+    /// assert_eq!(grammar.len_term(), 4);
+    /// assert_eq!(grammar.len_term_in_mode("DEFAULT_MODE"), 2);
+    /// assert_eq!(grammar.len_term_in_mode("STR"), 2);
+    /// ```
+    pub fn len_term_in_mode(&self, mode: &str) -> usize {
+        if let Some(mode_index) = self.modes_index.get(mode) {
+            self.terminals[*mode_index].len()
+        } else {
+            0
+        }
     }
 
     /// Returns the total number of non-terminal productions.
@@ -130,7 +186,7 @@ impl Grammar {
     ///          letter: LETTER_UP | LETTER_LO;
     ///          LETTER_UP: [A-Z];
     ///          LETTER_LO: [a-z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
     /// assert_eq!(grammar.len_nonterm(), 1);
     /// ```
     pub fn len_nonterm(&self) -> usize {
@@ -139,139 +195,109 @@ impl Grammar {
 
     /// Checks if the grammar has no productions.
     ///
-    /// Returnts true if the grammar has exactly 0 productions, false otherwise. This comprises both
-    /// terminals and non terminals.
+    /// Returns true if the grammar has exactly 0 productions, false otherwise. This comprises both
+    /// terminals and non terminals, in all modes.
     /// # Examples
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// let grammar = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
+    /// let grammar = Grammar::empty();
     /// assert!(grammar.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.terminals.is_empty() && self.non_terminals.is_empty()
+        self.len_term() == 0 && self.non_terminals.is_empty()
     }
 
-    /// Returns the name of the nth terminal production.
+    /// Returns an iterator over the modes of this grammar.
     ///
-    /// Productions are expressed in the form `head: body;` and assigned an index (the order in
-    /// which they appear in the grammar file. This method takes that index  and returns the `head`
-    /// for terminals or `None` if the index was not found.
+    /// Iterates by name the various modes used by the lexer of this grammar.
+    /// # Examples
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// let g = "lexer grammar Strings;
+    ///          LQUOTE : '\"' -> more, mode(STR) ;
+    ///          WS : [ \r\t\n]+ -> skip ;
+    ///          mode STR;
+    ///          STRING : '\"' -> mode(DEFAULT_MODE) ; // token we want parser to see
+    ///          TEXT : . -> more ; // collect more text for string";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
     ///
-    /// The index correspond to the one found within the result of the [`Grammar::iter_term`]
-    /// method.
+    /// assert_eq!(grammar.iter_modes().count(), 2);
+    /// ```
+    pub fn iter_modes(&self) -> impl Iterator<Item = &str> {
+        self.modes_index.keys().map(String::as_str)
+    }
+
+    /// Returns an iterator over the terminals slice in DEFAULT_MODE.
     /// # Examples
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// let g = "grammar g;
-    /// LETTER_UPPERCASE: [A-Z];
-    /// LETTER_LOWERCASE: [a-z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
-    /// let head = grammar.name_term(1).unwrap();
-    /// assert_eq!(head, "LETTER_LOWERCASE");
+    /// let g = "lexer grammar Strings;
+    ///          LQUOTE : '\"' -> more, mode(STR) ;
+    ///          WS : [ \r\t\n]+ -> skip ;
+    ///          mode STR;
+    ///          STRING : '\"' -> mode(DEFAULT_MODE) ; // token we want parser to see
+    ///          TEXT : . -> more ; // collect more text for string";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
+    ///
+    /// assert_eq!(grammar.iter_term().count(), 2);
     /// ```
-    pub fn name_term(&self, index: usize) -> Option<&String> {
-        self.names_terminals.get(index)
+    pub fn iter_term(&self) -> impl Iterator<Item = &Production> {
+        if let Some(terminals) = self.terminals.get(0) {
+            terminals.iter()
+        } else {
+            [].iter()
+        }
     }
 
-    /// Returns the name of the nth non-terminal production.
-    ///
-    /// Productions are expressed in the form `head: body;` and assigned an index (the order in
-    /// which they appear in the grammar file. This method takes that index  and returns the `head`
-    /// for terminals or `None` if the index was not found.
-    ///
-    /// The index correspond to the one found within the result of the [`Grammar::iter_nonterm`]
-    /// method.
+    /// Returns an iterator over the terminals slice in the given mode.
     /// # Examples
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// let g = "grammar g;
-    ///          letter: LETTER_UP | LETTER_LO;
-    ///          LETTER_UP: [A-Z];
-    ///          LETTER_LO: [a-z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
-    /// let head = grammar.name_nonterm(0).unwrap();
-    /// assert_eq!(head, "letter");
-    /// ```
-    pub fn name_nonterm(&self, index: usize) -> Option<&String> {
-        self.names_non_terminals.get(index)
-    }
-
-    /// Returns the lexer action for a given terminal index.
+    /// let g = "lexer grammar Strings;
+    ///          LQUOTE : '\"' -> more, mode(STR) ;
+    ///          WS : [ \r\t\n]+ -> skip ;
+    ///          mode STR;
+    ///          STRING : '\"' -> mode(DEFAULT_MODE) ; // token we want parser to see
+    ///          TEXT : . -> more ; // collect more text for string";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
     ///
-    /// Lexer actions are an ANTLR-specific, language independent feature useful only to the lexer.
-    /// For more information refer to the ANTLR specification.
-    ///
-    /// This method exprects the production index as input and returns a set containing the actions
-    /// for the given production.
-    ///
-    /// If the requested index is out of bounds a panic will be thrown.
-    /// # Examples
-    /// Basic usage:
+    /// assert_eq!(grammar.iter_term_in_mode("STR").count(), 2);
     /// ```
-    /// # use wisent::grammar::{Grammar,Action};
-    /// let g = "grammar g;
-    ///    LETTER_UPPERCASE: [A-Z] -> more, mode( NEW_MODE);
-    ///     LETTER_LOWERCASE: [a-z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
-    /// let mut actions0 = grammar.action(0).iter();
-    /// let actions1 = grammar.action(1);
-    /// assert_eq!(*actions0.next().unwrap(), wisent::grammar::Action::MORE);
-    /// assert_eq!(
-    ///     *actions0.next().unwrap(),
-    ///     Action::MODE("NEW_MODE".to_owned())
-    /// );
-    /// assert!(actions1.is_empty());
-    /// ```
-    pub fn action(&self, index: usize) -> &BTreeSet<Action> {
-        &self.actions[index]
-    }
-
-    /// Returns an iterator over the terminals slice.
-    ///
-    /// This method is just a wrapper of `iter()` and as such does not take ownership.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// let g = "grammar g;
-    ///     letter: LETTER_UP | LETTER_LO;
-    ///     word: word letter | letter;
-    ///     LETTER_LO: [a-z];
-    ///     LETTER_UP: [A-Z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
-    /// let mut iterator = grammar.iter_term();
-    /// assert_eq!(iterator.next(), Some(&"[a-z]".to_owned()));
-    /// assert_eq!(iterator.next(), Some(&"[A-Z]".to_owned()));
-    /// assert_eq!(iterator.next(), None);
-    /// ```
-    pub fn iter_term(&self) -> impl Iterator<Item = &String> {
-        self.terminals.iter()
+    pub fn iter_term_in_mode(&self, mode: &str) -> impl Iterator<Item = &Production> {
+        if let Some(index) = self.modes_index.get(mode) {
+            if let Some(terminals) = self.terminals.get(*index) {
+                terminals.iter()
+            } else {
+                [].iter()
+            }
+        } else {
+            [].iter()
+        }
     }
 
     /// Returns an iterator over the non-terminals slice.
-    ///
-    /// This method is just a wrapper of `iter()` and as such does not take ownership.
     /// # Examples
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
     /// let g = "grammar g;
-    ///     letter:LT_LO | LT_UP;
-    ///     LT_LO: [a-z];
-    ///     LT_U: [A-Z];";
-    /// let grammar = Grammar::parse_string(g).unwrap();
+    ///          letter:LT_LO | LT_UP;
+    ///          LT_LO: [a-z];
+    ///          LT_U: [A-Z];";
+    /// let grammar = Grammar::parse_antlr(g).unwrap();
     /// let mut iterator = grammar.iter_nonterm();
-    /// assert_eq!(iterator.next(), Some(&"LT_LO | LT_UP".to_owned()));
+    ///
+    /// assert_eq!(iterator.next().unwrap().body, "LT_LO | LT_UP");
     /// assert_eq!(iterator.next(), None);
     /// ```
-    pub fn iter_nonterm(&self) -> impl Iterator<Item = &String> {
+    pub fn iter_nonterm(&self) -> impl Iterator<Item = &Production> {
         self.non_terminals.iter()
     }
 
-    /// Builds a grammar from an ANTLR `.g4` file.
+    /// Builds a grammar by reading a given file.
     ///
     /// This method constructs and initializes a Grammar class by parsing an external specification
     /// written in a `.g4` file.
@@ -279,21 +305,37 @@ impl Grammar {
     /// A path pointing to the `.g4` file is expected as input.
     ///
     /// In case the file cannot be found or contains syntax errors a ParseError is returned.
+    /// # Errors
+    /// Returns error if the given path is missing the extension.
     /// # Examples
     /// Basic usage:
     /// ```no_run
     /// # use wisent::grammar::Grammar;
     /// let grammar = Grammar::parse_grammar("Rust.g4").unwrap();
     /// ```
-    pub fn parse_grammar(path: &str) -> Result<Grammar, ParseError> {
-        let grammar_content = std::fs::read_to_string(path)?;
-        Self::parse_string(&grammar_content[..])
+    pub fn parse_grammar<P: AsRef<std::path::Path>>(path: P) -> Result<Grammar, ParseError> {
+        if let Some(ext) = path.as_ref().extension() {
+            let grammar_content = std::fs::read_to_string(path.as_ref())?;
+            let extension = ext.to_str().unwrap();
+            match extension {
+                "g4" => Self::parse_antlr(&grammar_content),
+                _ => Err(ParseError::IOError(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("unsupported file type {}", extension),
+                ))),
+            }
+        } else {
+            Err(ParseError::IOError(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "filename is missing the extension",
+            )))
+        }
     }
 
-    /// Builds a grammar from a String with the content of an ANTLR `.g4` file.
+    /// Builds a grammar from a String with the content in ANTLR syntax.
     ///
     /// This method constructs and initializes a Grammar class by parsing a String following the
-    /// ANTLR `.g4` specification.
+    /// ANTLR4 specification.
     ///
     /// A ParseError is returned in case the String contains syntax errors.
     /// # Examples
@@ -301,10 +343,10 @@ impl Grammar {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// let cont = "grammar g; letter:[a-z];";
-    /// let grammar = Grammar::parse_string(cont).unwrap();
+    /// let grammar = Grammar::parse_antlr(cont).unwrap();
     /// assert_eq!(grammar.len(), 1);
     /// ```
-    pub fn parse_string(content: &str) -> Result<Grammar, ParseError> {
+    pub fn parse_antlr(content: &str) -> Result<Grammar, ParseError> {
         bootstrap_parse_string(content)
     }
 }
@@ -322,22 +364,22 @@ impl Grammar {
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Action {
     /// Action telling the lexer to not return the matched token.
-    SKIP,
+    Skip,
     /// Action telling the lexer to match the current rule but continue collecting tokens.
-    MORE,
+    More,
     /// Action assigning a specific type for the matched token.
     /// The type is passed as a String parameter.
-    TYPE(String),
+    Type(String),
     /// Action telling the lexer to switch to a specific channel after matching the token.
     /// The name of the channel is passed as a String parameter.
-    CHANNEL(String),
+    Channel(String),
     /// After matching the token, the lexer will switch to the mode passed as String. Only rules
     /// matching the newly passed mode will be matched.
-    MODE(String),
+    Mode(String),
     /// Same behaviour of `Action::MODE` but the mode is pushed on a stack, to be later popped by
     /// `Action::POPMODE`.
-    PUSHMODE(String),
+    PushMode(String),
     /// After matching the token, pop a mode from the mode stack and continue matching tokens using
     /// the mode on the top of the stack.
-    POPMODE,
+    PopMode,
 }

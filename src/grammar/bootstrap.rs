@@ -41,28 +41,21 @@ struct GrammarInternal {
 fn reindex(mut grammar: GrammarInternal) -> Grammar {
     let mut terminals = Vec::with_capacity(grammar.terminals.len());
     let mut non_terminals = Vec::with_capacity(grammar.non_terminals.len());
-    let mut names_terminals = Vec::with_capacity(grammar.terminals.len());
-    let mut names_non_terminals = Vec::with_capacity(grammar.non_terminals.len());
-    let mut actions = Vec::with_capacity(grammar.terminals.len());
     //the new order will be: first every terminal, then every non-terminal. In the original order.
     for head in grammar.order {
         if let Some(body) = grammar.terminals.remove(&head) {
-            terminals.push(body);
-            actions.push(grammar.actions.remove(&head).unwrap()); //this should exist
-            names_terminals.push(head);
+            let actions = grammar.actions.remove(&head).unwrap(); // this should always exist
+            terminals.push((head, body, actions).into());
         } else if let Some(body) = grammar.non_terminals.remove(&head) {
-            non_terminals.push(body);
-            names_non_terminals.push(head);
+            non_terminals.push((head, body).into());
         } else {
             panic!("Expected production to be either in terminals or non terminals.");
         }
     }
     Grammar {
-        terminals,
+        terminals: vec![terminals],
         non_terminals,
-        actions,
-        names_terminals,
-        names_non_terminals,
+        ..Default::default()
     }
 }
 
@@ -430,9 +423,9 @@ fn get_actions(body: &str) -> Result<(&str, BTreeSet<Action>), ParseError> {
 /// Returns SyntaxError if the action is illegal
 fn match_action(act: &str) -> Result<Action, ParseError> {
     match act {
-        "skip" => Ok(Action::SKIP),
-        "more" => Ok(Action::MORE),
-        "popMode" => Ok(Action::POPMODE),
+        "skip" => Ok(Action::Skip),
+        "more" => Ok(Action::More),
+        "popMode" => Ok(Action::PopMode),
         _ => {
             let last_is_par = match act.chars().last() {
                 Some(char) => char == ')',
@@ -440,16 +433,16 @@ fn match_action(act: &str) -> Result<Action, ParseError> {
             };
             if act.starts_with("type(") && last_is_par {
                 let arg = &act[5..act.len() - 1];
-                Ok(Action::TYPE(arg.to_owned()))
+                Ok(Action::Type(arg.to_owned()))
             } else if act.starts_with("channel(") && last_is_par {
                 let arg = &act[8..act.len() - 1];
-                Ok(Action::CHANNEL(arg.to_owned()))
+                Ok(Action::Channel(arg.to_owned()))
             } else if act.starts_with("mode(") && last_is_par {
                 let arg = &act[5..act.len() - 1];
-                Ok(Action::MODE(arg.to_owned()))
+                Ok(Action::Mode(arg.to_owned()))
             } else if act.starts_with("pushMode(") && last_is_par {
                 let arg = &act[9..act.len() - 1];
-                Ok(Action::PUSHMODE(arg.to_owned()))
+                Ok(Action::PushMode(arg.to_owned()))
             } else {
                 let message = format!("invalid action `{}`", act);
                 Err(ParseError::SyntaxError { message })
@@ -665,6 +658,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::topological_sort;
+    use crate::error::ParseError;
     use crate::grammar::{Action, Grammar};
     use std::collections::BTreeSet;
 
@@ -719,10 +713,10 @@ mod tests {
     fn grammar_len() {
         let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert_eq!(g.len(), 0);
-        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let terminals = vec![("LETTER_LO", "[a-z]").into(), ("LETTER_UP", "[A-Z]").into()];
         let non_terminals = vec![
-            ("letter", "LETTER_UP | LETTER_LO"),
-            ("word", "word letter | letter"),
+            ("letter", "LETTER_UP | LETTER_LO").into(),
+            ("word", "word letter | letter").into(),
         ];
         let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(g.len(), 4);
@@ -733,10 +727,10 @@ mod tests {
     fn grammar_len_term() {
         let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert_eq!(g.len(), 0);
-        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let terminals = vec![("LETTER_LO", "[a-z]").into(), ("LETTER_UP", "[A-Z]").into()];
         let non_terminals = vec![
-            ("letter", "LETTER_UP | LETTER_LO"),
-            ("word", "word letter | letter"),
+            ("letter", "LETTER_UP | LETTER_LO").into(),
+            ("word", "word letter | letter").into(),
         ];
         let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(g.len_term(), 2);
@@ -747,8 +741,8 @@ mod tests {
     fn grammar_len_nonterm() {
         let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
         assert_eq!(g.len(), 0);
-        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
-        let non_terminals = vec![("letter", "LETTER_UP | LETTER_LO")];
+        let terminals = vec![("LETTER_LO", "[a-z]").into(), ("LETTER_UP", "[A-Z]").into()];
+        let non_terminals = vec![("letter", "LETTER_UP | LETTER_LO").into()];
         let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(g.len_nonterm(), 1);
     }
@@ -756,12 +750,12 @@ mod tests {
     #[test]
     //Asserts the method is_empty() works as expected
     fn grammar_is_empty() {
-        let g = Grammar::new(Vec::new().as_slice(), Vec::new().as_slice());
+        let g = Grammar::empty();
         assert!(g.is_empty());
-        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let terminals = vec![("LETTER_LO", "[a-z]").into(), ("LETTER_UP", "[A-Z]").into()];
         let non_terminals = vec![
-            ("letter", "LETTER_UP | LETTER_LO"),
-            ("word", "word letter | letter"),
+            ("letter", "LETTER_UP | LETTER_LO").into(),
+            ("word", "word letter | letter").into(),
         ];
         let g = Grammar::new(&terminals, &non_terminals);
         assert!(!g.is_empty());
@@ -770,22 +764,19 @@ mod tests {
     #[test]
     //Asserts order and production correctness in a hand-crafted grammar
     fn grammar_crafted() {
-        let terminals = vec![("LETTER_LO", "[a-z]"), ("LETTER_UP", "[A-Z]")];
+        let terminals = vec![("LETTER_LO", "[a-z]").into(), ("LETTER_UP", "[A-Z]").into()];
         let non_terminals = vec![
-            ("letter", "LETTER_UP | LETTER_LO"),
-            ("word", "word letter | letter"),
+            ("letter", "LETTER_UP | LETTER_LO").into(),
+            ("word", "word letter | letter").into(),
         ];
         let g = Grammar::new(&terminals, &non_terminals);
         assert_eq!(
             g.iter_term().collect::<Vec<_>>(),
-            terminals.into_iter().map(|(_, x)| x).collect::<Vec<_>>()
+            terminals.iter().collect::<Vec<_>>(),
         );
         assert_eq!(
             g.iter_nonterm().collect::<Vec<_>>(),
-            non_terminals
-                .into_iter()
-                .map(|(_, x)| x)
-                .collect::<Vec<_>>()
+            non_terminals.iter().collect::<Vec<_>>()
         );
     }
 
@@ -797,7 +788,7 @@ mod tests {
     word: word letter | letter;
     LETTER_UP: [A-Z];
     LETTER_LO: [a-z];";
-        match Grammar::parse_string(g) {
+        match Grammar::parse_antlr(g) {
             Ok(g) => {
                 assert_eq!(g.len(), 4);
                 assert_eq!(g.len_term(), 2);
@@ -810,7 +801,7 @@ mod tests {
     #[test]
     fn extract_literal() {
         let grammar = "LP: '(';\nRP: ')';\nrandom: '(' '(' Џɯɷ幫Ѩ䷘ ')' ')';\nfunction: fn '{' '}';";
-        match Grammar::parse_string(grammar) {
+        match Grammar::parse_antlr(grammar) {
             Ok(g) => {
                 assert_eq!(g.len(), 6);
             }
@@ -833,7 +824,7 @@ mod tests {
     #[test]
     //Asserts that the file is parsed correctly even with high number of escape chars
     fn parse_highly_escaped() {
-        match Grammar::parse_string(COMMENT_RICH_GRAMMAR) {
+        match Grammar::parse_antlr(COMMENT_RICH_GRAMMAR) {
             Ok(g) => {
                 assert_eq!(g.len(), 5);
             }
@@ -844,7 +835,7 @@ mod tests {
     #[test]
     //Asserts that the fragment using non-terminals generates syntax error
     fn parse_fragments_nonterminal() {
-        match Grammar::parse_string(FRAGMENTS_CONTAINS_NT) {
+        match Grammar::parse_antlr(FRAGMENTS_CONTAINS_NT) {
             Ok(_) => panic!("Expected a syntax error!"),
             Err(e) => assert_eq!(
                 e.to_string(),
@@ -856,7 +847,7 @@ mod tests {
     #[test]
     //Asserts that the fragment using wrong naming generates syntax error
     fn parse_fragments_lowercase_naming() {
-        match Grammar::parse_string(FRAGMENTS_CASE_ERR) {
+        match Grammar::parse_antlr(FRAGMENTS_CASE_ERR) {
             Ok(_) => panic!("Expected a syntax error!"),
             Err(e) => assert_eq!(
                 e.to_string(),
@@ -868,7 +859,7 @@ mod tests {
     #[test]
     //Asserts that the fragments are replaced correctly
     fn parse_recursive_fragments() {
-        match Grammar::parse_string(FRAGMENTS_GRAMMAR) {
+        match Grammar::parse_antlr(FRAGMENTS_GRAMMAR) {
             Ok(g) => {
                 assert_eq!(g.len(), 2);
             }
@@ -879,7 +870,7 @@ mod tests {
     #[test]
     //Asserts that a simple grammar is parsed correctly.
     fn parse_simple_grammar_correctly() {
-        match Grammar::parse_string(SIMPLE_GRAMMAR) {
+        match Grammar::parse_antlr(SIMPLE_GRAMMAR) {
             Ok(g) => assert_eq!(
                 g.len(),
                 9,
@@ -892,9 +883,9 @@ mod tests {
     #[test]
     //Asserts that ALL the productions are parsed correctly
     fn get_production() {
-        let g = Grammar::parse_string(SIMPLE_GRAMMAR).unwrap();
-        let nterm = g.iter_nonterm().collect::<Vec<_>>();
-        let term = g.iter_term().collect::<Vec<_>>();
+        let g = Grammar::parse_antlr(SIMPLE_GRAMMAR).unwrap();
+        let nterm = g.iter_nonterm().map(|prod| &prod.body).collect::<Vec<_>>();
+        let term = g.iter_term().map(|prod| &prod.body).collect::<Vec<_>>();
         let expected_term = [
             "~[,\\n\\r\"]+",
             "'\"'('\"\"'|~'\"')*'\"'",
@@ -915,9 +906,9 @@ mod tests {
     #[test]
     //Asserts that the order of the production is kept unchanged
     fn order_unchanged() {
-        let g = Grammar::parse_string(SIMPLE_GRAMMAR).unwrap();
-        let nterm = g.iter_nonterm().collect::<Vec<_>>();
-        let term = g.iter_term().collect::<Vec<_>>();
+        let g = Grammar::parse_antlr(SIMPLE_GRAMMAR).unwrap();
+        let nterm = g.iter_nonterm().map(|prod| &prod.body).collect::<Vec<_>>();
+        let term = g.iter_term().map(|prod| &prod.body).collect::<Vec<_>>();
         assert_eq!(term[0], "~[,\\n\\r\"]+");
         assert_eq!(term[1], "'\"'('\"\"'|~'\"')*'\"'");
         assert_eq!(term[2], "','");
@@ -932,9 +923,9 @@ mod tests {
     #[test]
     //Asserts that the order of the production is kept unchanged by iterating terminals
     fn order_iter_term() {
-        match Grammar::parse_string(SIMPLE_GRAMMAR) {
+        match Grammar::parse_antlr(SIMPLE_GRAMMAR) {
             Ok(g) => {
-                let vec = g.iter_term().as_slice();
+                let vec = g.iter_term().map(|prod| &prod.body).collect::<Vec<_>>();
                 //0, 1, 2 are replaced literals
                 assert_eq!(vec[0], "~[,\\n\\r\"]+");
                 assert_eq!(vec[1], "'\"'('\"\"'|~'\"')*'\"'");
@@ -946,9 +937,9 @@ mod tests {
     #[test]
     //Asserts that the order of the production is kept unchanged by iterating non-terminals
     fn order_unchanged_iter_nonterm() {
-        match Grammar::parse_string(SIMPLE_GRAMMAR) {
+        match Grammar::parse_antlr(SIMPLE_GRAMMAR) {
             Ok(g) => {
-                let vec = g.iter_nonterm().as_slice();
+                let vec = g.iter_nonterm().map(|prod| &prod.body).collect::<Vec<_>>();
                 assert_eq!(vec[0], "hdr row+ ");
                 assert_eq!(vec[1], "row ");
                 assert_eq!(vec[2], "field (COMMA field)* CR? LF ");
@@ -961,77 +952,81 @@ mod tests {
     #[test]
     //Asserts that a grammar is parsed and the actions extracted correctly.
     //Simpler version with trivial body and single action.
-    fn parse_actions_simpler() {
-        match Grammar::parse_string(LEXER_ACTIONS_SIMPLER) {
-            Ok(g) => {
-                assert_eq!(*g.action(0).iter().next().unwrap(), Action::SKIP);
-                assert_eq!(*g.action(1).iter().next().unwrap(), Action::MORE);
-                assert_eq!(
-                    *g.action(2).iter().next().unwrap(),
-                    Action::TYPE("TypeName".to_owned())
-                );
-                assert_eq!(
-                    *g.action(3).iter().next().unwrap(),
-                    Action::TYPE("".to_owned())
-                );
-                assert_eq!(
-                    *g.action(4).iter().next().unwrap(),
-                    Action::CHANNEL("ChannelName".to_owned())
-                );
-                assert_eq!(
-                    *g.action(5).iter().next().unwrap(),
-                    Action::CHANNEL("".to_owned())
-                );
-                assert_eq!(
-                    *g.action(6).iter().next().unwrap(),
-                    Action::MODE("ChannelName".to_owned())
-                );
-                assert_eq!(
-                    *g.action(7).iter().next().unwrap(),
-                    Action::MODE("".to_owned())
-                );
-                assert_eq!(
-                    *g.action(8).iter().next().unwrap(),
-                    Action::PUSHMODE("ChannelName".to_owned())
-                );
-                assert_eq!(
-                    *g.action(9).iter().next().unwrap(),
-                    Action::PUSHMODE("".to_owned())
-                );
-                assert_eq!(*g.action(10).iter().next().unwrap(), Action::POPMODE);
-            }
-            Err(_) => panic!("grammar failed to parse"),
+    fn parse_actions_simpler() -> Result<(), ParseError> {
+        let grammar = Grammar::parse_antlr(LEXER_ACTIONS_SIMPLER)?;
+        let terminals = grammar.iter_term().collect::<Vec<_>>();
+        let expected = vec![
+            Action::Skip,
+            Action::More,
+            Action::Type("TypeName".to_string()),
+            Action::Type("".to_string()),
+            Action::Channel("ChannelName".to_string()),
+            Action::Channel("".to_string()),
+            Action::Mode("ChannelName".to_string()),
+            Action::Mode("".to_string()),
+            Action::PushMode("ChannelName".to_string()),
+            Action::PushMode("".to_string()),
+            Action::PopMode,
+        ];
+        for (terminal, expected) in terminals.iter().zip(expected) {
+            assert_eq!(
+                *terminal.actions.as_ref().unwrap().iter().next().unwrap(),
+                expected
+            );
         }
+        Ok(())
     }
 
     #[test]
     //Asserts that a grammar is parsed and the actions extracted correctly.
     //Harder version with multiple actions and tricky -> productions
-    fn parse_actions_harder() {
-        match Grammar::parse_string(LEXER_ACTIONS_HARDER) {
-            Ok(g) => {
-                assert_eq!(g.action(1).len(), 2); // whitespace action
-                let mut ws_iter = g.action(1).iter();
-                assert_eq!(*ws_iter.next().unwrap(), Action::MORE);
-                assert_eq!(
-                    *ws_iter.next().unwrap(),
-                    Action::CHANNEL("CHANNEL_NAME".to_owned())
-                );
-                assert_eq!(*g.action(2).iter().next().unwrap(), Action::SKIP);
-                assert_eq!(*g.action(3).iter().next().unwrap(), Action::MORE);
-            }
-            Err(_) => panic!("grammar failed to parse"),
-        }
+    fn parse_actions_harder() -> Result<(), ParseError> {
+        let grammar = Grammar::parse_antlr(LEXER_ACTIONS_HARDER)?;
+        let terminals = grammar.iter_term().collect::<Vec<_>>();
+        assert_eq!(terminals[1].actions.as_ref().unwrap().len(), 2); // whitespace action
+        let mut ws_iter = terminals[1].actions.as_ref().unwrap().iter();
+        assert_eq!(*ws_iter.next().unwrap(), Action::More);
+        assert_eq!(
+            *ws_iter.next().unwrap(),
+            Action::Channel("CHANNEL_NAME".to_owned())
+        );
+        assert_eq!(
+            *terminals[2]
+                .actions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap(),
+            Action::Skip
+        );
+        assert_eq!(
+            *terminals[3]
+                .actions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap(),
+            Action::More
+        );
+        Ok(())
     }
 
     #[test]
     //Asserts that terminal productions are cleaned up of spaces and embedded productions
     //this should be done also in recursive replacement of terminals
     fn terminal_cleaned() {
-        match Grammar::parse_string(LEXER_ACTIONS_HARDER) {
+        match Grammar::parse_antlr(LEXER_ACTIONS_HARDER) {
             Ok(g) => {
-                assert_eq!(g.iter_term().next().unwrap(), "[a->b\\-\\]]+'->'|([ ]+)");
-                assert_eq!(g.iter_term().nth(2).unwrap(), "('\\r''\\n'?|'\\n')");
+                assert_eq!(
+                    g.iter_term().map(|prod| &prod.body).next().unwrap(),
+                    "[a->b\\-\\]]+'->'|([ ]+)"
+                );
+                assert_eq!(
+                    g.iter_term().map(|prod| &prod.body).nth(2).unwrap(),
+                    "('\\r''\\n'?|'\\n')"
+                );
             }
             Err(_) => panic!("grammar failed to parse"),
         }
@@ -1040,7 +1035,7 @@ mod tests {
     #[test]
     //Asserts that invalid lexer actions are reported as errors
     fn invalid_lexer_actions() {
-        match Grammar::parse_string(LEXER_INVALID_ACTION) {
+        match Grammar::parse_antlr(LEXER_INVALID_ACTION) {
             Ok(_) => panic!("Invalid lexer actions should not be able to parse correctly"),
             Err(e) => assert_eq!(e.to_string(), "SyntaxError: invalid action `channel(name`"),
         }
@@ -1049,7 +1044,7 @@ mod tests {
     #[test]
     //Asserts that cyclic rules like S->S; cannot be solved in the lexer
     fn lexer_rules_cycles_err() {
-        match Grammar::parse_string(LEXER_CYCLIC) {
+        match Grammar::parse_antlr(LEXER_CYCLIC) {
             Ok(_) => panic!("expected a failure"),
             Err(e) => assert_eq!(
                 e.to_string(),

@@ -65,7 +65,10 @@ impl<'a> DfaSimulator<'a> {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::{Dfa, DfaSimulator};
-    /// let grammar = Grammar::new(&[("NUMBER", "([0-9])+"), ("WORD", "([a-z])+")], &[]);
+    /// let grammar = Grammar::new(
+    ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
+    ///     &[],
+    /// );
     /// let dfa = Dfa::new(&grammar);
     /// let input = "abc123";
     /// let simulator = DfaSimulator::new(&dfa);
@@ -224,7 +227,10 @@ pub struct IncompleteParse {
 /// ```
 /// # use wisent::grammar::Grammar;
 /// # use wisent::lexer::{Dfa, DfaSimulator, tokenize};
-/// let grammar = Grammar::new(&[("NUMBER", "([0-9])+"), ("WORD", "([a-z])+")], &[]);
+/// let grammar = Grammar::new(
+///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
+///     &[],
+/// );
 /// let dfa = Dfa::new(&grammar);
 /// let input = "abc123";
 /// let result = tokenize(&dfa, &input);
@@ -262,7 +268,10 @@ mod tests {
     fn simulator_next_char() {
         // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the tokenize
         // function
-        let grammar = Grammar::new(&[("NOT_SPACE", "(~[ ])+"), ("SPACE", "' '+")], &[]);
+        let grammar = Grammar::new(
+            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
         let mut simulator = DfaSimulator::new(&dfa);
@@ -276,7 +285,10 @@ mod tests {
     #[test]
     fn simulator_multiple_eof() {
         // after next_char returns eof once, additional calls return always eof
-        let grammar = Grammar::new(&[("NOT_SPACE", "(~[ ])+"), ("SPACE", "' '+")], &[]);
+        let grammar = Grammar::new(
+            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
         let mut simulator = DfaSimulator::new(&dfa);
@@ -289,7 +301,10 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_small() {
-        let grammar = Grammar::new(&[("NOT_SPACE", "(~[ ])+"), ("SPACE", "' '+")], &[]);
+        let grammar = Grammar::new(
+            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
@@ -306,7 +321,10 @@ mod tests {
     #[test]
     fn simulator_tokenize_big() {
         // input bigger than BUFFER_SIZE to allow a single buffer swap
-        let grammar = Grammar::new(&[("NOT_SPACE", "(~[ ])+"), ("SPACE", "' '+")], &[]);
+        let grammar = Grammar::new(
+            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let mut input = String::new();
         let mut prods = 1;
@@ -328,7 +346,10 @@ mod tests {
         while input.chars().count() < 2 * BUFFER_SIZE as usize {
             input.push_str(&piece);
         }
-        let grammar = Grammar::new(&[("NOT_SPACE", "(~[ ])+"), ("SPACE", "' '+")], &[]);
+        let grammar = Grammar::new(
+            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
         assert_eq!(tokens.len(), 1);
@@ -336,7 +357,13 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_match_longest() {
-        let grammar = Grammar::new(&[("INT", "([0-9])+"), ("REAL", "([0-9])+'.'[0-9]+")], &[]);
+        let grammar = Grammar::new(
+            &[
+                ("INT", "([0-9])+").into(),
+                ("REAL", "([0-9])+'.'[0-9]+").into(),
+            ],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let input = "123.456789";
         let simulator = DfaSimulator::new(&dfa);
@@ -349,7 +376,13 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_match_longest_incomplete() {
-        let grammar = Grammar::new(&[("INT", "([0-9])+"), ("REAL", "([0-9])+'.'[0-9]+")], &[]);
+        let grammar = Grammar::new(
+            &[
+                ("INT", "([0-9])+").into(),
+                ("REAL", "([0-9])+'.'[0-9]+").into(),
+            ],
+            &[],
+        );
         let dfa = Dfa::new(&grammar);
         let input = "123.";
         let simulator = DfaSimulator::new(&dfa);
@@ -364,9 +397,9 @@ mod tests {
     fn simulator_tokenize_greedy_complete() {
         let grammar = Grammar::new(
             &[
-                ("COMMENT", "'/*'.*'*/'"),
-                ("NUMBER", "[0-9]+"),
-                ("SPACE", "[\r\n\t ]"),
+                ("COMMENT", "'/*'.*'*/'").into(),
+                ("NUMBER", "[0-9]+").into(),
+                ("SPACE", "[\r\n\t ]").into(),
             ],
             &[],
         );
@@ -382,9 +415,9 @@ mod tests {
     fn simulator_tokenize_greedy_incomplete() {
         let grammar = Grammar::new(
             &[
-                ("COMMENT", "'/*'.*'*/'"),
-                ("NUMBER", "[0-9]+"),
-                ("SPACE", "[\r\n\t ]"),
+                ("COMMENT", "'/*'.*'*/'").into(),
+                ("NUMBER", "[0-9]+").into(),
+                ("SPACE", "[\r\n\t ]").into(),
             ],
             &[],
         );
@@ -403,9 +436,9 @@ mod tests {
     fn simulator_tokenize_nongreedy_kleene() {
         let grammar = Grammar::new(
             &[
-                ("COMMENT", "'/*'.*?'*/'"),
-                ("SPACE", "[\r\n\t ]"),
-                ("LITERAL", "'\"'~'\"'*'\"'"),
+                ("COMMENT", "'/*'.*?'*/'").into(),
+                ("SPACE", "[\r\n\t ]").into(),
+                ("LITERAL", "'\"'~'\"'*'\"'").into(),
             ],
             &[],
         );
@@ -420,7 +453,11 @@ mod tests {
     fn simulator_backtrack_refresh() {
         // asserts that after backtracking the buffer 2 does not get refreshed again
         let grammar = Grammar::new(
-            &[("A", "'a'*"), ("AB", "'a'*'bbbbbb'"), ("BC", "'bbb'('c'*)")],
+            &[
+                ("A", "'a'*").into(),
+                ("AB", "'a'*'bbbbbb'").into(),
+                ("BC", "'bbb'('c'*)").into(),
+            ],
             &[],
         );
         let dfa = Dfa::new(&grammar);
@@ -435,7 +472,7 @@ mod tests {
 
     #[test]
     fn tokenize_empty() {
-        let grammar = Grammar::new(&[("A", "'a'"), ("B", "'b'")], &[]);
+        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = Dfa::new(&grammar);
         let input = "";
         let res = tokenize(&dfa, input);
@@ -444,7 +481,7 @@ mod tests {
 
     #[test]
     fn tokenize_full() {
-        let grammar = Grammar::new(&[("A", "'a'"), ("B", "'b'")], &[]);
+        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = Dfa::new(&grammar);
         let input = "aaabb";
         let res = tokenize(&dfa, input).unwrap();
@@ -453,7 +490,7 @@ mod tests {
 
     #[test]
     fn tokenize_err_no_partial() {
-        let grammar = Grammar::new(&[("A", "'a'"), ("B", "'b'")], &[]);
+        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = Dfa::new(&grammar);
         let input = "d";
         let res = tokenize(&dfa, input);
@@ -463,7 +500,7 @@ mod tests {
 
     #[test]
     fn tokenize_err_some_partial() {
-        let grammar = Grammar::new(&[("A", "'a'"), ("B", "'b'")], &[]);
+        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = Dfa::new(&grammar);
         let input = "aad";
         let res = tokenize(&dfa, input);

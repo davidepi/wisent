@@ -10,17 +10,17 @@ const C_EXAMPLE: &str = include_str!("../resources/c_example.txt");
 
 fn parse_c_grammar(c: &mut Criterion) {
     c.bench_function("c grammar [parse grammar]", |b| {
-        b.iter(|| Grammar::parse_string(C_GRAMMAR))
+        b.iter(|| Grammar::parse_antlr(C_GRAMMAR))
     });
 }
 
 fn lex_c_grammar(c: &mut Criterion) {
-    let g = Grammar::parse_string(C_GRAMMAR).unwrap();
+    let g = Grammar::parse_antlr(C_GRAMMAR).unwrap();
     c.bench_function("c grammar [build dfa]", |b| b.iter(|| Dfa::new(&g)));
 }
 
 fn tokenize_c_file(c: &mut Criterion) {
-    let g = Grammar::parse_string(C_GRAMMAR).unwrap();
+    let g = Grammar::parse_antlr(C_GRAMMAR).unwrap();
     let dfa = Dfa::new(&g);
     c.bench_function("c simulation [tokenizing]", |b| {
         b.iter(|| DfaSimulator::new(&dfa).tokenize(C_EXAMPLE.chars()))
