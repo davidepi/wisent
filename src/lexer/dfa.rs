@@ -166,7 +166,7 @@ impl Dfa {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::Dfa;
-    /// let grammar = Grammar::new(&[], &[]);
+    /// let grammar = Grammar::empty();
     /// let dfa = Dfa::new(&grammar);
     ///
     /// assert!(dfa.is_empty());
@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_empty() {
-        let grammar = Grammar::new(&[], &[]);
+        let grammar = Grammar::empty();
         let dfa = Dfa::new(&grammar);
         assert!(dfa.is_empty());
     }

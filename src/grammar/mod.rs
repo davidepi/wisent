@@ -11,6 +11,7 @@ use bootstrap::bootstrap_parse_string;
 /// to access every `body` given a particular `head`
 /// This struct also record the lexer actions for each terminal production, but drops any embedded
 /// action as they are language dependent.
+#[derive(Debug, Default, Clone)]
 pub struct Grammar {
     //vector containing the bodies of the terminal productions
     pub(crate) terminals: Vec<String>,
@@ -25,6 +26,19 @@ pub struct Grammar {
 }
 
 impl Grammar {
+    /// Constructs an empty Grammar.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// let grammar = Grammar::empty();
+    ///
+    /// assert!(grammar.is_empty());
+    /// ```
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
     /// Constructs a new Grammar with the given terminals and non terminals.
     ///
     /// No checks will be performed on the productions naming and no recursion will be resolved.
@@ -50,6 +64,7 @@ impl Grammar {
     /// let grammar = Grammar::new(&terminals, &non_terminals);
     /// ```
     pub fn new(terminals: &[(&str, &str)], non_terminals: &[(&str, &str)]) -> Grammar {
+        let terminals_no = terminals.len();
         let (names_terminals, terminals): (Vec<String>, Vec<String>) = terminals
             .iter()
             .map(|(x, y)| (x.to_string(), y.to_string()))
@@ -61,7 +76,7 @@ impl Grammar {
         Grammar {
             terminals,
             non_terminals,
-            actions: Vec::new(),
+            actions: vec![BTreeSet::new(); terminals_no],
             names_terminals,
             names_non_terminals,
         }
@@ -304,7 +319,7 @@ impl Grammar {
 ///
 /// A brief documentation is provided for each action, but the user should refer to the ANTLR
 /// reference.
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Action {
     /// Action telling the lexer to not return the matched token.
     SKIP,
