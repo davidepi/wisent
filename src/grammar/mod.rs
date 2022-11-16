@@ -247,7 +247,7 @@ impl Grammar {
     /// assert_eq!(iterator.next(), Some(&"[A-Z]".to_owned()));
     /// assert_eq!(iterator.next(), None);
     /// ```
-    pub fn iter_term(&self) -> std::slice::Iter<String> {
+    pub fn iter_term(&self) -> impl Iterator<Item = &String> {
         self.terminals.iter()
     }
 
@@ -267,7 +267,7 @@ impl Grammar {
     /// assert_eq!(iterator.next(), Some(&"LT_LO | LT_UP".to_owned()));
     /// assert_eq!(iterator.next(), None);
     /// ```
-    pub fn iter_nonterm(&self) -> std::slice::Iter<String> {
+    pub fn iter_nonterm(&self) -> impl Iterator<Item = &String> {
         self.non_terminals.iter()
     }
 
