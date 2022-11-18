@@ -44,6 +44,11 @@ impl<S: Into<String>> From<(S, S, BTreeSet<Action>)> for Production {
 /// This struct stores terminal and non-terminal productions.
 /// This struct also record the lexer actions for each terminal production, but drops any embedded
 /// action as they are language dependent.
+///
+/// Additionally, multiple lexer modes can be used in this grammar: each mode has different set of
+/// rules, and switching from one modes to the other ones can be done with lexer actions. More info
+/// can be found on the [ANTLR
+/// specification](https://github.com/antlr/antlr4/blob/master/doc/lexer-rules.md#lexical-modes)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grammar {
     //vector containing the bodies of the terminal productions.
@@ -206,6 +211,15 @@ impl Grammar {
     /// ```
     pub fn is_empty(&self) -> bool {
         self.len_term() == 0 && self.non_terminals.is_empty()
+    }
+
+    /// Returns the amount of modes used in this grammar.
+    /// # Examples
+    /// ```
+    /// panic!()
+    /// ```
+    pub fn len_modes(&self) -> usize {
+        self.modes_index.len()
     }
 
     /// Returns an iterator over the modes of this grammar.

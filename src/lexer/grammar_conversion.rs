@@ -1,5 +1,5 @@
 use super::{SymbolTable, Tree};
-use crate::grammar::Grammar;
+use crate::grammar::Production;
 use maplit::btreeset;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
@@ -10,7 +10,7 @@ use std::str::Chars;
 ///Operators for a regex (and an operand, ID).
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(clippy::upper_case_acronyms)]
-enum OpType<'a> {
+pub(super) enum OpType<'a> {
     /// Kleenee star `*`.
     KLEENE,
     /// Question mark `?`.
@@ -81,7 +81,7 @@ impl std::fmt::Display for OpType<'_> {
 /// Extended Literal: exacltly like RegexOp but does not depend on the string slice
 /// (because every set has been expanded to a single letter).
 #[derive(PartialEq, Debug, Clone)]
-enum ExLiteral<'a, T> {
+pub(super) enum ExLiteral<'a, T> {
     Value(BTreeSet<T>),
     AnyValue,
     Operation(OpType<'a>),
@@ -137,16 +137,19 @@ type PrecedenceTree<'a> = Tree<OpType<'a>>;
 /// Parse tree for the regex with only *, AND, OR. Thus removing + or ? or ^.
 pub(super) type CanonicalTree = Tree<Literal>;
 
-/// Generates a canonical tree from the lexer productions of a grammar.
+/// Generates a tree with expanded literals ([abcde] instead of [a-e]).
 ///
-/// A canonical tree is a tree with only * & and | operations. The SymbolTable contains the
-/// alphabet of the grammar.
+/// Returns also the entire alphabet of the grammar.
 ///
 /// Returns also if each production is non-greedy
-pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolTable, Vec<bool>) {
+pub(super) fn parse_trees<'a, I>(
+    terminals: I,
+) -> (Vec<Tree<ExLiteral<'a, char>>>, SymbolTable, Vec<bool>)
+where
+    I: Iterator<Item = &'a Production>,
+{
     // Convert a grammar into a series of parse trees, then expand the sets
-    let parse_trees = grammar
-        .iter_term()
+    let parse_trees = terminals
         .map(|terminal| terminal.body.as_ref())
         .map(gen_precedence_tree)
         .map(expand_literals)
@@ -159,11 +162,7 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
         .collect::<Vec<_>>();
     let symtable = SymbolTable::new(&alphabet);
     // convert the parse tree into a canonical one (not ? or +, only *)
-    let canonical_trees = parse_trees
-        .into_iter()
-        .map(|x| canonicalise(x, &symtable))
-        .collect::<Vec<_>>();
-    (canonical_trees, symtable, nongreedy)
+    (parse_trees, symtable, nongreedy)
 }
 
 /// Creates a parse tree with correct precedence given the input regex.
@@ -508,7 +507,7 @@ fn is_nongreedy(node: &Tree<ExLiteral<char>>) -> bool {
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
 /// **note** that non-greediness of a rule is removed by this function, so it must be recorded
 /// somewhere else beforehand.
-fn canonicalise(node: Tree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
+pub(super) fn canonicalise(node: Tree<ExLiteral<char>>, symtable: &SymbolTable) -> CanonicalTree {
     match node.value {
         ExLiteral::Value(i) => create_literal_node(symtable.symbols_ids(&i), symtable.epsilon_id()),
         ExLiteral::AnyValue => create_literal_node(symtable.any_value_id(), symtable.epsilon_id()),

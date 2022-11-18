@@ -1,6 +1,6 @@
 use clap::Parser;
 use wisent::grammar::Grammar;
-use wisent::lexer::Dfa;
+use wisent::lexer::MultiDfa;
 
 /// Lexer generator using the ANTLR grammar syntax
 ///
@@ -16,7 +16,7 @@ struct Args {
 fn main() {
     let args = Args::parse();
     if let Ok(g) = Grammar::parse_grammar(&args.input) {
-        let dfa = Dfa::new(&g);
+        let dfa = MultiDfa::new(&g);
         let json = serde_json::to_string(&dfa).expect("Could not serialize the generated DFA");
         println!("{}", json);
     } else {

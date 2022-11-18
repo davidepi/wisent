@@ -1,4 +1,4 @@
-use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
+use super::grammar_conversion::{canonicalise, parse_trees, CanonicalTree, Literal};
 use super::{GraphvizDot, SymbolTable, Tree};
 use crate::grammar::Grammar;
 use maplit::btreeset;
@@ -6,16 +6,116 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
+use std::ops::Index;
 
 /// Bit indicating a non-greedy production
 const NG_FLAG: u32 = 0x80000000;
+
+///
+/// # Modes
+/// This struct support a multiple modes (context), by wrapping together multiple transtion tables.
+/// For this reason, every move in the DFA requires specifying the current mode. The default mode
+/// has always index 0.
+///
+/// If the mode does not exist in the current DFA, the function will panic. This is expected
+/// behaviour by design: the DFA is supposed to be used by a simulator, and invocations with wrong
+/// modes should *NOT* happen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiDfa {
+    /// Contains the various transition tables, one for each mode.
+    /// At least one with index 0 is guaranteed to exist.
+    tts: Vec<Dfa>,
+    /// Associates an unique ID to each read lexeme. Every ID is then associated with a transition.
+    symtable: SymbolTable,
+}
+
+impl Default for MultiDfa {
+    fn default() -> Self {
+        Self {
+            tts: vec![Dfa::default()],
+            symtable: Default::default(),
+        }
+    }
+}
+
+impl Index<usize> for MultiDfa {
+    type Output = Dfa;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.tts[index]
+    }
+}
+
+impl MultiDfa {
+    /// Constructs the DFAs for a given Grammar.
+    ///
+    /// The DFAs are constructed directly from the regex parse tree without using an
+    /// intermediate NFA.
+    ///
+    /// The generated DFAs have the minimum number of states required to recognized the requested
+    /// language.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::MultiDfa;
+    /// let grammar = Grammar::new(
+    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
+    ///     &[],
+    /// );
+    /// let dfa = MultiDfa::new(&grammar);
+    /// ```
+    pub fn new(grammar: &Grammar) -> Self {
+        let modes = grammar.len_modes();
+        let mut trees = Vec::with_capacity(modes);
+        let mut symtables = Vec::with_capacity(modes);
+        let mut tts = Vec::with_capacity(modes);
+        for mode in grammar.iter_modes() {
+            let terminals = grammar.iter_term_in_mode(mode);
+            let (parse_tree, symtable, nongreedy) = parse_trees(terminals);
+            trees.push((parse_tree, nongreedy));
+            symtables.push(symtable);
+        }
+        let joined_symtable = SymbolTable::join(&symtables);
+        for (parse_trees, nongreedy) in trees {
+            let canonical_trees = parse_trees
+                .into_iter()
+                .map(|pt| canonicalise(pt, &joined_symtable))
+                .collect::<Vec<_>>();
+            let tt = Dfa::new(canonical_trees, &joined_symtable, nongreedy);
+            tts.push(tt);
+        }
+        Self {
+            tts,
+            symtable: joined_symtable,
+        }
+    }
+
+    /// Returns the amount of nodes in this DFA.
+    pub fn modes(&self) -> usize {
+        self.tts.len()
+    }
+
+    /// Returns the Dfa for the given mode, None if the mode does not exist.
+    pub fn dfa(&self, mode: usize) -> Option<&Dfa> {
+        self.tts.get(mode)
+    }
+
+    /// Returns the symbol table associated with the DFAs in this struct.
+    pub fn symbol_table(&self) -> &SymbolTable {
+        &self.symtable
+    }
+}
 
 /// A Deterministic Finite Automaton for lexical analysis.
 ///
 /// A DFA is an automaton where each state has a single transaction for a given input symbol, and
 /// no transactions on empty symbols (ϵ-moves).
 ///
-/// An example of DFA recognizing the language `a|b*` is the following:
+/// In this crate, a DFA can not be constructed directly, but must be interfaced by a [`MultiDfa`]
+/// to properly support multi-modes lexers (e.g. ANTLR modes or flex contextes).
+///
+/// An example of DFA recognizing the language `a|b+` is the following:
 ///
 /// ![DFA Example](../../../../doc/images/dfa.svg)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,20 +124,12 @@ pub struct Dfa {
     states_no: u32,
     /// Transition function: (node,symbol) -> node.
     transition: Vec<Vec<u32>>,
-    /// Set of symbols in the language.
-    alphabet: SymbolTable,
     /// Starting node.
     start: u32,
     /// Sink node.
     sink: u32,
     /// Accepted production for each node. u32::MAX if the node is not accepting.
     accept: Vec<u32>,
-}
-
-impl std::fmt::Display for Dfa {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DFA({})", self.states())
-    }
 }
 
 impl Default for Dfa {
@@ -48,31 +140,19 @@ impl Default for Dfa {
             sink: 0,
             transition: vec![vec![0]],
             accept: vec![u32::MAX],
-            alphabet: SymbolTable::default(),
         }
     }
 }
 
 impl Dfa {
-    /// Constructs a DFA given an input grammar.
-    ///
-    /// The DFA is constructed directly from the regex parse tree without using an intermediate NFA.
-    ///
-    /// The generated DFA has the minimum number of states required to recognized the requested
-    /// language.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::Dfa;
-    /// let grammar = Grammar::new(
-    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
-    ///     &[],
-    /// );
-    /// let dfa = Dfa::new(&grammar);
-    /// ```
-    pub fn new(grammar: &Grammar) -> Dfa {
-        let (canonical_trees, symtable, nongreedy) = canonical_trees(grammar);
+    /// Creates a new transition table from the given canonical trees (one per production) and
+    /// symbol table. The vector index correspond to the accepted production index.
+    /// The nongreedy array specifies if each production is nongreedy.
+    fn new(
+        canonical_trees: Vec<CanonicalTree>,
+        symtable: &SymbolTable,
+        nongreedy: Vec<bool>,
+    ) -> Dfa {
         if canonical_trees.is_empty() {
             // no production found, return default DFA
             Dfa::default()
@@ -82,7 +162,7 @@ impl Dfa {
             // build the dfa
             let big_dfa = direct_construction(merged_tree, symtable);
             // minimize the dfa
-            let mut dfa = min_dfa(big_dfa);
+            let mut dfa = min_dfa(symtable, big_dfa);
             // mark nongreedy productions
             for state in 0..dfa.states_no {
                 if let Some(prod) = dfa.accepting(state) {
@@ -103,9 +183,11 @@ impl Dfa {
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::Dfa;
+    /// # use wisent::lexer::MultiDfa;
+    /// const DEFAULT_MODE: usize = 0;
     /// let grammar = Grammar::empty();
-    /// let dfa = Dfa::new(&grammar);
+    /// let mdfa = MultiDfa::new(&grammar);
+    /// let dfa = mdfa.dfa(DEFAULT_MODE).unwrap();
     ///
     /// assert!(dfa.is_empty());
     /// ```
@@ -118,12 +200,14 @@ impl Dfa {
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::Dfa;
+    /// # use wisent::lexer::MultiDfa;
+    /// const DEFAULT_MODE: usize = 0;
     /// let grammar = Grammar::new(
     ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
     ///     &[],
     /// );
-    /// let dfa = Dfa::new(&grammar);
+    /// let mdfa = MultiDfa::new(&grammar);
+    /// let dfa = mdfa.dfa(DEFAULT_MODE).unwrap();
     ///
     /// assert_eq!(dfa.states(), 3);
     /// ```
@@ -136,11 +220,6 @@ impl Dfa {
         self.start
     }
 
-    /// Returns the symbol table associated with this DFA.
-    pub fn symbol_table(&self) -> &SymbolTable {
-        &self.alphabet
-    }
-
     /// Perform a move in the transition table of this DFA and returns the next state.
     ///
     /// Returns None if such a move is not possible
@@ -151,13 +230,15 @@ impl Dfa {
     /// # Examples
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::Dfa;
+    /// # use wisent::lexer::MultiDfa;
+    /// const DEFAULT_MODE: usize = 0;
     /// let grammar = Grammar::new(
     ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'").into()],
     ///     &[],
     /// );
-    /// let dfa = Dfa::new(&grammar);
-    /// let a_id = dfa.symbol_table().symbol_id('a');
+    /// let mdfa = MultiDfa::new(&grammar);
+    /// let dfa = mdfa.dfa(DEFAULT_MODE).unwrap();
+    /// let a_id = mdfa.symbol_table().symbol_id('a');
     /// let next = dfa.moove(dfa.start(), a_id);
     /// assert!(next.is_some());
     /// ```
@@ -178,14 +259,16 @@ impl Dfa {
     /// # Examples
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::Dfa;
+    /// # use wisent::lexer::MultiDfa;
+    /// const DEFAULT_MODE: usize = 0;
     /// let grammar = Grammar::new(
     ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'").into()],
     ///     &[],
     /// );
-    /// let dfa = Dfa::new(&grammar);
+    /// let mdfa = MultiDfa::new(&grammar);
+    /// let dfa = mdfa.dfa(DEFAULT_MODE).unwrap();
     /// assert!(dfa.accepting(dfa.start()).is_none());
-    /// let a_id = dfa.symbol_table().symbol_id('a');
+    /// let a_id = mdfa.symbol_table().symbol_id('a');
     /// let next = dfa.moove(dfa.start(), a_id).unwrap();
     /// assert!(dfa.accepting(next).is_some());
     /// ```
@@ -210,53 +293,57 @@ impl Dfa {
     }
 }
 
-impl GraphvizDot for Dfa {
+impl GraphvizDot for MultiDfa {
     fn to_dot(&self) -> String {
-        let mut f = "digraph DFA {\n    start[shape=point];\n".to_string();
-        for state in 0..self.states_no {
-            if let Some(accepted_rule) = self.accepting(state) {
-                let acc_label = if self.non_greedy(state) {
-                    "ACC_NG"
-                } else {
-                    "ACC"
-                };
-                writeln!(
-                    f,
-                    "    {}[shape=doublecircle;xlabel=\"{}({})\"];",
-                    state, acc_label, accepted_rule
-                )
-                .unwrap();
-            }
-        }
-        writeln!(f, "    start->{};", &self.start).unwrap();
-        for state in 0..self.states_no {
-            // group labels together
-            let mut transitions = vec![String::new(); self.states_no as usize];
-            for symbol in 0..self.alphabet.ids() {
-                let dst = self.transition[state as usize][symbol as usize];
-                if dst != self.sink {
-                    let symbol_label = self
-                        .alphabet
-                        .label(symbol)
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('\t', "<TAB>")
-                        .replace('\n', "<LF>")
-                        .replace('\r', "<CR>")
-                        .replace(' ', "<SPACE>");
-                    transitions[dst as usize].push_str(&symbol_label);
+        let mut f = String::new();
+        for (i, dfa) in self.tts.iter().enumerate() {
+            writeln!(f, "digraph DFA{} {{\n    start[shape=point];", i).unwrap();
+            for state in 0..dfa.states_no {
+                if let Some(accepted_rule) = dfa.accepting(state) {
+                    let acc_label = if dfa.non_greedy(state) {
+                        "ACC_NG"
+                    } else {
+                        "ACC"
+                    };
+                    writeln!(
+                        f,
+                        "    {}[shape=doublecircle;xlabel=\"{}({})\"];",
+                        state, acc_label, accepted_rule
+                    )
+                    .unwrap();
                 }
             }
-            // print grouped labels
-            for dst in 0..self.states_no {
-                let label = &transitions[dst as usize];
-                if !label.is_empty() {
-                    // !empty = not sink
-                    writeln!(f, "    {}->{}[label=\"{}\"];", state, dst, label).unwrap();
+            writeln!(f, "    start->{};", &dfa.start).unwrap();
+            for state in 0..dfa.states_no {
+                // group labels together
+                let mut transitions = vec![String::new(); dfa.states_no as usize];
+                for symbol in 0..self.symtable.ids() {
+                    let dst = dfa.transition[state as usize][symbol as usize];
+                    if dst != dfa.sink {
+                        let symbol_label = self
+                            .symtable
+                            .label(symbol)
+                            .replace('\\', "\\\\")
+                            .replace('"', "\\\"")
+                            .replace('\t', "<TAB>")
+                            .replace('\n', "<LF>")
+                            .replace('\r', "<CR>")
+                            .replace(' ', "<SPACE>");
+                        transitions[dst as usize].push_str(&symbol_label);
+                    }
+                }
+                // print grouped labels
+                for dst in 0..dfa.states_no {
+                    let label = &transitions[dst as usize];
+                    if !label.is_empty() {
+                        // !empty = not sink
+                        writeln!(f, "    {}->{}[label=\"{}\"];", state, dst, label).unwrap();
+                    }
                 }
             }
+            f.push('}');
+            f.push('\n');
         }
-        f.push('}');
         f
     }
 }
@@ -303,7 +390,7 @@ struct DCHelper {
 /// Refers to "Compilers, principle techniques and tools" of A.Aho et al. (p.179 on 2nd edition).
 ///
 /// Guaranteed to have a move on every symbol for every node.
-fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
+fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
     let helper = build_dc_helper(&node, 0, symtable.epsilon_id());
     let mut indices = vec![symtable.epsilon_id(); (helper.value.index + 1) as usize];
     let mut followpos = vec![BTreeSet::new(); (helper.value.index + 1) as usize];
@@ -384,7 +471,6 @@ fn direct_construction(node: CanonicalTree, symtable: SymbolTable) -> Dfa {
         states_no: index,
         start: 0,
         transition,
-        alphabet: symtable,
         accept,
         sink,
     }
@@ -525,7 +611,7 @@ fn dc_assign_index_to_literal(
 ///
 /// Again the source of this algorithm is "Compilers, principle techniques and tools" of
 /// A.Aho et al. (p.180 on 2nd edition).
-fn min_dfa(dfa: Dfa) -> Dfa {
+fn min_dfa(symtable: &SymbolTable, dfa: Dfa) -> Dfa {
     let mut partitions = init_partitions(&dfa);
     let mut positions = FxHashMap::default();
     for (partition_index, partition) in partitions.iter().enumerate() {
@@ -537,7 +623,7 @@ fn min_dfa(dfa: Dfa) -> Dfa {
         let mut old_partitions = Vec::new();
         let mut new_partitions = Vec::new();
         for partition in partitions {
-            let split = split_partition(partition, &positions, &dfa);
+            let split = split_partition(partition, &positions, symtable, &dfa);
             old_partitions.push(split.0);
             if !split.1.is_empty() {
                 new_partitions.push(split.1);
@@ -558,7 +644,7 @@ fn min_dfa(dfa: Dfa) -> Dfa {
             partitions = old_partitions;
         }
     }
-    remap(partitions, positions, dfa)
+    remap(partitions, positions, symtable, dfa)
 }
 
 /// Part of the min DFA algorithm:
@@ -592,11 +678,12 @@ fn init_partitions(dfa: &Dfa) -> Vec<FxHashSet<u32>> {
 fn split_partition(
     partition: FxHashSet<u32>,
     position: &FxHashMap<u32, u32>,
+    symtable: &SymbolTable,
     dfa: &Dfa,
 ) -> (FxHashSet<u32>, FxHashSet<u32>) {
     let mut split = FxHashSet::default();
     if partition.len() > 1 {
-        for symbol_id in 0..dfa.alphabet.ids() {
+        for symbol_id in 0..symtable.ids() {
             let mut iter = partition.iter();
             let first = *iter.next().unwrap();
             let expected_target = *position
@@ -622,7 +709,12 @@ fn split_partition(
 
 /// Given the final set of partitions rewrites the transition table in order to get the efficient
 /// one.
-fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: Dfa) -> Dfa {
+fn remap(
+    partitions: Vec<FxHashSet<u32>>,
+    positions: FxHashMap<u32, u32>,
+    symtable: &SymbolTable,
+    dfa: Dfa,
+) -> Dfa {
     //first record in which partitions is every node
     let mut new_trans = FxHashMap::default();
     let mut accept_map = FxHashMap::default();
@@ -636,7 +728,7 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
     }
     //remap transitions
     for node in 0..dfa.states_no {
-        for symbol in 0..dfa.alphabet.ids() {
+        for symbol in 0..symtable.ids() {
             let new_src = *positions.get(&node).unwrap();
             let old_dst = dfa.transition[node as usize][symbol as usize];
             let new_dst = *positions.get(&old_dst).unwrap();
@@ -671,7 +763,7 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
     start = remapped_indices[start as usize];
     let sink = (partitions.len() - broken_partitions.len()) as u32;
     let states_no = sink + 1;
-    let mut transition = vec![vec![sink; dfa.alphabet.ids() as usize]; states_no as usize];
+    let mut transition = vec![vec![sink; symtable.ids() as usize]; states_no as usize];
     for ((state, symbol), next) in new_trans {
         if !broken_partitions.contains(&state) && !broken_partitions.contains(&next) {
             let remapped_state = remapped_indices[state as usize];
@@ -692,7 +784,6 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
     Dfa {
         states_no,
         transition,
-        alphabet: dfa.alphabet,
         accept,
         start,
         sink,
@@ -704,8 +795,8 @@ mod tests {
     use super::{direct_construction, merge_regex_trees};
     use crate::grammar::{Grammar, Production};
     use crate::lexer::dfa::min_dfa;
-    use crate::lexer::grammar_conversion::canonical_trees;
-    use crate::lexer::Dfa;
+    use crate::lexer::grammar_conversion::{canonicalise, parse_trees};
+    use crate::lexer::MultiDfa;
 
     #[test]
     fn dfa_conflicts_resolution() {
@@ -718,7 +809,8 @@ mod tests {
             ],
             &[],
         );
-        let dfa1 = Dfa::new(&grammar1);
+        let mdfa1 = MultiDfa::new(&grammar1);
+        let dfa1 = mdfa1.dfa(0).unwrap();
         let grammar2 = Grammar::new(
             &[
                 ("ASTARBPLUS", "'a'*'b'+").into(),
@@ -727,7 +819,8 @@ mod tests {
             ],
             &[],
         );
-        let dfa2 = Dfa::new(&grammar2);
+        let mdfa2 = MultiDfa::new(&grammar2);
+        let dfa2 = mdfa2.dfa(0).unwrap();
         assert!(!dfa1.is_empty());
         assert_eq!(dfa1.states(), 6);
         assert!(!dfa2.is_empty());
@@ -738,7 +831,8 @@ mod tests {
     fn dfa_direct_construction_no_sink() {
         let terminal = Production::from(("PROD1", "('a'|'b')*'abb'"));
         let grammar = Grammar::new(&[terminal], &[]);
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 4);
     }
@@ -749,7 +843,8 @@ mod tests {
             &[("DIGIT", "[0-9]").into(), ("NUMBER", "[0-9]+").into()],
             &[],
         );
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 3);
     }
@@ -763,14 +858,16 @@ mod tests {
             ],
             &[],
         );
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert_eq!(dfa.states(), 4);
     }
 
     #[test]
     fn dfa_direct_construction_start_accepting() {
         let grammar = Grammar::new(&[("ABSTAR", "'ab'*").into()], &[]);
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 2);
     }
@@ -779,7 +876,8 @@ mod tests {
     fn dfa_direct_construction_single_acc() {
         let terminal = Production::from(("PROD1", "(('a'*'b')|'c')?'c'"));
         let grammar = Grammar::new(&[terminal], &[]);
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 5);
     }
@@ -790,7 +888,8 @@ mod tests {
             &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
             &[],
         );
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
         assert_eq!(dfa.states(), 3);
     }
@@ -798,7 +897,8 @@ mod tests {
     #[test]
     fn dfa_direct_construction_empty() {
         let grammar = Grammar::empty();
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.is_empty());
     }
 
@@ -812,10 +912,14 @@ mod tests {
                 .into()],
             &[],
         );
-        let (canonical_trees, symtable, _) = canonical_trees(&grammar);
+        let (parse_trees, symtable, _) = parse_trees(grammar.iter_term());
+        let canonical_trees = parse_trees
+            .into_iter()
+            .map(|pt| canonicalise(pt, &symtable))
+            .collect::<Vec<_>>();
         let merged_tree = merge_regex_trees(canonical_trees);
-        let big_dfa = direct_construction(merged_tree, symtable);
-        let min_dfa = min_dfa(big_dfa.clone());
+        let big_dfa = direct_construction(merged_tree, &symtable);
+        let min_dfa = min_dfa(&symtable, big_dfa.clone());
         assert_ne!(big_dfa.states(), min_dfa.states());
         assert_eq!(min_dfa.states(), 4);
     }
@@ -830,12 +934,16 @@ mod tests {
                 .into()],
             &[],
         );
-        let (canonical_trees, symtable, _) = canonical_trees(&grammar);
+        let (parse_trees, symtable, _) = parse_trees(grammar.iter_term());
+        let canonical_trees = parse_trees
+            .into_iter()
+            .map(|pt| canonicalise(pt, &symtable))
+            .collect::<Vec<_>>();
         let merged_tree = merge_regex_trees(canonical_trees);
-        let big_dfa = direct_construction(merged_tree, symtable);
+        let big_dfa = direct_construction(merged_tree, &symtable);
         assert_eq!(big_dfa.states_no as usize, big_dfa.transition.len());
         assert_eq!(big_dfa.states_no as usize, big_dfa.accept.len());
-        let min_dfa = min_dfa(big_dfa);
+        let min_dfa = min_dfa(&symtable, big_dfa);
         assert_eq!(min_dfa.states_no as usize, min_dfa.transition.len());
         assert_eq!(min_dfa.states_no as usize, min_dfa.accept.len());
     }
@@ -844,10 +952,11 @@ mod tests {
     fn dfa_moves() {
         let terminal = Production::from(("PROD1", "'c'*'ab'"));
         let grammar = Grammar::new(&[terminal], &[]);
-        let dfa = Dfa::new(&grammar);
-        let a = dfa.symbol_table().symbol_id('a');
-        let b = dfa.symbol_table().symbol_id('b');
-        let c = dfa.symbol_table().symbol_id('c');
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
+        let a = mdfa.symbol_table().symbol_id('a');
+        let b = mdfa.symbol_table().symbol_id('b');
+        let c = mdfa.symbol_table().symbol_id('c');
         assert_eq!(dfa.moove(dfa.start(), c).unwrap(), dfa.start());
         assert!(dfa.moove(dfa.start(), b).is_none());
         assert_ne!(dfa.moove(dfa.start(), a).unwrap(), dfa.start());
@@ -857,10 +966,11 @@ mod tests {
     fn dfa_accepting_single() {
         let terminal = Production::from(("PROD1", "'a'"));
         let grammar = Grammar::new(&[terminal], &[]);
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
         let next = dfa
-            .moove(dfa.start(), dfa.symbol_table().symbol_id('a'))
+            .moove(dfa.start(), mdfa.symbol_table().symbol_id('a'))
             .unwrap();
         assert_eq!(dfa.accepting(next).unwrap(), 0);
     }
@@ -871,14 +981,15 @@ mod tests {
             &[("GREEDY", "'a'+").into(), ("NON_GREEDY", "'b'+?").into()],
             &[],
         );
-        let dfa = Dfa::new(&grammar);
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
         assert!(dfa.non_greedy(dfa.start()));
         let greedy_state = dfa
-            .moove(dfa.start(), dfa.symbol_table().symbol_id('a'))
+            .moove(dfa.start(), mdfa.symbol_table().symbol_id('a'))
             .unwrap();
         let ng_state = dfa
-            .moove(dfa.start(), dfa.symbol_table().symbol_id('b'))
+            .moove(dfa.start(), mdfa.symbol_table().symbol_id('b'))
             .unwrap();
         assert!(dfa.non_greedy(ng_state));
         assert!(!dfa.non_greedy(greedy_state));

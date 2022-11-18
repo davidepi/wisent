@@ -10,7 +10,7 @@ mod dfa;
 mod grammar_conversion;
 mod simulator;
 
-pub use self::dfa::Dfa;
+pub use self::dfa::{Dfa, MultiDfa};
 pub use self::simulator::{tokenize, DfaSimulator, IncompleteParse, Token};
 
 /// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
@@ -20,12 +20,12 @@ pub trait GraphvizDot {
     /// Implementation of the [`Dfa`] class:
     /// ```
     /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::{Dfa, GraphvizDot};
+    /// # use wisent::lexer::{MultiDfa, GraphvizDot};
     /// let grammar = Grammar::new(
     ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
     ///     &[],
     /// );
-    /// let dfa = Dfa::new(&grammar);
+    /// let dfa = MultiDfa::new(&grammar);
     /// dfa.to_dot();
     /// ```
     fn to_dot(&self) -> String;
