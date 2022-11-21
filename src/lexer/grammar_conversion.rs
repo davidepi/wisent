@@ -1,6 +1,7 @@
 use super::{SymbolTable, Tree};
 use crate::grammar::Grammar;
 use maplit::btreeset;
+use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::iter::Peekable;
@@ -155,8 +156,8 @@ pub(super) fn canonical_trees(grammar: &Grammar) -> (Vec<CanonicalTree>, SymbolT
     let alphabet = parse_trees
         .iter()
         .flat_map(alphabet_from_node)
-        .collect::<BTreeSet<_>>();
-    let symtable = SymbolTable::new(alphabet);
+        .collect::<Vec<_>>();
+    let symtable = SymbolTable::new(&alphabet);
     // convert the parse tree into a canonical one (not ? or +, only *)
     let canonical_trees = parse_trees
         .into_iter()
@@ -588,8 +589,8 @@ fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
 }
 
 /// Returns the set of symbols used in a given tree.
-fn alphabet_from_node(root: &Tree<ExLiteral<char>>) -> BTreeSet<BTreeSet<char>> {
-    let mut ret = BTreeSet::new();
+fn alphabet_from_node(root: &Tree<ExLiteral<char>>) -> FxHashSet<BTreeSet<char>> {
+    let mut ret = FxHashSet::default();
     let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {
         match &node.value {
@@ -660,8 +661,8 @@ mod tests {
     fn canonical_tree_any() {
         let expr = "('a'*.)*'a'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = alphabet_from_node(&tree);
-        let symtable = SymbolTable::new(alphabet);
+        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&[*[&[*[0],|[0,1]]],0]";
         assert_eq!(as_str(&canonical_tree), expected);
@@ -671,8 +672,8 @@ mod tests {
     fn canonical_tree_plus() {
         let expr = "('a'*'b')+'a'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = alphabet_from_node(&tree);
-        let symtable = SymbolTable::new(alphabet);
+        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&[&[&[*[0],1],*[&[*[0],1]]],0]";
         assert_eq!(as_str(&canonical_tree), expected);
@@ -682,8 +683,8 @@ mod tests {
     fn canonical_tree_qm() {
         let expr = "('a'*'b')?'a'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = alphabet_from_node(&tree);
-        let symtable = SymbolTable::new(alphabet);
+        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&[|[3,&[*[0],1]],0]";
         assert_eq!(as_str(&canonical_tree), expected);
@@ -693,8 +694,8 @@ mod tests {
     fn canonical_tree_neg() {
         let expr = "~[ab]('a'|'c')";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = alphabet_from_node(&tree);
-        let symtable = SymbolTable::new(alphabet);
+        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&[|[2,3],|[0,2]]";
         assert_eq!(as_str(&canonical_tree), expected);
@@ -704,8 +705,8 @@ mod tests {
     fn canonical_tree_double_negation() {
         let expr = "~(~[a-c])|'d'";
         let tree = expand_literals(gen_precedence_tree(expr));
-        let alphabet = alphabet_from_node(&tree);
-        let symtable = SymbolTable::new(alphabet);
+        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_tree = canonicalise(tree, &symtable);
         let expected = "|[0,1]";
         assert_eq!(as_str(&canonical_tree), expected);
@@ -716,13 +717,17 @@ mod tests {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
         let expr_greedy = "'a'.*'a'";
         let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
-        let alphabet_greedy = alphabet_from_node(&tree_greedy);
-        let symtable_greedy = SymbolTable::new(alphabet_greedy);
+        let alphabet_greedy = alphabet_from_node(&tree_greedy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let symtable_greedy = SymbolTable::new(&alphabet_greedy);
         let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
         let expr_nongreedy = "'a'.*?'a'";
         let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
-        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy);
-        let symtable_nongreedy = SymbolTable::new(alphabet_nongreedy);
+        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
         let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
@@ -732,13 +737,17 @@ mod tests {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
         let expr_greedy = "'a'.+'a'";
         let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
-        let alphabet_greedy = alphabet_from_node(&tree_greedy);
-        let symtable_greedy = SymbolTable::new(alphabet_greedy);
+        let alphabet_greedy = alphabet_from_node(&tree_greedy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let symtable_greedy = SymbolTable::new(&alphabet_greedy);
         let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
         let expr_nongreedy = "'a'.+?'a'";
         let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
-        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy);
-        let symtable_nongreedy = SymbolTable::new(alphabet_nongreedy);
+        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
         let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
@@ -748,13 +757,17 @@ mod tests {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
         let expr_greedy = "'a'.?'a'";
         let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
-        let alphabet_greedy = alphabet_from_node(&tree_greedy);
-        let symtable_greedy = SymbolTable::new(alphabet_greedy);
+        let alphabet_greedy = alphabet_from_node(&tree_greedy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let symtable_greedy = SymbolTable::new(&alphabet_greedy);
         let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
         let expr_nongreedy = "'a'.??'a'";
         let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
-        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy);
-        let symtable_nongreedy = SymbolTable::new(alphabet_nongreedy);
+        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
         let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }

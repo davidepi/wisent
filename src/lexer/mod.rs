@@ -105,7 +105,7 @@ impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
 /// no other productions). So, each letter `'a'` in the input can be converted to a number,
 /// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively reducing
 /// the possible inputs to two single values instead of 26.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
     table: FxHashMap<char, u32>,
@@ -116,16 +116,6 @@ pub struct SymbolTable {
 impl std::fmt::Debug for SymbolTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "SymbolTable{{ {:?} }}", self.reverse)
-    }
-}
-
-impl Default for SymbolTable {
-    fn default() -> Self {
-        let reverse = FxHashMap::default();
-        SymbolTable {
-            table: FxHashMap::default(),
-            reverse,
-        }
     }
 }
 
@@ -153,13 +143,12 @@ impl SymbolTable {
     /// # use wisent::lexer::SymbolTable;
     /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
     /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
+    /// let symbol = SymbolTable::new(&[abc, bcd]);
     ///
     /// assert_ne!(symbol.symbol_id('a'), symbol.symbol_id('d'));
     /// assert_eq!(symbol.symbol_id('b'), symbol.symbol_id('c'));
     /// ```
-    pub fn new(symbols: BTreeSet<BTreeSet<char>>) -> SymbolTable {
+    pub fn new(symbols: &[BTreeSet<char>]) -> SymbolTable {
         // Refinement is done by taking a set `A` and comparing against all others (called `B`).
         // Three new sets are created: `A/(A∩B)`, `B/(A∩B)` and `A∩B`. If  `A/(A∩B)` = `A∩B`
         // (so the original is unmodified) only the new B set is added to the next processing list
@@ -167,7 +156,7 @@ impl SymbolTable {
         // the next processing list BUT the current processing continues with the new A set.
         // when the current list is emptied, A is pushed to the done set, and the algorithm restarts
         // with the next processing list.
-        let mut todo = symbols.into_iter().collect::<Vec<_>>();
+        let mut todo = symbols.to_vec();
         let mut done = BTreeSet::new();
         while !todo.is_empty() {
             let mut set_a = todo.pop().unwrap();
@@ -214,6 +203,38 @@ impl SymbolTable {
         SymbolTable { table, reverse }
     }
 
+    /// Returns multiple symbol tables joined into a single one.
+    ///
+    /// This method can be used to merge multiple symbol tables into one. Note that the value
+    /// assigned to each symbol will be different between the joined version and the original one.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use std::collections::BTreeSet;
+    /// # use wisent::lexer::SymbolTable;
+    /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
+    /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
+    /// let sym_a = SymbolTable::new(&[abc]);
+    /// let sym_b = SymbolTable::new(&[bcd]);
+    ///
+    /// assert_eq!(sym_a.symbol_id('a'), sym_a.symbol_id('c'));
+    /// assert_eq!(sym_b.symbol_id('b'), sym_b.symbol_id('d'));
+    ///
+    /// let sym_joined = SymbolTable::join(&[sym_a, sym_b]);
+    ///
+    /// assert_ne!(sym_joined.symbol_id('a'), sym_joined.symbol_id('c'));
+    /// assert_ne!(sym_joined.symbol_id('b'), sym_joined.symbol_id('d'));
+    /// assert_eq!(sym_joined.symbol_id('b'), sym_joined.symbol_id('c'));
+    /// ```
+    pub fn join(tables: &[Self]) -> Self {
+        let sets = tables
+            .iter()
+            .flat_map(|st| st.reverse.values())
+            .cloned()
+            .collect::<Vec<_>>();
+        Self::new(&sets)
+    }
+
     /// Returns the ID of a character not in the alphabet.
     ///
     /// This is a special ID, not contained in the symbol table, that represents any character not
@@ -231,7 +252,7 @@ impl SymbolTable {
     /// and the NFA construction and simulation. As such, this method provides the epsilon value
     /// for the current symbol table.
     ///
-    /// This value is essentially and ID not used for any other symbol.
+    /// This value is essentially an ID not used for any other symbol.
     pub fn epsilon_id(&self) -> u32 {
         self.reverse.len() as u32 + 1
     }
@@ -248,8 +269,7 @@ impl SymbolTable {
     /// # use std::collections::BTreeSet;
     /// # use wisent::lexer::SymbolTable;
     /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
+    /// let symbol = SymbolTable::new(&[a]);
     ///
     /// assert_eq!(
     ///     symbol.any_value_id(),
@@ -277,8 +297,7 @@ impl SymbolTable {
     /// # use std::collections::BTreeSet;
     /// # use wisent::lexer::SymbolTable;
     /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
+    /// let symbol = SymbolTable::new(&[a]);
     ///
     /// assert_eq!(symbol.ids(), 2);
     /// ```
@@ -301,8 +320,7 @@ impl SymbolTable {
     /// # use wisent::lexer::SymbolTable;
     /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
     /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
+    /// let symbol = SymbolTable::new(&[abc, bcd]);
     ///
     /// let index_a = symbol.symbol_id('a');
     /// let index_not_in_table = symbol.symbol_id('ダ');
@@ -331,8 +349,7 @@ impl SymbolTable {
     /// # use wisent::lexer::SymbolTable;
     /// let abc = vec!['a', 'b', 'c'].into_iter().collect::<BTreeSet<_>>();
     /// let bcd = vec!['b', 'c', 'd'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![abc, bcd].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
+    /// let symbol = SymbolTable::new(&[abc, bcd]);
     ///
     /// let input_set = vec!['b', 'd'].into_iter().collect::<BTreeSet<_>>();
     /// let mut encoded = symbol.symbols_ids(&input_set).into_iter();
@@ -366,8 +383,7 @@ impl SymbolTable {
     /// # use std::collections::BTreeSet;
     /// # use wisent::lexer::SymbolTable;
     /// let a = vec!['a'].into_iter().collect::<BTreeSet<_>>();
-    /// let set = vec![a].into_iter().collect::<BTreeSet<_>>();
-    /// let symbol = SymbolTable::new(set);
+    /// let symbol = SymbolTable::new(&[a]);
     ///
     /// assert_eq!(symbol.label(0), 'a'.to_string());
     /// assert_eq!(symbol.label(symbol.not_in_alphabet_id()), '⊙'.to_string());
@@ -474,8 +490,7 @@ mod tests {
     #[test]
     fn symbol_table_single_set() {
         let set1 = btreeset! {'a'};
-        let set = btreeset! {set1};
-        let symbol = SymbolTable::new(set);
+        let symbol = SymbolTable::new(&[set1]);
         assert_eq!(*symbol.table.get(&'a').unwrap(), 0);
         assert_eq!(symbol.ids(), 2);
     }
@@ -488,8 +503,7 @@ mod tests {
         let set4 = btreeset! {'e', 'f', 'g', 'h'};
         let set5 = btreeset! {'h', 'a'};
         let set6 = btreeset! {'h', 'c'};
-        let set = btreeset! {set1, set2, set3, set4, set5, set6};
-        let symbol = SymbolTable::new(set);
+        let symbol = SymbolTable::new(&[set1, set2, set3, set4, set5, set6]);
         assert_eq!(symbol.symbol_id('f'), symbol.symbol_id('g'));
         assert_ne!(symbol.symbol_id('a'), symbol.symbol_id('b'));
     }
@@ -504,7 +518,7 @@ mod tests {
     fn symbol_table_character_outside_alphabet() {
         let set1 = btreeset! {'a', 'b', 'c'};
         let set2 = btreeset! {'b', 'c', 'd'};
-        let symbol = SymbolTable::new(btreeset! {set1, set2});
+        let symbol = SymbolTable::new(&[set1, set2]);
         assert_eq!(symbol.ids(), 4);
         assert_eq!(symbol.symbol_id('e'), symbol.not_in_alphabet_id());
     }
@@ -514,8 +528,7 @@ mod tests {
         let set1 = btreeset! {'a', 'b', 'c', 'd', 'e', 'f', 'g',};
         let set2 = btreeset! {'d', 'e', 'f'};
         let set3 = btreeset! {'f','g','h'};
-        let set = btreeset! {set1, set2, set3};
-        let symbol = SymbolTable::new(set);
+        let symbol = SymbolTable::new(&[set1, set2, set3]);
         assert_ne!(symbol.symbol_id('f'), symbol.symbol_id('g'));
         assert_eq!(symbol.symbol_id('d'), symbol.symbol_id('e'));
 
@@ -526,12 +539,32 @@ mod tests {
     }
 
     #[test]
+    fn symbol_table_join() {
+        let set1 = btreeset! {'a', 'b', 'c'};
+        let set2 = btreeset! {'b', 'c', 'd'};
+        let set3 = btreeset! {'d', 'e'};
+        let set4 = btreeset! {'e', 'f', 'g', 'h'};
+        let set5 = btreeset! {'h', 'a'};
+        let set6 = btreeset! {'h', 'c'};
+
+        let sta = SymbolTable::new(&[set1, set3, set4, set5]); // [b, c] [d, e] [e, f, g] [h] [a]
+        let stb = SymbolTable::new(&[set2, set6]); // [b, d] [h] [c]
+        assert_eq!(sta.symbol_id('b'), sta.symbol_id('c'));
+        assert_eq!(sta.symbol_id('f'), sta.symbol_id('g'));
+        assert_eq!(stb.symbol_id('b'), stb.symbol_id('d'));
+        let joined = SymbolTable::join(&[sta, stb]);
+
+        assert_ne!(joined.symbol_id('b'), joined.symbol_id('c'));
+        assert_ne!(joined.symbol_id('b'), joined.symbol_id('d'));
+        assert_eq!(joined.symbol_id('f'), joined.symbol_id('g'));
+    }
+
+    #[test]
     fn symbol_table_serialize_deserialize() -> Result<(), ParseError> {
         let set1 = btreeset! {'a', 'b', 'c'};
         let set2 = btreeset! {'b', 'c', 'd'};
         let set3 = btreeset! {'d', 'e'};
-        let set = btreeset! {set1, set2, set3};
-        let symbol = SymbolTable::new(set);
+        let symbol = SymbolTable::new(&[set1, set2, set3]);
         let serialized = symbol.as_bytes();
         let deserialized = SymbolTable::from_bytes(&serialized)?;
         assert_eq!(symbol, deserialized);
