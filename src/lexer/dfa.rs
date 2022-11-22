@@ -1,6 +1,5 @@
 use super::grammar_conversion::{canonical_trees, CanonicalTree, Literal};
 use super::{GraphvizDot, SymbolTable, Tree};
-use crate::error::ParseError;
 use crate::grammar::Grammar;
 use maplit::btreeset;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -94,70 +93,6 @@ impl Dfa {
             }
             dfa
         }
-    }
-
-    /// Serializes the current DFA into a vector of bytes.
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut retval = Vec::new();
-        let symtable = self.alphabet.as_bytes();
-        retval.extend(u32::to_le_bytes(self.states_no));
-        retval.extend(u32::to_le_bytes(self.start));
-        retval.extend(u32::to_le_bytes(self.sink));
-        retval.extend(u32::to_le_bytes(symtable.len() as u32));
-        retval.extend(symtable);
-        // single loop for both transition table and accept table.
-        for node in 0..self.states_no {
-            for symbol in 0..self.alphabet.ids() {
-                retval.extend(u32::to_le_bytes(
-                    self.transition[node as usize][symbol as usize],
-                ));
-            }
-            retval.extend(u32::to_le_bytes(self.accept[node as usize]));
-        }
-        retval
-    }
-
-    /// Deserializes a DFA from a slice of bytes.
-    pub fn from_bytes(v: &[u8]) -> Result<Self, ParseError> {
-        let malformed_err = "malformed dfa";
-        let parse_u32 = |i: &mut usize| -> Result<u32, ParseError> {
-            let bytes: [u8; 4] = v
-                .get(*i..*i + 4)
-                .ok_or_else(|| ParseError::DeserializeError {
-                    message: malformed_err.to_string(),
-                })?
-                .try_into()
-                .map_err(|_| ParseError::DeserializeError {
-                    message: malformed_err.to_string(),
-                })?;
-            *i += 4;
-            Ok(u32::from_le_bytes(bytes))
-        };
-        let mut i = 0;
-        let states_no = parse_u32(&mut i)?;
-        let start = parse_u32(&mut i)?;
-        let sink = parse_u32(&mut i)?;
-        let symtable_len = parse_u32(&mut i)? as usize;
-        let symtable = SymbolTable::from_bytes(&v[i..i + symtable_len])?;
-        i += symtable_len;
-        let mut transition = Vec::with_capacity(states_no as usize);
-        let mut accept = Vec::with_capacity(states_no as usize);
-        for _ in 0..states_no {
-            let mut moves = Vec::with_capacity(symtable.ids() as usize);
-            for _ in 0..symtable.ids() {
-                moves.push(parse_u32(&mut i)?);
-            }
-            transition.push(moves);
-            accept.push(parse_u32(&mut i)?);
-        }
-        Ok(Dfa {
-            states_no,
-            transition,
-            alphabet: symtable,
-            start,
-            sink,
-            accept,
-        })
     }
 
     /// Returns true if the DFA is empty.
@@ -767,7 +702,6 @@ fn remap(partitions: Vec<FxHashSet<u32>>, positions: FxHashMap<u32, u32>, dfa: D
 #[cfg(test)]
 mod tests {
     use super::{direct_construction, merge_regex_trees};
-    use crate::error::ParseError;
     use crate::grammar::{Grammar, Production};
     use crate::lexer::dfa::min_dfa;
     use crate::lexer::grammar_conversion::canonical_trees;
@@ -929,22 +863,6 @@ mod tests {
             .moove(dfa.start(), dfa.symbol_table().symbol_id('a'))
             .unwrap();
         assert_eq!(dfa.accepting(next).unwrap(), 0);
-    }
-
-    #[test]
-    fn dfa_serialization() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("LONG1", "[a-c].?([b-d]?[e-g])*").into(),
-                ("LONG2", "[fg]+").into(),
-            ],
-            &[],
-        );
-        let dfa = Dfa::new(&grammar);
-        let serialized = dfa.as_bytes();
-        let deserialized = Dfa::from_bytes(&serialized)?;
-        assert_eq!(dfa, deserialized);
-        Ok(())
     }
 
     #[test]

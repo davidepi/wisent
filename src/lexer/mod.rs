@@ -1,4 +1,3 @@
-use crate::error::ParseError;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Iter;
@@ -409,81 +408,10 @@ impl SymbolTable {
     pub fn iter(&self) -> Iter<char, u32> {
         self.table.iter()
     }
-
-    /// Converts the current symbol table into an array of bytes.
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut retval = Vec::new();
-        for (index, chars) in &self.reverse {
-            retval.extend(u32::to_le_bytes(*index));
-            let all_symbols = chars.iter().collect::<String>();
-            let all_symbols_bytes = all_symbols.as_bytes();
-            retval.extend(u32::to_le_bytes(all_symbols_bytes.len() as u32));
-            retval.extend_from_slice(all_symbols_bytes);
-        }
-        retval
-    }
-
-    /// Contructs a symbol table from an array of bytes previously generated with
-    /// [SymbolTable::as_bytes].
-    pub fn from_bytes(v: &[u8]) -> Result<Self, ParseError> {
-        let malformed_err = "malformed symbol_table";
-        if !v.is_empty() {
-            let mut i = 0;
-            let mut table = FxHashMap::default();
-            let mut reverse = FxHashMap::default();
-            while i < v.len() {
-                let symbol_index_bytes: [u8; 4] = v
-                    .get(i..i + 4)
-                    .ok_or_else(|| ParseError::DeserializeError {
-                        message: malformed_err.to_string(),
-                    })?
-                    .try_into()
-                    .map_err(|_| ParseError::DeserializeError {
-                        message: malformed_err.to_string(),
-                    })?;
-                i += 4;
-                let symbol_index = u32::from_le_bytes(symbol_index_bytes);
-                let chars_len_bytes: [u8; 4] = v
-                    .get(i..i + 4)
-                    .ok_or_else(|| ParseError::DeserializeError {
-                        message: malformed_err.to_string(),
-                    })?
-                    .try_into()
-                    .map_err(|_| ParseError::DeserializeError {
-                        message: malformed_err.to_string(),
-                    })?;
-                i += 4;
-                let chars_len = u32::from_le_bytes(chars_len_bytes) as usize;
-                let string_bytes = v
-                    .get(i..i + chars_len)
-                    .ok_or_else(|| ParseError::DeserializeError {
-                        message: malformed_err.to_string(),
-                    })?
-                    .to_vec();
-                i += chars_len;
-                let symbol_set = String::from_utf8(string_bytes)
-                    .map_err(|_| ParseError::DeserializeError {
-                        message: malformed_err.to_string(),
-                    })?
-                    .chars()
-                    .collect::<BTreeSet<_>>();
-                symbol_set.iter().copied().for_each(|char| {
-                    table.insert(char, symbol_index);
-                });
-                reverse.insert(symbol_index, symbol_set);
-            }
-            Ok(SymbolTable { table, reverse })
-        } else {
-            Err(ParseError::DeserializeError {
-                message: "empty symbol table".to_string(),
-            })
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::error::ParseError;
     use crate::lexer::SymbolTable;
     use maplit::btreeset;
 
@@ -557,17 +485,5 @@ mod tests {
         assert_ne!(joined.symbol_id('b'), joined.symbol_id('c'));
         assert_ne!(joined.symbol_id('b'), joined.symbol_id('d'));
         assert_eq!(joined.symbol_id('f'), joined.symbol_id('g'));
-    }
-
-    #[test]
-    fn symbol_table_serialize_deserialize() -> Result<(), ParseError> {
-        let set1 = btreeset! {'a', 'b', 'c'};
-        let set2 = btreeset! {'b', 'c', 'd'};
-        let set3 = btreeset! {'d', 'e'};
-        let symbol = SymbolTable::new(&[set1, set2, set3]);
-        let serialized = symbol.as_bytes();
-        let deserialized = SymbolTable::from_bytes(&serialized)?;
-        assert_eq!(symbol, deserialized);
-        Ok(())
     }
 }
