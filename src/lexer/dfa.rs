@@ -1,7 +1,7 @@
 use super::grammar_conversion::{canonicalise, parse_trees, CanonicalTree, Literal};
 use super::{GraphvizDot, SymbolTable, Tree};
-use crate::grammar::Grammar;
-use maplit::btreeset;
+use crate::grammar::{Action, Grammar};
+use maplit::{btreeset, hashmap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -73,16 +73,20 @@ impl MultiDfa {
         for mode in grammar.iter_modes() {
             let terminals = grammar.iter_term_in_mode(mode);
             let (parse_tree, symtable, nongreedy) = parse_trees(terminals);
-            trees.push((parse_tree, nongreedy));
+            let actions = grammar
+                .iter_term_in_mode(mode)
+                .map(|prod| prod.actions.as_ref().cloned().unwrap_or_default())
+                .collect::<Vec<_>>();
+            trees.push((parse_tree, nongreedy, actions));
             symtables.push(symtable);
         }
         let joined_symtable = SymbolTable::join(&symtables);
-        for (parse_trees, nongreedy) in trees {
+        for (parse_trees, nongreedy, actions) in trees {
             let canonical_trees = parse_trees
                 .into_iter()
                 .map(|pt| canonicalise(pt, &joined_symtable))
                 .collect::<Vec<_>>();
-            let tt = Dfa::new(canonical_trees, &joined_symtable, nongreedy);
+            let tt = Dfa::new(canonical_trees, &joined_symtable, nongreedy, actions);
             tts.push(tt);
         }
         Self {
@@ -130,6 +134,12 @@ pub struct Dfa {
     sink: u32,
     /// Accepted production for each node. u32::MAX if the node is not accepting.
     accept: Vec<u32>,
+    /// Actions for the current DFA. This is the index of the `action` vector of a given state.
+    action_index: Vec<u32>,
+    /// Vector containing every possible action. Most actions would be an empty set, so this vector
+    /// contains every possibility, while the `action_index` variable contains the index of the
+    /// action for that particular state.
+    actions: Vec<BTreeSet<Action>>,
 }
 
 impl Default for Dfa {
@@ -140,6 +150,8 @@ impl Default for Dfa {
             sink: 0,
             transition: vec![vec![0]],
             accept: vec![u32::MAX],
+            action_index: vec![0],
+            actions: vec![BTreeSet::new()],
         }
     }
 }
@@ -152,6 +164,7 @@ impl Dfa {
         canonical_trees: Vec<CanonicalTree>,
         symtable: &SymbolTable,
         nongreedy: Vec<bool>,
+        actions: Vec<BTreeSet<Action>>,
     ) -> Dfa {
         if canonical_trees.is_empty() {
             // no production found, return default DFA
@@ -163,14 +176,30 @@ impl Dfa {
             let big_dfa = direct_construction(merged_tree, symtable);
             // minimize the dfa
             let mut dfa = min_dfa(symtable, big_dfa);
-            // mark nongreedy productions
+            // mark nongreedy productions and actions
+            let mut actions_map = hashmap! { BTreeSet::new() => 0 };
             for state in 0..dfa.states_no {
                 if let Some(prod) = dfa.accepting(state) {
                     if nongreedy[prod as usize] {
                         dfa.accept[state as usize] |= NG_FLAG;
                     }
+                    let next_value = actions_map.len();
+                    let action_idx = *actions_map
+                        .entry(actions[prod as usize].clone())
+                        .or_insert(next_value);
+                    dfa.action_index[state as usize] = action_idx as u32;
                 }
             }
+            // generate the actions vector
+            let mut reversed_map = actions_map
+                .into_iter()
+                .map(|(key, val)| (val, key))
+                .collect::<HashMap<_, _>>();
+            let mut actions = Vec::with_capacity(reversed_map.len());
+            for i in 0..reversed_map.len() {
+                actions.push(reversed_map.remove(&i).unwrap());
+            }
+            dfa.actions = actions;
             dfa
         }
     }
@@ -291,6 +320,15 @@ impl Dfa {
         let prod = self.accept[state as usize];
         (prod & NG_FLAG) != 0
     }
+
+    /// Returns the set of actions for the current state.
+    ///
+    /// # Panics
+    /// Panics if the given state does not exist in the DFA.
+    pub fn actions(&self, state: u32) -> &BTreeSet<Action> {
+        let index = self.action_index[state as usize];
+        &self.actions[index as usize]
+    }
 }
 
 impl GraphvizDot for MultiDfa {
@@ -300,15 +338,23 @@ impl GraphvizDot for MultiDfa {
             writeln!(f, "digraph DFA{} {{\n    start[shape=point];", i).unwrap();
             for state in 0..dfa.states_no {
                 if let Some(accepted_rule) = dfa.accepting(state) {
-                    let acc_label = if dfa.non_greedy(state) {
-                        "ACC_NG"
+                    let shape = if dfa.non_greedy(state) {
+                        "doubleoctagon"
                     } else {
-                        "ACC"
+                        "doublecircle"
                     };
+                    let actions = dfa.actions(state);
+                    let mut actions_str = String::new();
+                    if !actions.is_empty() {
+                        write!(actions_str, " ->").unwrap();
+                        for action in actions {
+                            write!(actions_str, " {}", action).unwrap();
+                        }
+                    }
                     writeln!(
                         f,
-                        "    {}[shape=doublecircle;xlabel=\"{}({})\"];",
-                        state, acc_label, accepted_rule
+                        "    {}[shape={};xlabel=\"ACC({}){}\"];",
+                        state, shape, accepted_rule, actions_str
                     )
                     .unwrap();
                 }
@@ -473,6 +519,8 @@ fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
         transition,
         accept,
         sink,
+        action_index: vec![0; index as usize],
+        actions: vec![BTreeSet::new()],
     }
 }
 
@@ -787,16 +835,20 @@ fn remap(
         accept,
         start,
         sink,
+        action_index: vec![0; states_no as usize],
+        actions: vec![BTreeSet::new()],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{direct_construction, merge_regex_trees};
-    use crate::grammar::{Grammar, Production};
+    use crate::grammar::{Action, Grammar, Production};
     use crate::lexer::dfa::min_dfa;
     use crate::lexer::grammar_conversion::{canonicalise, parse_trees};
     use crate::lexer::MultiDfa;
+    use maplit::btreeset;
+    use std::collections::BTreeSet;
 
     #[test]
     fn dfa_conflicts_resolution() {
@@ -993,5 +1045,26 @@ mod tests {
             .unwrap();
         assert!(dfa.non_greedy(ng_state));
         assert!(!dfa.non_greedy(greedy_state));
+    }
+
+    #[test]
+    fn dfa_actions() {
+        let actions = btreeset! {Action::Skip, Action::Mode("White".to_string())};
+        let grammar = Grammar::new(
+            &[
+                ("A", "'a'").into(),
+                ("ABB", "'abb'").into(),
+                ("ASTARBPLUS", "'a'*'b'+").into(),
+                ("SPACE", "[ \n\t]+", actions.clone()).into(),
+            ],
+            &[],
+        );
+        let mdfa = MultiDfa::new(&grammar);
+        let dfa = mdfa.dfa(0).unwrap();
+        let state = dfa
+            .moove(dfa.start(), mdfa.symbol_table().symbol_id(' '))
+            .unwrap();
+        assert_eq!(dfa.actions(state), &actions);
+        assert_eq!(dfa.actions(dfa.start()), &BTreeSet::new());
     }
 }

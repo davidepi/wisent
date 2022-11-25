@@ -1,5 +1,6 @@
 use crate::error::ParseError;
 use maplit::hashmap;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::io::ErrorKind;
 
@@ -375,7 +376,7 @@ impl Grammar {
 ///
 /// A brief documentation is provided for each action, but the user should refer to the ANTLR
 /// reference.
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Action {
     /// Action telling the lexer to not return the matched token.
     Skip,
@@ -396,4 +397,18 @@ pub enum Action {
     /// After matching the token, pop a mode from the mode stack and continue matching tokens using
     /// the mode on the top of the stack.
     PopMode,
+}
+
+impl std::fmt::Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Action::Skip => write!(f, "SKIP"),
+            Action::More => write!(f, "MORE"),
+            Action::Type(t) => write!(f, "TYPE({})", t),
+            Action::Channel(c) => write!(f, "CHANNEL({})", c),
+            Action::Mode(m) => write!(f, "MODE({})", m),
+            Action::PushMode(p) => write!(f, "PUSHMODE({})", p),
+            Action::PopMode => write!(f, "POPMODE"),
+        }
+    }
 }
