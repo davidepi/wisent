@@ -113,7 +113,7 @@ impl<'a> DfaSimulator<'a> {
             if let Some((production, actions, last_valid_state, last_end)) = last_accepted {
                 // no other move available, but there was a previous accepted production.
                 // push the accepted production if the action is not Skip.
-                if !actions.contains(&Action::Skip) {
+                if !actions.contains(&Action::Skip) && !actions.contains(&Action::More) {
                     productions.push(Token {
                         production,
                         start: location_start,
@@ -130,9 +130,11 @@ impl<'a> DfaSimulator<'a> {
                 //FIXME: in case a lexeme ends exactly on the last cell of a buffer,
                 //last_valid_state will point to the next cell (that does not exist).
                 //next_char will then trigger a buffer extension instead of swap.
-                self.lexeme_pos = last_valid_state;
+                if !actions.contains(&Action::More) {
+                    self.lexeme_pos = last_valid_state;
+                    location_start = last_end;
+                }
                 self.forward_pos = last_valid_state;
-                location_start = last_end;
                 location_end = last_end;
                 last_accepted = None;
             } else {
@@ -536,5 +538,22 @@ mod tests {
         assert_eq!(res[1].production, 0);
         assert_eq!(res[2].production, 1);
         assert_eq!(res[3].production, 0);
+    }
+
+    #[test]
+    fn tokenize_action_more() {
+        let grammar = Grammar::new(
+            &[
+                ("PRIVATE", "'_'", btreeset! {Action::More}).into(),
+                ("LETTERS", "[a-zA-Z]+").into(),
+            ],
+            &[],
+        );
+        let dfa = MultiDfa::new(&grammar);
+        let input = "_test";
+        let res = tokenize(&dfa, input).expect("Tokenization failed");
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].production, 1);
+        assert_eq!(res[0].start, 0);
     }
 }
