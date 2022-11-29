@@ -1,5 +1,5 @@
 use super::SymbolTable;
-use crate::lexer::MultiDfa;
+use crate::{grammar::Action, lexer::MultiDfa};
 use std::str::Chars;
 
 /// Buffer size for the lexer. Each buffer stores the lookahead tokens (as u32) so we don't want to
@@ -42,8 +42,8 @@ pub struct DfaSimulator<'a> {
     forward_pos: BufferIndexer,
     /// DFA containing the moves and alphabet
     mdfa: &'a MultiDfa,
-    /// Current mode being simulated
-    current_mode: usize,
+    /// Current mode being simulated. Represented as stack to allow PUSHMODE and POPMODE
+    current_mode: Vec<usize>,
 }
 
 impl<'a> DfaSimulator<'a> {
@@ -58,7 +58,7 @@ impl<'a> DfaSimulator<'a> {
             lexeme_pos: Default::default(),
             forward_pos: Default::default(),
             mdfa: dfas,
-            current_mode: 0,
+            current_mode: vec![0],
         }
     }
 
@@ -81,7 +81,7 @@ impl<'a> DfaSimulator<'a> {
     /// ```
     pub fn tokenize(mut self, mut input: Chars) -> Vec<Token> {
         self.init_tokenize(&mut input);
-        let dfa = &self.mdfa[self.current_mode];
+        let dfa = &self.mdfa[self.current_mode[0]];
         let mut state = dfa.start();
         let mut location_start = 0;
         let mut location_end = 0;
@@ -97,7 +97,9 @@ impl<'a> DfaSimulator<'a> {
                         // if the new state is accepting, record the production and the current
                         // lexeme ending. DO NOT push the accepting state, as we try to greedily match
                         // other productions.
-                        last_accepted = Some((accepting_prod, self.forward_pos, location_end));
+                        let actions = dfa.actions(state);
+                        last_accepted =
+                            Some((accepting_prod, actions, self.forward_pos, location_end));
                         if !dfa.non_greedy(state) {
                             // if the current accepting state is greedy, continue looping
                             continue;
@@ -108,14 +110,17 @@ impl<'a> DfaSimulator<'a> {
                 }
             }
             // this if serves to push the accepted state
-            if let Some((production, last_valid_state, last_end)) = last_accepted {
+            if let Some((production, actions, last_valid_state, last_end)) = last_accepted {
                 // no other move available, but there was a previous accepted production.
-                // push the accepted production and roll back the head.
-                productions.push(Token {
-                    production,
-                    start: location_start,
-                    end: last_end,
-                });
+                // push the accepted production if the action is not Skip.
+                if !actions.contains(&Action::Skip) {
+                    productions.push(Token {
+                        production,
+                        start: location_start,
+                        end: last_end,
+                    });
+                }
+                // Roll back the head
                 state = dfa.start();
                 if self.forward_pos.buffer_index != last_valid_state.buffer_index {
                     // the forward pos already loaded the next buffer, but is going back to
@@ -259,9 +264,10 @@ pub fn tokenize(dfa: &MultiDfa, input: &str) -> Result<Vec<Token>, IncompletePar
 
 #[cfg(test)]
 mod tests {
-    use crate::grammar::Grammar;
+    use crate::grammar::{Action, Grammar};
     use crate::lexer::simulator::BUFFER_SIZE;
     use crate::lexer::{DfaSimulator, MultiDfa};
+    use maplit::btreeset;
     use std::iter::repeat;
 
     use super::tokenize;
@@ -510,5 +516,25 @@ mod tests {
         let res = tokenize(&dfa, input);
         assert!(res.is_err());
         assert_eq!(res.err().unwrap().partial.len(), 2);
+    }
+
+    #[test]
+    fn tokenize_action_skip() {
+        let grammar = Grammar::new(
+            &[
+                ("ID", "[a-zA-Z]+").into(),
+                ("INT", "[0-9]+").into(),
+                ("WS", "[ \\t\\n\\t]+", btreeset! {Action::Skip}).into(),
+            ],
+            &[],
+        );
+        let dfa = MultiDfa::new(&grammar);
+        let input = "aad abc 123 bcd";
+        let res = tokenize(&dfa, input).expect("Tokenization failed");
+        assert_eq!(res.len(), 4);
+        assert_eq!(res[0].production, 0);
+        assert_eq!(res[1].production, 0);
+        assert_eq!(res[2].production, 1);
+        assert_eq!(res[3].production, 0);
     }
 }
