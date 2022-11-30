@@ -1049,7 +1049,7 @@ mod tests {
 
     #[test]
     fn dfa_actions() {
-        let actions = btreeset! {Action::Skip, Action::Mode("White".to_string())};
+        let actions = btreeset! {Action::Skip, Action::Mode(1)};
         let grammar = Grammar::new(
             &[
                 ("A", "'a'").into(),

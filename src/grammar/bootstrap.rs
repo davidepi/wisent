@@ -1,5 +1,6 @@
 use crate::error::ParseError;
 use crate::grammar::{Action, Grammar};
+use maplit::hashmap;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
@@ -30,6 +31,8 @@ struct GrammarInternal {
     order: VecDeque<String>,
     //`key`:`value`; map containing terminal actions
     actions: HashMap<String, BTreeSet<Action>>,
+    // key: mode name, value: mode index
+    modes: HashMap<String, u32>,
 }
 
 /// Transforms the Unordered maps of the GrammarInternal into the indexed Vec of the Grammar.
@@ -55,7 +58,7 @@ fn reindex(mut grammar: GrammarInternal) -> Grammar {
     Grammar {
         terminals: vec![terminals],
         non_terminals,
-        ..Default::default()
+        modes_index: grammar.modes,
     }
 }
 
@@ -124,6 +127,7 @@ fn extract_literals_from_non_term(grammar: GrammarInternal) -> GrammarInternal {
         fragments: grammar.fragments,
         order,
         actions: grammar.actions,
+        modes: grammar.modes,
     }
 }
 
@@ -139,6 +143,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
     let mut non_terminals = HashMap::new();
     let mut fragments = HashMap::new();
     let actions = HashMap::new();
+    let modes = hashmap! {"DEFAULT_MODE".to_string() => 0};
     let mut order = VecDeque::new();
     //the capt.group of this regex will be passed to p_re so I need to include ;
     let f_re = r"\s*fragment\s+((?:.|\n)+;)";
@@ -186,6 +191,7 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
         non_terminals,
         fragments,
         order,
+        modes,
     })
 }
 
@@ -198,13 +204,15 @@ fn split_head_body(productions: Vec<String>) -> Result<GrammarInternal, ParseErr
 fn resolve_terminals_dependencies(grammar: GrammarInternal) -> Result<GrammarInternal, ParseError> {
     let terms = merge_terminals_fragments(&grammar);
     let graph = build_terminals_dag(&terms, &grammar.non_terminals)?;
-    let new_terminals = replace_terminals(&terms, &graph[0], &graph[1])?;
+    let mut new_modes = grammar.modes.clone();
+    let new_terminals = replace_terminals(&terms, &graph[0], &graph[1], &mut new_modes)?;
     Ok(GrammarInternal {
         terminals: new_terminals.0,
         actions: new_terminals.1,
         non_terminals: grammar.non_terminals,
         fragments: grammar.fragments,
         order: grammar.order,
+        modes: new_modes,
     })
 }
 
@@ -322,6 +330,7 @@ fn replace_terminals(
     terms: &TerminalsFragmentsHelper,
     graph: &[BTreeSet<usize>],
     split: &[BTreeSet<usize>],
+    modes: &mut HashMap<String, u32>,
 ) -> Result<TerminalsActionsMap, ParseError> {
     let mut new_terminals = HashMap::<String, String>::new();
     let mut new_actions = HashMap::<String, BTreeSet<Action>>::new();
@@ -357,7 +366,7 @@ fn replace_terminals(
                 body = &replaced_body;
             }
             let clean_body = clean_ws(body);
-            let action = get_actions(&clean_body)?;
+            let action = get_actions(&clean_body, modes)?;
             new_terminals.insert(terms.id2head[node].to_owned(), action.0.to_owned());
             new_actions.insert(terms.id2head[node].to_owned(), action.1);
         }
@@ -377,7 +386,10 @@ fn replace_terminals(
 /// will return a set containing `Action::SKIP` and `Action::POPMODE`
 ///
 /// A SyntaxError is returned if the action is illegal.
-fn get_actions(body: &str) -> Result<(&str, BTreeSet<Action>), ParseError> {
+fn get_actions<'a>(
+    body: &'a str,
+    modes: &mut HashMap<String, u32>,
+) -> Result<(&'a str, BTreeSet<Action>), ParseError> {
     let mut action_builder = String::with_capacity(body.len());
     let mut body_iter = body.chars().rev().peekable();
     while let Some(letter) = body_iter.next() {
@@ -409,7 +421,7 @@ fn get_actions(body: &str) -> Result<(&str, BTreeSet<Action>), ParseError> {
         let mut actions = BTreeSet::new();
         let action_split: Vec<&str> = action_str.split(',').collect();
         for act in action_split {
-            actions.insert(match_action(act)?);
+            actions.insert(match_action(act, modes)?);
         }
         Ok((clean_body, actions))
     }
@@ -421,7 +433,7 @@ fn get_actions(body: &str) -> Result<(&str, BTreeSet<Action>), ParseError> {
 /// Action enum.
 ///
 /// Returns SyntaxError if the action is illegal
-fn match_action(act: &str) -> Result<Action, ParseError> {
+fn match_action(act: &str, modes: &mut HashMap<String, u32>) -> Result<Action, ParseError> {
     match act {
         "skip" => Ok(Action::Skip),
         "more" => Ok(Action::More),
@@ -431,18 +443,19 @@ fn match_action(act: &str) -> Result<Action, ParseError> {
                 Some(char) => char == ')',
                 None => false,
             };
-            if act.starts_with("type(") && last_is_par {
+            let next_entry = modes.len() as u32;
+            if act.starts_with("mode(") && last_is_par {
                 let arg = &act[5..act.len() - 1];
-                Ok(Action::Type(arg.to_owned()))
-            } else if act.starts_with("channel(") && last_is_par {
-                let arg = &act[8..act.len() - 1];
-                Ok(Action::Channel(arg.to_owned()))
-            } else if act.starts_with("mode(") && last_is_par {
-                let arg = &act[5..act.len() - 1];
-                Ok(Action::Mode(arg.to_owned()))
+                let index = *modes.entry(arg.to_string()).or_insert(next_entry);
+                Ok(Action::Mode(index))
             } else if act.starts_with("pushMode(") && last_is_par {
                 let arg = &act[9..act.len() - 1];
-                Ok(Action::PushMode(arg.to_owned()))
+                let index = *modes.entry(arg.to_string()).or_insert(next_entry);
+                Ok(Action::PushMode(index))
+            } else if act.starts_with("channel(") && last_is_par {
+                Ok(Action::Channel)
+            } else if act.starts_with("type(") && last_is_par {
+                Ok(Action::Type)
             } else {
                 let message = format!("invalid action `{}`", act);
                 Err(ParseError::SyntaxError { message })
@@ -955,17 +968,19 @@ mod tests {
     fn parse_actions_simpler() -> Result<(), ParseError> {
         let grammar = Grammar::parse_antlr(LEXER_ACTIONS_SIMPLER)?;
         let terminals = grammar.iter_term().collect::<Vec<_>>();
+        let index_empty = *grammar.modes_index.get("").unwrap();
+        let index_channel_mode = *grammar.modes_index.get("ChannelName").unwrap();
         let expected = vec![
             Action::Skip,
             Action::More,
-            Action::Type("TypeName".to_string()),
-            Action::Type("".to_string()),
-            Action::Channel("ChannelName".to_string()),
-            Action::Channel("".to_string()),
-            Action::Mode("ChannelName".to_string()),
-            Action::Mode("".to_string()),
-            Action::PushMode("ChannelName".to_string()),
-            Action::PushMode("".to_string()),
+            Action::Type,
+            Action::Type,
+            Action::Channel,
+            Action::Channel,
+            Action::Mode(index_channel_mode),
+            Action::Mode(index_empty),
+            Action::PushMode(index_channel_mode),
+            Action::PushMode(index_empty),
             Action::PopMode,
         ];
         for (terminal, expected) in terminals.iter().zip(expected) {
@@ -986,10 +1001,7 @@ mod tests {
         assert_eq!(terminals[1].actions.as_ref().unwrap().len(), 2); // whitespace action
         let mut ws_iter = terminals[1].actions.as_ref().unwrap().iter();
         assert_eq!(*ws_iter.next().unwrap(), Action::More);
-        assert_eq!(
-            *ws_iter.next().unwrap(),
-            Action::Channel("CHANNEL_NAME".to_owned())
-        );
+        assert_eq!(*ws_iter.next().unwrap(), Action::Channel,);
         assert_eq!(
             *terminals[2]
                 .actions

@@ -58,7 +58,7 @@ pub struct Grammar {
     //vector containing the bodies of the non-terminal productions
     non_terminals: Vec<Production>,
     // map a mode name to a specific index, used in the first dimension of this struct lexer rules
-    modes_index: HashMap<String, usize>,
+    modes_index: HashMap<String, u32>,
 }
 
 impl Default for Grammar {
@@ -112,8 +112,8 @@ impl Grammar {
     /// addition of the action set for each recognized terminal.
     pub fn add_terminals(&mut self, mode: String, terminals: &[Production]) {
         let next_mode = self.modes_index.len();
-        let mode_index = *self.modes_index.entry(mode).or_insert(next_mode);
-        self.terminals[mode_index].extend_from_slice(terminals);
+        let mode_index = *self.modes_index.entry(mode).or_insert(next_mode as u32);
+        self.terminals[mode_index as usize].extend_from_slice(terminals);
     }
 
     /// Returns the total number of productions.
@@ -177,7 +177,7 @@ impl Grammar {
     /// ```
     pub fn len_term_in_mode(&self, mode: &str) -> usize {
         if let Some(mode_index) = self.modes_index.get(mode) {
-            self.terminals[*mode_index].len()
+            self.terminals[*mode_index as usize].len()
         } else {
             0
         }
@@ -283,7 +283,7 @@ impl Grammar {
     /// ```
     pub fn iter_term_in_mode(&self, mode: &str) -> impl Iterator<Item = &Production> {
         if let Some(index) = self.modes_index.get(mode) {
-            if let Some(terminals) = self.terminals.get(*index) {
+            if let Some(terminals) = self.terminals.get(*index as usize) {
                 terminals.iter()
             } else {
                 [].iter()
@@ -376,24 +376,24 @@ impl Grammar {
 ///
 /// A brief documentation is provided for each action, but the user should refer to the ANTLR
 /// reference.
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Action {
     /// Action telling the lexer to not return the matched token.
     Skip,
     /// Action telling the lexer to match the current rule but continue collecting tokens.
     More,
     /// Action assigning a specific type for the matched token.
-    /// The type is passed as a String parameter.
-    Type(String),
+    /// **Not supported in this implementation**
+    Type,
     /// Action telling the lexer to switch to a specific channel after matching the token.
-    /// The name of the channel is passed as a String parameter.
-    Channel(String),
+    /// **Not supported in this implementation**
+    Channel,
     /// After matching the token, the lexer will switch to the mode passed as String. Only rules
     /// matching the newly passed mode will be matched.
-    Mode(String),
+    Mode(u32),
     /// Same behaviour of `Action::MODE` but the mode is pushed on a stack, to be later popped by
     /// `Action::POPMODE`.
-    PushMode(String),
+    PushMode(u32),
     /// After matching the token, pop a mode from the mode stack and continue matching tokens using
     /// the mode on the top of the stack.
     PopMode,
@@ -404,8 +404,8 @@ impl std::fmt::Display for Action {
         match self {
             Action::Skip => write!(f, "SKIP"),
             Action::More => write!(f, "MORE"),
-            Action::Type(t) => write!(f, "TYPE({})", t),
-            Action::Channel(c) => write!(f, "CHANNEL({})", c),
+            Action::Type => write!(f, "TYPE"),
+            Action::Channel => write!(f, "CHANNEL"),
             Action::Mode(m) => write!(f, "MODE({})", m),
             Action::PushMode(p) => write!(f, "PUSHMODE({})", p),
             Action::PopMode => write!(f, "POPMODE"),

@@ -1,5 +1,6 @@
 use super::SymbolTable;
-use crate::{grammar::Action, lexer::MultiDfa};
+use crate::grammar::Action;
+use crate::lexer::MultiDfa;
 use std::str::Chars;
 
 /// Buffer size for the lexer. Each buffer stores the lookahead tokens (as u32) so we don't want to
