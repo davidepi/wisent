@@ -111,9 +111,12 @@ impl Grammar {
     /// The terminal tuple is similar to the one explained in [`Grammar::new`], with the
     /// addition of the action set for each recognized terminal.
     pub fn add_terminals(&mut self, mode: String, terminals: &[Production]) {
-        let next_mode = self.modes_index.len();
-        let mode_index = *self.modes_index.entry(mode).or_insert(next_mode as u32);
-        self.terminals[mode_index as usize].extend_from_slice(terminals);
+        if let Some(&mode_index) = self.modes_index.get(&mode) {
+            self.terminals[mode_index as usize].extend_from_slice(terminals);
+        } else {
+            self.modes_index.insert(mode, self.modes_index.len() as u32);
+            self.terminals.push(terminals.to_vec());
+        }
     }
 
     /// Returns the total number of productions.
@@ -225,6 +228,8 @@ impl Grammar {
 
     /// Returns an iterator over the modes of this grammar.
     ///
+    /// The modes are guaranteed to be indexed by their ID.
+    ///
     /// Iterates by name the various modes used by the lexer of this grammar.
     /// # Examples
     /// ```
@@ -240,7 +245,13 @@ impl Grammar {
     /// assert_eq!(grammar.iter_modes().count(), 2);
     /// ```
     pub fn iter_modes(&self) -> impl Iterator<Item = &str> {
-        self.modes_index.keys().map(String::as_str)
+        let mut vec = self
+            .modes_index
+            .iter()
+            .map(|(k, v)| (v, k.as_str()))
+            .collect::<Vec<_>>();
+        vec.sort_unstable();
+        vec.into_iter().map(|(_, v)| v)
     }
 
     /// Returns an iterator over the terminals slice in DEFAULT_MODE.

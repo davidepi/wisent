@@ -10,6 +10,8 @@ const BUFFER_SIZE: usize = 1024;
 #[derive(Debug, Copy, Clone)]
 /// Token retrieved by the lexical analyzer.
 pub struct Token {
+    /// The mode ID of the associated production.
+    pub mode: u32,
     /// The production ID (in the grammar used to build the DFA) associated with this token.
     pub production: u32,
     /// Beginning of the token in number of bytes since the beginning of the stream.
@@ -44,7 +46,7 @@ pub struct DfaSimulator<'a> {
     /// DFA containing the moves and alphabet
     mdfa: &'a MultiDfa,
     /// Current mode being simulated. Represented as stack to allow PUSHMODE and POPMODE
-    current_mode: Vec<usize>,
+    current_mode: Vec<u32>,
 }
 
 impl<'a> DfaSimulator<'a> {
@@ -82,7 +84,7 @@ impl<'a> DfaSimulator<'a> {
     /// ```
     pub fn tokenize(mut self, mut input: Chars) -> Vec<Token> {
         self.init_tokenize(&mut input);
-        let dfa = &self.mdfa[self.current_mode[0]];
+        let mut dfa = &self.mdfa[self.current_mode[0] as usize];
         let mut state = dfa.start();
         let mut location_start = 0;
         let mut location_end = 0;
@@ -119,10 +121,10 @@ impl<'a> DfaSimulator<'a> {
                         production,
                         start: location_start,
                         end: last_end,
+                        mode: *self.current_mode.last().unwrap(),
                     });
                 }
                 // Roll back the head
-                state = dfa.start();
                 if self.forward_pos.buffer_index != last_valid_state.buffer_index {
                     // the forward pos already loaded the next buffer, but is going back to
                     // previous one. The flag is used to avoid reloading another buffer again.
@@ -138,6 +140,20 @@ impl<'a> DfaSimulator<'a> {
                 self.forward_pos = last_valid_state;
                 location_end = last_end;
                 last_accepted = None;
+                // handle mode switching
+                for action in actions {
+                    match action {
+                        Action::Mode(m) => {
+                            let cur_mode = self.current_mode.last_mut().unwrap();
+                            *cur_mode = *m;
+                            dfa = &self.mdfa[*cur_mode as usize];
+                        }
+                        Action::PushMode(_) => todo!(),
+                        Action::PopMode => todo!(),
+                        _ => (),
+                    }
+                }
+                state = dfa.start();
             } else {
                 break; // no moves and no accepting state reached. halt.
             }
@@ -556,5 +572,30 @@ mod tests {
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].production, 1);
         assert_eq!(res[0].start, 0);
+    }
+
+    #[test]
+    fn tokenize_action_mode() {
+        let mut grammar = Grammar::new(
+            &[("START_STRING", "'\"'", btreeset! {Action::Mode(1)}).into()],
+            &[],
+        );
+        grammar.add_terminals(
+            "STR".to_string(),
+            &[
+                ("TEXT", "~'\"'+").into(),
+                ("END_STRING", "'\"'", btreeset! {Action::Mode(0)}).into(),
+            ],
+        );
+        let dfa = MultiDfa::new(&grammar);
+        let input = "\"string\"";
+        let res = tokenize(&dfa, input).expect("Tokenization failed");
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0].mode, 0);
+        assert_eq!(res[0].production, 0);
+        assert_eq!(res[1].mode, 1);
+        assert_eq!(res[1].production, 0);
+        assert_eq!(res[2].mode, 1);
+        assert_eq!(res[2].production, 1);
     }
 }
