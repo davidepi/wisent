@@ -1,11 +1,12 @@
 use super::SymbolTable;
 use crate::grammar::Action;
 use crate::lexer::MultiDfa;
+use std::collections::VecDeque;
 use std::str::Chars;
 
-/// Buffer size for the lexer. Each buffer stores the lookahead tokens (as u32) so we don't want to
-/// store everything in memory but still keep a decently sized buffer.
-const BUFFER_SIZE: usize = 1024;
+/// How many characters are read when populating the buffer of the simulator.
+/// In any case the simulator uses buffered reads.
+const READ_SIZE: usize = 128;
 
 #[derive(Debug, Copy, Clone)]
 /// Token retrieved by the lexical analyzer.
@@ -22,27 +23,15 @@ pub struct Token {
     pub end: usize,
 }
 
-#[derive(Default, Copy, Clone)]
-/// Simple to struct to name indices for the lexeme_pos and forward_pos
-/// Just to remember what they represents, with a tuple it would be a mess
-struct BufferIndexer {
-    index: usize,
-    buffer_index: u8,
-}
-
 /// Lexical analyzer for a DFA
 ///
 /// Simulates a Dfa with a given input and groups the input characters in tokens according to the
 /// rules of the grammar passed to the [`Dfa`].
 pub struct DfaSimulator<'a> {
-    /// Buffer and its len (capacity is BUFFER_SIZE, len is the second value in the tuple)
-    buffers: [Vec<u32>; 2],
-    /// true if the forward_pos backtracked to a different buffer
-    backtracked: bool,
-    /// Position of the next lexeme to read and the buffer where it is
-    lexeme_pos: BufferIndexer,
-    /// Position of the next lookahead character to read and the buffer where it is
-    forward_pos: BufferIndexer,
+    /// Buffer storing the read characters converted using their symbol table id.
+    buffer: VecDeque<u32>,
+    /// Position of the next lookahead character to read (index of buffer)
+    forward_pos: usize,
     /// DFA containing the moves and alphabet
     mdfa: &'a MultiDfa,
     /// Current mode being simulated. Represented as stack to allow PUSHMODE and POPMODE
@@ -53,12 +42,7 @@ impl<'a> DfaSimulator<'a> {
     /// Creates a new Lexical Analyzer with the given DFA and the given input.
     pub fn new(dfas: &'a MultiDfa) -> DfaSimulator {
         Self {
-            buffers: [
-                Vec::with_capacity(BUFFER_SIZE),
-                Vec::with_capacity(BUFFER_SIZE),
-            ],
-            backtracked: false,
-            lexeme_pos: Default::default(),
+            buffer: VecDeque::with_capacity(READ_SIZE),
             forward_pos: Default::default(),
             mdfa: dfas,
             current_mode: vec![0],
@@ -83,16 +67,15 @@ impl<'a> DfaSimulator<'a> {
     /// assert_eq!(tokens[1].production, 0);
     /// ```
     pub fn tokenize(mut self, mut input: Chars) -> Vec<Token> {
-        self.init_tokenize(&mut input);
         let mut dfa = &self.mdfa[self.current_mode[0] as usize];
         let mut state = dfa.start();
-        let mut location_start = 0;
-        let mut location_end = 0;
+        let mut absolute_start_index = 0;
+        let mut absolute_end_index = 0;
         let mut last_accepted = None;
         let mut productions = Vec::new();
         loop {
-            if let Some((char_id, bytes)) = self.next_char(&mut input) {
-                location_end += bytes as usize;
+            if let Some((char_id, bytes_for_this_char)) = self.next_char(&mut input) {
+                absolute_end_index += bytes_for_this_char as usize;
                 if let Some(next) = dfa.moove(state, char_id) {
                     //can advance
                     state = next;
@@ -101,8 +84,12 @@ impl<'a> DfaSimulator<'a> {
                         // lexeme ending. DO NOT push the accepting state, as we try to greedily match
                         // other productions.
                         let actions = dfa.actions(state);
-                        last_accepted =
-                            Some((accepting_prod, actions, self.forward_pos, location_end));
+                        last_accepted = Some((
+                            accepting_prod,
+                            actions,
+                            self.forward_pos,
+                            absolute_end_index,
+                        ));
                         if !dfa.non_greedy(state) {
                             // if the current accepting state is greedy, continue looping
                             continue;
@@ -113,32 +100,29 @@ impl<'a> DfaSimulator<'a> {
                 }
             }
             // this if serves to push the accepted state
-            if let Some((production, actions, last_valid_state, last_end)) = last_accepted {
+            if let Some((production, actions, lexeme_chars, last_valid_end)) = last_accepted {
+                // backtrack the lookaheads to the last valid position
+                absolute_end_index = last_valid_end;
                 // no other move available, but there was a previous accepted production.
                 // push the accepted production if the action is not Skip.
                 if !actions.contains(&Action::Skip) && !actions.contains(&Action::More) {
                     productions.push(Token {
                         production,
-                        start: location_start,
-                        end: last_end,
+                        start: absolute_start_index,
+                        end: absolute_end_index,
                         mode: *self.current_mode.last().unwrap(),
                     });
                 }
-                // Roll back the head
-                if self.forward_pos.buffer_index != last_valid_state.buffer_index {
-                    // the forward pos already loaded the next buffer, but is going back to
-                    // previous one. The flag is used to avoid reloading another buffer again.
-                    self.backtracked = true;
-                }
-                //FIXME: in case a lexeme ends exactly on the last cell of a buffer,
-                //last_valid_state will point to the next cell (that does not exist).
-                //next_char will then trigger a buffer extension instead of swap.
                 if !actions.contains(&Action::More) {
-                    self.lexeme_pos = last_valid_state;
-                    location_start = last_end;
+                    for _ in 0..lexeme_chars {
+                        self.buffer.pop_front();
+                    }
+                    absolute_start_index = absolute_end_index;
+                    self.forward_pos = 0;
+                } else {
+                    // 'MORE': forward_pos should not be reset, but at least the lookahead removed
+                    self.forward_pos = lexeme_chars;
                 }
-                self.forward_pos = last_valid_state;
-                location_end = last_end;
                 last_accepted = None;
                 // handle mode switching
                 for action in actions {
@@ -161,64 +145,29 @@ impl<'a> DfaSimulator<'a> {
         productions
     }
 
-    /// initialize the buffers for a tokenization.
-    /// next_char does not work for the initial refill
-    fn init_tokenize(&mut self, input: &mut Chars) {
-        self.buffers[0].clear();
-        self.buffers[1].clear();
-        self.backtracked = false;
-        self.lexeme_pos = Default::default();
-        self.forward_pos = Default::default();
-        let chars_it = input
-            .take(self.buffers[0].capacity())
-            .map(|c| encode_char_len(c, self.mdfa.symbol_table()));
-        self.buffers[0].extend(chars_it);
-    }
-
     /// Reads the next character from the input in form of [`SymbolTable`] IDs.
     ///
     /// Takes care of buffering the read and handling the buffers.
     ///
-    /// DO NOT change the input `s` until EOF is returned!
+    /// DO NOT change the `input` until EOF is returned!
     ///
     /// Returns the ID and the number of bytes used to represent it.
     fn next_char(&mut self, input: &mut Chars) -> Option<(u32, u8)> {
-        let mut current_buffer = &mut self.buffers[self.forward_pos.buffer_index as usize];
-        if self.forward_pos.index == current_buffer.len() {
-            let mut next_buffer = (self.forward_pos.buffer_index + 1) % self.buffers.len() as u8;
-            let mut forward_next = BufferIndexer {
-                index: 0,
-                buffer_index: next_buffer,
-            };
-            // backtracked is true if forward pos returned back to the previous buffer after
-            // accepting a state. In that case the buffer does NOT need to be refilled, but the
-            // buffer index in forward_pos needs to be changed.
-            if !self.backtracked {
-                let mut chars_it = input
-                    .take(BUFFER_SIZE)
-                    .map(|c| encode_char_len(c, self.mdfa.symbol_table()))
-                    .peekable();
-                // return None if EOF
-                chars_it.peek()?;
-                if next_buffer != self.lexeme_pos.buffer_index {
-                    //  swap buffers and refill the other one
-                    self.buffers[next_buffer as usize].clear();
-                } else {
-                    // can't swap buffers as the current token is larger than an entire buffer.
-                    // extend the current buffer and continue with current forward_pos.
-                    forward_next = self.forward_pos;
-                    next_buffer = self.forward_pos.buffer_index;
-                };
-                self.buffers[next_buffer as usize].extend(chars_it);
-            }
-            self.backtracked = false;
-            self.forward_pos = forward_next;
-            current_buffer = &mut self.buffers[next_buffer as usize];
+        // checks if the buf needs refilling
+        if self.forward_pos == self.buffer.len() {
+            let chars_it = input
+                .take(READ_SIZE)
+                .map(|c| encode_char_len(c, self.mdfa.symbol_table()));
+            self.buffer.extend(chars_it);
         }
-        // current buffer not full (or just refilled), just fetch the next character
-        let char = current_buffer[self.forward_pos.index as usize];
-        self.forward_pos.index += 1;
-        Some(decode_char_len(char))
+        if let Some(&char) = self.buffer.get(self.forward_pos) {
+            // refilling successfull, return the next character
+            self.forward_pos += 1;
+            Some(decode_char_len(char))
+        } else {
+            // refilling failed, EOF reached
+            None
+        }
     }
 }
 
@@ -284,7 +233,7 @@ pub fn tokenize(dfa: &MultiDfa, input: &str) -> Result<Vec<Token>, IncompletePar
 #[cfg(test)]
 mod tests {
     use crate::grammar::{Action, Grammar};
-    use crate::lexer::simulator::BUFFER_SIZE;
+    use crate::lexer::simulator::READ_SIZE;
     use crate::lexer::{DfaSimulator, MultiDfa};
     use maplit::btreeset;
     use std::iter::repeat;
@@ -304,7 +253,6 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
         let mut simulator = DfaSimulator::new(&dfa);
-        simulator.init_tokenize(&mut reader);
         for _ in 0..UTF8_INPUT.chars().count() {
             assert!(simulator.next_char(&mut reader).is_some());
         }
@@ -321,7 +269,6 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let mut reader = UTF8_INPUT.chars();
         let mut simulator = DfaSimulator::new(&dfa);
-        simulator.init_tokenize(&mut reader);
         while simulator.next_char(&mut reader).is_some() {}
         assert!(simulator.next_char(&mut reader).is_none());
         assert!(simulator.next_char(&mut reader).is_none());
@@ -357,7 +304,7 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let mut input = String::new();
         let mut prods = 1;
-        while input.chars().count() < BUFFER_SIZE as usize {
+        while input.chars().count() < READ_SIZE as usize {
             input.push_str(UTF8_INPUT);
             prods += 10;
         }
@@ -372,7 +319,7 @@ mod tests {
             .filter(|c| !c.is_whitespace())
             .collect::<String>();
         let mut input = String::new();
-        while input.chars().count() < 2 * BUFFER_SIZE as usize {
+        while input.chars().count() < 2 * READ_SIZE as usize {
             input.push_str(&piece);
         }
         let grammar = Grammar::new(
@@ -491,7 +438,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = repeat('a')
-            .take(BUFFER_SIZE - 3)
+            .take(READ_SIZE - 3)
             .chain(repeat('b').take(3))
             .chain(repeat('c').take(50))
             .collect::<String>();
