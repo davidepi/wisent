@@ -195,14 +195,6 @@ fn decode_char_len(v: u32) -> (u32, u8) {
     (v & 0x3EFFFFFF, ((v & 0xC0000000) >> 30) as u8 + 1)
 }
 
-/// Error representing a partially complete tokenization. If this error is produced, the lexer
-/// didn't reach EOF, but some tokens may have been recognized.
-#[derive(Debug, Clone)]
-pub struct IncompleteParse {
-    /// The list of partially recognized tokens.
-    pub partial: Vec<Token>,
-}
-
 /// Tokenize a string with a given DFA.
 ///
 /// This utility function is a wrapper that creates a [DfaSimulator], calls its
@@ -221,39 +213,28 @@ pub struct IncompleteParse {
 /// let dfa = MultiDfa::new(&grammar);
 /// let input = "abc123";
 /// let result = tokenize(&dfa, &input);
-/// assert!(result.is_ok());
+/// assert_eq!(result.len(), 2);
 /// ```
-pub fn tokenize(dfa: &MultiDfa, input: &str) -> Result<Vec<Token>, IncompleteParse> {
+pub fn tokenize(dfa: &MultiDfa, input: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
     if !input.is_empty() {
         let mut iterator = input.chars();
         let mut simulator = DfaSimulator::new(dfa);
-        let mut tokens = Vec::new();
         while let Some(token) = simulator.next_token(&mut iterator) {
             tokens.push(token);
         }
-        if let Some(last) = tokens.last() {
-            if last.end == input.len() {
-                Ok(tokens)
-            } else {
-                Err(IncompleteParse { partial: tokens })
-            }
-        } else {
-            Err(IncompleteParse { partial: tokens })
-        }
-    } else {
-        Ok(Vec::new())
     }
+    tokens
 }
 
 #[cfg(test)]
 mod tests {
+    use super::tokenize;
     use crate::grammar::{Action, Grammar};
     use crate::lexer::simulator::READ_SIZE;
     use crate::lexer::{DfaSimulator, MultiDfa};
     use maplit::btreeset;
     use std::iter::repeat;
-
-    use super::tokenize;
 
     const UTF8_INPUT: &str = "Příliš žluťoučký kůň úpěl ďábelské ódy";
 
@@ -300,7 +281,7 @@ mod tests {
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
         let expected_end = vec![9, 10, 23, 24, 29, 30, 36, 37, 48, 49, 53];
-        let tokens = tokenize(&dfa, UTF8_INPUT).expect("Tokenization Failed");
+        let tokens = tokenize(&dfa, UTF8_INPUT);
         for (i, token) in tokens.into_iter().enumerate() {
             assert_eq!(token.production, expected_prods[i]);
             assert_eq!(token.start, expected_start[i]);
@@ -322,7 +303,7 @@ mod tests {
             input.push_str(UTF8_INPUT);
             prods += 10;
         }
-        let tokens = tokenize(&dfa, &input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, &input);
         assert_eq!(tokens.len(), prods);
     }
 
@@ -341,7 +322,7 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let tokens = tokenize(&dfa, &input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, &input);
         assert_eq!(tokens.len(), 1);
     }
 
@@ -356,7 +337,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "123.456789";
-        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, input);
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 1);
         assert_eq!(tokens[0].start, 0);
@@ -375,12 +356,10 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let input = "123.";
         let tokens = tokenize(&dfa, input);
-        assert!(tokens.is_err());
-        let tokens = tokens.err().unwrap();
-        assert_eq!(tokens.partial.len(), 1);
-        assert_eq!(tokens.partial[0].production, 0);
-        assert_eq!(tokens.partial[0].start, 0);
-        assert_eq!(tokens.partial[0].end, 3);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].production, 0);
+        assert_eq!(tokens[0].start, 0);
+        assert_eq!(tokens[0].end, 3);
     }
 
     #[test]
@@ -395,7 +374,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ 123456 /* test comment 2 */";
-        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, input);
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 0);
     }
@@ -412,7 +391,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ 123456 ";
-        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, input);
         assert_eq!(tokens.len(), 4);
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[1].production, 2);
@@ -432,7 +411,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ \"/*this is not a comment*/\"";
-        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, input);
         assert_eq!(tokens.len(), 3, "The simulator greedily matched everything");
     }
 
@@ -453,7 +432,7 @@ mod tests {
             .chain(repeat('b').take(3))
             .chain(repeat('c').take(50))
             .collect::<String>();
-        let tokens = tokenize(&dfa, &input).expect("Tokenization failed");
+        let tokens = tokenize(&dfa, &input);
         assert_eq!(tokens.len(), 2);
     }
 
@@ -463,7 +442,7 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let input = "";
         let res = tokenize(&dfa, input);
-        assert!(res.is_ok());
+        assert!(res.is_empty());
     }
 
     #[test]
@@ -471,7 +450,7 @@ mod tests {
         let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = MultiDfa::new(&grammar);
         let input = "aaabb";
-        let res = tokenize(&dfa, input).unwrap();
+        let res = tokenize(&dfa, input);
         assert_eq!(res.len(), 5);
     }
 
@@ -481,8 +460,7 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let input = "d";
         let res = tokenize(&dfa, input);
-        assert!(res.is_err());
-        assert!(res.err().unwrap().partial.is_empty());
+        assert!(res.is_empty());
     }
 
     #[test]
@@ -491,8 +469,7 @@ mod tests {
         let dfa = MultiDfa::new(&grammar);
         let input = "aad";
         let res = tokenize(&dfa, input);
-        assert!(res.is_err());
-        assert_eq!(res.err().unwrap().partial.len(), 2);
+        assert_eq!(res.len(), 2);
     }
 
     #[test]
@@ -507,7 +484,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "aad abc 123 bcd";
-        let res = tokenize(&dfa, input).expect("Tokenization failed");
+        let res = tokenize(&dfa, input);
         assert_eq!(res.len(), 4);
         assert_eq!(res[0].production, 0);
         assert_eq!(res[1].production, 0);
@@ -526,7 +503,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "_test";
-        let res = tokenize(&dfa, input).expect("Tokenization failed");
+        let res = tokenize(&dfa, input);
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].production, 1);
         assert_eq!(res[0].start, 0);
@@ -547,7 +524,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "\"string\"";
-        let res = tokenize(&dfa, input).expect("Tokenization failed");
+        let res = tokenize(&dfa, input);
         assert_eq!(res.len(), 3);
         assert_eq!(res[0].mode, 0);
         assert_eq!(res[0].production, 0);

@@ -11,7 +11,7 @@ mod grammar_conversion;
 mod simulator;
 
 pub use self::dfa::{Dfa, MultiDfa};
-pub use self::simulator::{tokenize, DfaSimulator, IncompleteParse, Token};
+pub use self::simulator::{tokenize, DfaSimulator, Token};
 
 /// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
 pub trait GraphvizDot {
