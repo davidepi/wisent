@@ -9,9 +9,11 @@ use std::path::Path;
 mod dfa;
 mod grammar_conversion;
 mod simulator;
+mod ureader;
 
 pub use self::dfa::{Dfa, MultiDfa};
 pub use self::simulator::{tokenize, DfaSimulator, Token};
+pub use self::ureader::UnicodeReader;
 
 /// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
 pub trait GraphvizDot {
