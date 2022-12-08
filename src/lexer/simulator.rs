@@ -30,8 +30,14 @@ pub struct Token {
 pub struct DfaSimulator<'a> {
     /// Buffer storing the read characters converted using their symbol table id.
     buffer: VecDeque<u32>,
-    /// Position of the next lookahead character to read (index of buffer)
+    /// Position of the next character to read from the internal buffer in amount of characters
+    /// from buf start. Note that internal buffer is NOT equal to the input.
     forward_pos: usize,
+    /// Current token position, in bytes from the beginning of the input.
+    cur_pos: usize,
+    /// Starting token position, in bytes, from the beginning of the input. This is almost always
+    /// identical to cur_pos, unless the previous token had [Action::More].
+    start_pos: usize,
     /// DFA containing the moves and alphabet
     mdfa: &'a MultiDfa,
     /// Current mode being simulated. Represented as stack to allow PUSHMODE and POPMODE
@@ -43,13 +49,16 @@ impl<'a> DfaSimulator<'a> {
     pub fn new(dfas: &'a MultiDfa) -> DfaSimulator {
         Self {
             buffer: VecDeque::with_capacity(READ_SIZE),
-            forward_pos: Default::default(),
+            forward_pos: 0,
+            cur_pos: 0,
+            start_pos: 0,
             mdfa: dfas,
             current_mode: vec![0],
         }
     }
 
-    /// Runs the lexical analysis and retrieves the tokens composing a string.
+    /// Runs the lexical analysis and retrieves the next token.
+    ///
     /// # Examples
     /// Basic usage:
     /// ```
@@ -61,88 +70,89 @@ impl<'a> DfaSimulator<'a> {
     /// );
     /// let dfa = MultiDfa::new(&grammar);
     /// let input = "abc123";
-    /// let simulator = DfaSimulator::new(&dfa);
-    /// let tokens = simulator.tokenize(input.chars());
-    /// assert_eq!(tokens[0].production, 1);
-    /// assert_eq!(tokens[1].production, 0);
+    /// let mut chars = input.chars();
+    /// let mut simulator = DfaSimulator::new(&dfa);
+    /// let token = simulator.next_token(&mut chars).unwrap();
+    /// assert_eq!(token.production, 1);
     /// ```
-    pub fn tokenize(mut self, mut input: Chars) -> Vec<Token> {
-        let mut dfa = &self.mdfa[self.current_mode[0] as usize];
+    pub fn next_token(&mut self, input: &mut Chars) -> Option<Token> {
+        let dfa = &self.mdfa[*self.current_mode.last().unwrap() as usize];
+        let absolute_start_index = self.start_pos;
+        let mut absolute_end_index = self.cur_pos;
         let mut state = dfa.start();
-        let mut absolute_start_index = 0;
-        let mut absolute_end_index = 0;
         let mut last_accepted = None;
-        let mut productions = Vec::new();
-        loop {
-            if let Some((char_id, bytes_for_this_char)) = self.next_char(&mut input) {
-                absolute_end_index += bytes_for_this_char as usize;
-                if let Some(next) = dfa.moove(state, char_id) {
-                    //can advance
-                    state = next;
-                    if let Some(accepting_prod) = dfa.accepting(state) {
-                        // if the new state is accepting, record the production and the current
-                        // lexeme ending. DO NOT push the accepting state, as we try to greedily match
-                        // other productions.
-                        let actions = dfa.actions(state);
-                        last_accepted = Some((
-                            accepting_prod,
-                            actions,
-                            self.forward_pos,
-                            absolute_end_index,
-                        ));
-                        if !dfa.non_greedy(state) {
-                            // if the current accepting state is greedy, continue looping
-                            continue;
-                        }
-                    } else {
-                        continue; // avoid entering in the next if
+        // Read as much as possible until the DFA halts
+        while let Some((char_id, bytes_for_this_char)) = self.next_char(input) {
+            absolute_end_index += bytes_for_this_char as usize;
+            if let Some(next) = dfa.moove(state, char_id) {
+                //can advance
+                state = next;
+                if let Some(accepting_prod) = dfa.accepting(state) {
+                    // if the new state is accepting, record the production and the current
+                    // lexeme ending. DO NOT push the accepting state, as we try to greedily match
+                    // other productions.
+                    let actions = dfa.actions(state);
+                    last_accepted = Some((
+                        accepting_prod,
+                        actions,
+                        self.forward_pos,
+                        absolute_end_index,
+                    ));
+                    if dfa.non_greedy(state) {
+                        // if the current accepting state is non-greedy, immediately process acc
+                        break;
                     }
                 }
-            }
-            // this if serves to push the accepted state
-            if let Some((production, actions, lexeme_chars, last_valid_end)) = last_accepted {
-                // backtrack the lookaheads to the last valid position
-                absolute_end_index = last_valid_end;
-                // no other move available, but there was a previous accepted production.
-                // push the accepted production if the action is not Skip.
-                if !actions.contains(&Action::Skip) && !actions.contains(&Action::More) {
-                    productions.push(Token {
-                        production,
-                        start: absolute_start_index,
-                        end: absolute_end_index,
-                        mode: *self.current_mode.last().unwrap(),
-                    });
-                }
-                if !actions.contains(&Action::More) {
-                    for _ in 0..lexeme_chars {
-                        self.buffer.pop_front();
-                    }
-                    absolute_start_index = absolute_end_index;
-                    self.forward_pos = 0;
-                } else {
-                    // 'MORE': forward_pos should not be reset, but at least the lookahead removed
-                    self.forward_pos = lexeme_chars;
-                }
-                last_accepted = None;
-                // handle mode switching
-                for action in actions {
-                    match action {
-                        Action::Mode(m) => {
-                            let cur_mode = self.current_mode.last_mut().unwrap();
-                            *cur_mode = *m;
-                            dfa = &self.mdfa[*cur_mode as usize];
-                        }
-                        Action::PushMode(_) => todo!(),
-                        Action::PopMode => todo!(),
-                        _ => (),
-                    }
-                }
-                state = dfa.start();
             } else {
-                break; // no moves and no accepting state reached. halt.
+                // DFA halts. stop reading chars and start solving accepting state.
+                break;
             }
         }
-        productions
+        // Check if an accepting state was reached and handle it.
+        if let Some((production, actions, lexeme_chars, last_valid_end)) = last_accepted {
+            // backtrack the lookaheads to the last valid position
+            self.cur_pos = last_valid_end;
+            // no other move available, but there was a previous accepted production.
+            // push the accepted production if the action is not Skip.
+            let token = if !actions.contains(&Action::Skip) && !actions.contains(&Action::More) {
+                Some(Token {
+                    production,
+                    start: absolute_start_index,
+                    end: last_valid_end,
+                    mode: *self.current_mode.last().unwrap(),
+                })
+            } else {
+                None
+            };
+            if !actions.contains(&Action::More) {
+                for _ in 0..lexeme_chars {
+                    self.buffer.pop_front();
+                }
+                self.forward_pos = 0;
+                self.start_pos = last_valid_end;
+            } else {
+                // 'MORE': forward_pos should not be reset, but at least the lookahead removed
+                self.forward_pos = lexeme_chars;
+            }
+            // handle mode switching
+            for action in actions {
+                match action {
+                    Action::Mode(m) => {
+                        *self.current_mode.last_mut().unwrap() = *m;
+                    }
+                    Action::PushMode(_) => todo!(),
+                    Action::PopMode => todo!(),
+                    _ => (),
+                }
+            }
+            if token.is_some() {
+                token
+            } else {
+                self.next_token(input)
+            }
+        } else {
+            None
+        }
     }
 
     /// Reads the next character from the input in form of [`SymbolTable`] IDs.
@@ -215,7 +225,12 @@ pub struct IncompleteParse {
 /// ```
 pub fn tokenize(dfa: &MultiDfa, input: &str) -> Result<Vec<Token>, IncompleteParse> {
     if !input.is_empty() {
-        let tokens = DfaSimulator::new(dfa).tokenize(input.chars());
+        let mut iterator = input.chars();
+        let mut simulator = DfaSimulator::new(dfa);
+        let mut tokens = Vec::new();
+        while let Some(token) = simulator.next_token(&mut iterator) {
+            tokens.push(token);
+        }
         if let Some(last) = tokens.last() {
             if last.end == input.len() {
                 Ok(tokens)
@@ -285,8 +300,7 @@ mod tests {
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
         let expected_end = vec![9, 10, 23, 24, 29, 30, 36, 37, 48, 49, 53];
-        let simulator = DfaSimulator::new(&dfa);
-        let tokens = simulator.tokenize(UTF8_INPUT.chars());
+        let tokens = tokenize(&dfa, UTF8_INPUT).expect("Tokenization Failed");
         for (i, token) in tokens.into_iter().enumerate() {
             assert_eq!(token.production, expected_prods[i]);
             assert_eq!(token.start, expected_start[i]);
@@ -308,7 +322,7 @@ mod tests {
             input.push_str(UTF8_INPUT);
             prods += 10;
         }
-        let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
+        let tokens = tokenize(&dfa, &input).expect("Tokenization failed");
         assert_eq!(tokens.len(), prods);
     }
 
@@ -327,7 +341,7 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
+        let tokens = tokenize(&dfa, &input).expect("Tokenization failed");
         assert_eq!(tokens.len(), 1);
     }
 
@@ -342,8 +356,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "123.456789";
-        let simulator = DfaSimulator::new(&dfa);
-        let tokens = simulator.tokenize(input.chars()); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
+        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 1);
         assert_eq!(tokens[0].start, 0);
@@ -361,12 +374,13 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "123.";
-        let simulator = DfaSimulator::new(&dfa);
-        let tokens = simulator.tokenize(input.chars()); //.into_iter().map(|t|t.production).collect::<Vec<_>>();
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].production, 0);
-        assert_eq!(tokens[0].start, 0);
-        assert_eq!(tokens[0].end, 3);
+        let tokens = tokenize(&dfa, input);
+        assert!(tokens.is_err());
+        let tokens = tokens.err().unwrap();
+        assert_eq!(tokens.partial.len(), 1);
+        assert_eq!(tokens.partial[0].production, 0);
+        assert_eq!(tokens.partial[0].start, 0);
+        assert_eq!(tokens.partial[0].end, 3);
     }
 
     #[test]
@@ -380,9 +394,8 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let simulator = DfaSimulator::new(&dfa);
         let input = "/* test comment */ 123456 /* test comment 2 */";
-        let tokens = simulator.tokenize(input.chars());
+        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 0);
     }
@@ -398,9 +411,8 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let simulator = DfaSimulator::new(&dfa);
         let input = "/* test comment */ 123456 ";
-        let tokens = simulator.tokenize(input.chars());
+        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
         assert_eq!(tokens.len(), 4);
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[1].production, 2);
@@ -419,9 +431,8 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let simulator = DfaSimulator::new(&dfa);
         let input = "/* test comment */ \"/*this is not a comment*/\"";
-        let tokens = simulator.tokenize(input.chars());
+        let tokens = tokenize(&dfa, input).expect("Tokenization failed");
         assert_eq!(tokens.len(), 3, "The simulator greedily matched everything");
     }
 
@@ -442,7 +453,7 @@ mod tests {
             .chain(repeat('b').take(3))
             .chain(repeat('c').take(50))
             .collect::<String>();
-        let tokens = DfaSimulator::new(&dfa).tokenize(input.chars());
+        let tokens = tokenize(&dfa, &input).expect("Tokenization failed");
         assert_eq!(tokens.len(), 2);
     }
 
