@@ -1,12 +1,18 @@
-use super::SymbolTable;
+use super::{SymbolTable, UnicodeReader};
+use crate::error::ParseError;
 use crate::grammar::Action;
 use crate::lexer::MultiDfa;
 use std::collections::VecDeque;
-use std::str::Chars;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
 
 /// How many characters are read when populating the buffer of the simulator.
-/// In any case the simulator uses buffered reads.
-const READ_SIZE: usize = 128;
+/// In any case the simulator uses buffered reads, but each read requires some allocations, so it's
+/// better to cache them anyway.
+/// This size is expressed in bytes, but doe to how UTF8 works there may be up to 3 additional
+/// bytes read.
+const READ_SIZE: usize = 1024;
 
 #[derive(Debug, Copy, Clone)]
 /// Token retrieved by the lexical analyzer.
@@ -27,7 +33,7 @@ pub struct Token {
 ///
 /// Simulates a Dfa with a given input and groups the input characters in tokens according to the
 /// rules of the grammar passed to the [`Dfa`].
-pub struct DfaSimulator<'a> {
+pub struct DfaSimulator<'a, I: Iterator<Item = Result<u8, std::io::Error>>> {
     /// Buffer storing the read characters converted using their symbol table id.
     buffer: VecDeque<u32>,
     /// Position of the next character to read from the internal buffer in amount of characters
@@ -42,11 +48,29 @@ pub struct DfaSimulator<'a> {
     mdfa: &'a MultiDfa,
     /// Current mode being simulated. Represented as stack to allow PUSHMODE and POPMODE
     current_mode: Vec<u32>,
+    /// Current input being processed
+    input: UnicodeReader<I>,
 }
 
-impl<'a> DfaSimulator<'a> {
-    /// Creates a new Lexical Analyzer with the given DFA and the given input.
-    pub fn new(dfas: &'a MultiDfa) -> DfaSimulator {
+impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
+    /// Creates a new Lexical Analyzer with the given DFA and the given byte iterator.
+    ///
+    /// Consider using the methods [`tokenize_string`] and [`tokenize_file`] if fine grained
+    /// control over each token is not needed.
+    /// # Examples
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::{MultiDfa, DfaSimulator};
+    /// # use std::io::{BufReader, Read};
+    /// let grammar = Grammar::new(
+    ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
+    ///     &[],
+    /// );
+    /// let dfa = MultiDfa::new(&grammar);
+    /// let input = "abc123";
+    /// let simulator = DfaSimulator::new(&dfa, BufReader::new(input.as_bytes()).bytes());
+    /// ```
+    pub fn new(dfas: &'a MultiDfa, input: I) -> DfaSimulator<'a, I> {
         Self {
             buffer: VecDeque::with_capacity(READ_SIZE),
             forward_pos: 0,
@@ -54,6 +78,7 @@ impl<'a> DfaSimulator<'a> {
             start_pos: 0,
             mdfa: dfas,
             current_mode: vec![0],
+            input: UnicodeReader::new(input),
         }
     }
 
@@ -64,6 +89,7 @@ impl<'a> DfaSimulator<'a> {
     /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::{MultiDfa, DfaSimulator};
+    /// # use std::io::{BufReader, Read};
     /// let grammar = Grammar::new(
     ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
     ///     &[],
@@ -71,18 +97,18 @@ impl<'a> DfaSimulator<'a> {
     /// let dfa = MultiDfa::new(&grammar);
     /// let input = "abc123";
     /// let mut chars = input.chars();
-    /// let mut simulator = DfaSimulator::new(&dfa);
-    /// let token = simulator.next_token(&mut chars).unwrap();
+    /// let mut simulator = DfaSimulator::new(&dfa, BufReader::new(input.as_bytes()).bytes());
+    /// let token = simulator.next_token().unwrap().unwrap();
     /// assert_eq!(token.production, 1);
     /// ```
-    pub fn next_token(&mut self, input: &mut Chars) -> Option<Token> {
+    pub fn next_token(&mut self) -> Result<Option<Token>, ParseError> {
         let dfa = &self.mdfa[*self.current_mode.last().unwrap() as usize];
         let absolute_start_index = self.start_pos;
         let mut absolute_end_index = self.cur_pos;
         let mut state = dfa.start();
         let mut last_accepted = None;
         // Read as much as possible until the DFA halts
-        while let Some((char_id, bytes_for_this_char)) = self.next_char(input) {
+        while let Some((char_id, bytes_for_this_char)) = self.next_char()? {
             absolute_end_index += bytes_for_this_char as usize;
             if let Some(next) = dfa.moove(state, char_id) {
                 //can advance
@@ -146,12 +172,12 @@ impl<'a> DfaSimulator<'a> {
                 }
             }
             if token.is_some() {
-                token
+                Ok(token)
             } else {
-                self.next_token(input)
+                self.next_token()
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -161,22 +187,26 @@ impl<'a> DfaSimulator<'a> {
     ///
     /// DO NOT change the `input` until EOF is returned!
     ///
-    /// Returns the ID and the number of bytes used to represent it.
-    fn next_char(&mut self, input: &mut Chars) -> Option<(u32, u8)> {
+    /// Returns the ID and the number of bytes used to represent it and None if EOF was reached.
+    /// Return io::Error if some problems were encountered while reading the input.
+    fn next_char(&mut self) -> Result<Option<(u32, u8)>, std::io::Error> {
         // checks if the buf needs refilling
         if self.forward_pos == self.buffer.len() {
-            let chars_it = input
+            let chars = (&mut self.input)
                 .take(READ_SIZE)
+                .collect::<Result<Vec<char>, std::io::Error>>()?;
+            let encoded_it = chars
+                .into_iter()
                 .map(|c| encode_char_len(c, self.mdfa.symbol_table()));
-            self.buffer.extend(chars_it);
+            self.buffer.extend(encoded_it);
         }
         if let Some(&char) = self.buffer.get(self.forward_pos) {
             // refilling successfull, return the next character
             self.forward_pos += 1;
-            Some(decode_char_len(char))
+            Ok(Some(decode_char_len(char)))
         } else {
             // refilling failed, EOF reached
-            None
+            Ok(None)
         }
     }
 }
@@ -198,48 +228,66 @@ fn decode_char_len(v: u32) -> (u32, u8) {
 /// Tokenize a string with a given DFA.
 ///
 /// This utility function is a wrapper that creates a [DfaSimulator], calls its
-/// [tokenize](DfaSimulator::tokenize) method and checks whether the simulator reached EOF or not.
+/// [next_token](DfaSimulator::next_token) method and returns all the tokens at once.
 ///
-/// If EOF was not reached, it is still possible to find the matched tokens inside the Error.
 /// # Examples
 /// Tokenize string:
 /// ```
 /// # use wisent::grammar::Grammar;
-/// # use wisent::lexer::{MultiDfa, DfaSimulator, tokenize};
+/// # use wisent::lexer::{MultiDfa, DfaSimulator, tokenize_string};
 /// let grammar = Grammar::new(
 ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
 ///     &[],
 /// );
 /// let dfa = MultiDfa::new(&grammar);
 /// let input = "abc123";
-/// let result = tokenize(&dfa, &input);
+/// let result = tokenize_string(&dfa, &input).unwrap();
 /// assert_eq!(result.len(), 2);
 /// ```
-pub fn tokenize(dfa: &MultiDfa, input: &str) -> Vec<Token> {
+pub fn tokenize_string(dfa: &MultiDfa, input: &str) -> Result<Vec<Token>, ParseError> {
     let mut tokens = Vec::new();
     if !input.is_empty() {
-        let mut iterator = input.chars();
-        let mut simulator = DfaSimulator::new(dfa);
-        while let Some(token) = simulator.next_token(&mut iterator) {
+        let reader = BufReader::new(input.as_bytes());
+        let mut simulator = DfaSimulator::new(dfa, reader.bytes());
+        while let Some(token) = simulator.next_token()? {
             tokens.push(token);
         }
     }
-    tokens
+    Ok(tokens)
+}
+
+/// Tokenize the content of a file with a given DFA.
+///
+/// This utility function is a wrapper that opens a File, creates a [DfaSimulator], calls its
+/// [next_token](DfaSimulator::next_token) method and returns all the tokens at once.
+///
+/// Reads from the file are buffered, so the file content is never in memory all at once.
+pub fn tokenize_file<P: AsRef<Path>>(dfa: &MultiDfa, path: P) -> Result<Vec<Token>, ParseError> {
+    let mut tokens = Vec::new();
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut simulator = DfaSimulator::new(dfa, reader.bytes());
+    while let Some(token) = simulator.next_token()? {
+        tokens.push(token);
+    }
+    Ok(tokens)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::tokenize;
+    use super::tokenize_string;
+    use crate::error::ParseError;
     use crate::grammar::{Action, Grammar};
     use crate::lexer::simulator::READ_SIZE;
     use crate::lexer::{DfaSimulator, MultiDfa};
     use maplit::btreeset;
+    use std::io::{BufReader, Read};
     use std::iter::repeat;
 
     const UTF8_INPUT: &str = "Příliš žluťoučký kůň úpěl ďábelské ódy";
 
     #[test]
-    fn simulator_next_char() {
+    fn simulator_next_char() -> Result<(), ParseError> {
         // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the tokenize
         // function
         let grammar = Grammar::new(
@@ -247,32 +295,34 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let mut reader = UTF8_INPUT.chars();
-        let mut simulator = DfaSimulator::new(&dfa);
+        let reader = BufReader::new(UTF8_INPUT.as_bytes()).bytes();
+        let mut simulator = DfaSimulator::new(&dfa, reader);
         for _ in 0..UTF8_INPUT.chars().count() {
-            assert!(simulator.next_char(&mut reader).is_some());
+            assert!(simulator.next_char()?.is_some());
         }
-        assert!(simulator.next_char(&mut reader).is_none());
+        assert!(simulator.next_char()?.is_none());
+        Ok(())
     }
 
     #[test]
-    fn simulator_multiple_eof() {
+    fn simulator_multiple_eof() -> Result<(), ParseError> {
         // after next_char returns eof once, additional calls return always eof
         let grammar = Grammar::new(
             &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let mut reader = UTF8_INPUT.chars();
-        let mut simulator = DfaSimulator::new(&dfa);
-        while simulator.next_char(&mut reader).is_some() {}
-        assert!(simulator.next_char(&mut reader).is_none());
-        assert!(simulator.next_char(&mut reader).is_none());
-        assert!(simulator.next_char(&mut reader).is_none());
+        let reader = BufReader::new(UTF8_INPUT.as_bytes()).bytes();
+        let mut simulator = DfaSimulator::new(&dfa, reader);
+        while simulator.next_char()?.is_some() {}
+        assert!(simulator.next_char()?.is_none());
+        assert!(simulator.next_char()?.is_none());
+        assert!(simulator.next_char()?.is_none());
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_small() {
+    fn simulator_tokenize_small() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
             &[],
@@ -281,16 +331,17 @@ mod tests {
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
         let expected_end = vec![9, 10, 23, 24, 29, 30, 36, 37, 48, 49, 53];
-        let tokens = tokenize(&dfa, UTF8_INPUT);
+        let tokens = tokenize_string(&dfa, UTF8_INPUT)?;
         for (i, token) in tokens.into_iter().enumerate() {
             assert_eq!(token.production, expected_prods[i]);
             assert_eq!(token.start, expected_start[i]);
             assert_eq!(token.end, expected_end[i]);
         }
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_big() {
+    fn simulator_tokenize_big() -> Result<(), ParseError> {
         // input bigger than BUFFER_SIZE to allow a single buffer swap
         let grammar = Grammar::new(
             &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
@@ -303,12 +354,13 @@ mod tests {
             input.push_str(UTF8_INPUT);
             prods += 10;
         }
-        let tokens = tokenize(&dfa, &input);
+        let tokens = tokenize_string(&dfa, &input)?;
         assert_eq!(tokens.len(), prods);
+        Ok(())
     }
 
     #[test]
-    fn simulator_single_lexeme_bigger_than_buffer() {
+    fn simulator_single_lexeme_bigger_than_buffer() -> Result<(), ParseError> {
         let piece = UTF8_INPUT
             .chars()
             .filter(|c| !c.is_whitespace())
@@ -322,12 +374,13 @@ mod tests {
             &[],
         );
         let dfa = MultiDfa::new(&grammar);
-        let tokens = tokenize(&dfa, &input);
+        let tokens = tokenize_string(&dfa, &input)?;
         assert_eq!(tokens.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_match_longest() {
+    fn simulator_tokenize_match_longest() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("INT", "([0-9])+").into(),
@@ -337,15 +390,16 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "123.456789";
-        let tokens = tokenize(&dfa, input);
+        let tokens = tokenize_string(&dfa, input)?;
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 1);
         assert_eq!(tokens[0].start, 0);
         assert_eq!(tokens[0].end, 10);
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_match_longest_incomplete() {
+    fn simulator_tokenize_match_longest_incomplete() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("INT", "([0-9])+").into(),
@@ -355,15 +409,16 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "123.";
-        let tokens = tokenize(&dfa, input);
+        let tokens = tokenize_string(&dfa, input)?;
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[0].start, 0);
         assert_eq!(tokens[0].end, 3);
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_greedy_complete() {
+    fn simulator_tokenize_greedy_complete() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("COMMENT", "'/*'.*'*/'").into(),
@@ -374,13 +429,14 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ 123456 /* test comment 2 */";
-        let tokens = tokenize(&dfa, input);
+        let tokens = tokenize_string(&dfa, input)?;
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].production, 0);
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_greedy_incomplete() {
+    fn simulator_tokenize_greedy_incomplete() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("COMMENT", "'/*'.*'*/'").into(),
@@ -391,16 +447,17 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ 123456 ";
-        let tokens = tokenize(&dfa, input);
+        let tokens = tokenize_string(&dfa, input)?;
         assert_eq!(tokens.len(), 4);
         assert_eq!(tokens[0].production, 0);
         assert_eq!(tokens[1].production, 2);
         assert_eq!(tokens[2].production, 1);
         assert_eq!(tokens[3].production, 2);
+        Ok(())
     }
 
     #[test]
-    fn simulator_tokenize_nongreedy_kleene() {
+    fn simulator_tokenize_nongreedy_kleene() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("COMMENT", "'/*'.*?'*/'").into(),
@@ -411,12 +468,13 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ \"/*this is not a comment*/\"";
-        let tokens = tokenize(&dfa, input);
+        let tokens = tokenize_string(&dfa, input)?;
         assert_eq!(tokens.len(), 3, "The simulator greedily matched everything");
+        Ok(())
     }
 
     #[test]
-    fn simulator_backtrack_refresh() {
+    fn simulator_backtrack_refresh() -> Result<(), ParseError> {
         // asserts that after backtracking the buffer 2 does not get refreshed again
         let grammar = Grammar::new(
             &[
@@ -432,48 +490,53 @@ mod tests {
             .chain(repeat('b').take(3))
             .chain(repeat('c').take(50))
             .collect::<String>();
-        let tokens = tokenize(&dfa, &input);
+        let tokens = tokenize_string(&dfa, &input)?;
         assert_eq!(tokens.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_empty() {
+    fn tokenize_empty() -> Result<(), ParseError> {
         let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = MultiDfa::new(&grammar);
         let input = "";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert!(res.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn tokenize_full() {
+    fn tokenize_full() -> Result<(), ParseError> {
         let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = MultiDfa::new(&grammar);
         let input = "aaabb";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert_eq!(res.len(), 5);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_err_no_partial() {
+    fn tokenize_err_no_partial() -> Result<(), ParseError> {
         let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = MultiDfa::new(&grammar);
         let input = "d";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert!(res.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn tokenize_err_some_partial() {
+    fn tokenize_err_some_partial() -> Result<(), ParseError> {
         let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
         let dfa = MultiDfa::new(&grammar);
         let input = "aad";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert_eq!(res.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_action_skip() {
+    fn tokenize_action_skip() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("ID", "[a-zA-Z]+").into(),
@@ -484,16 +547,17 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "aad abc 123 bcd";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert_eq!(res.len(), 4);
         assert_eq!(res[0].production, 0);
         assert_eq!(res[1].production, 0);
         assert_eq!(res[2].production, 1);
         assert_eq!(res[3].production, 0);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_action_more() {
+    fn tokenize_action_more() -> Result<(), ParseError> {
         let grammar = Grammar::new(
             &[
                 ("PRIVATE", "'_'", btreeset! {Action::More}).into(),
@@ -503,14 +567,15 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "_test";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].production, 1);
         assert_eq!(res[0].start, 0);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_action_mode() {
+    fn tokenize_action_mode() -> Result<(), ParseError> {
         let mut grammar = Grammar::new(
             &[("START_STRING", "'\"'", btreeset! {Action::Mode(1)}).into()],
             &[],
@@ -524,7 +589,7 @@ mod tests {
         );
         let dfa = MultiDfa::new(&grammar);
         let input = "\"string\"";
-        let res = tokenize(&dfa, input);
+        let res = tokenize_string(&dfa, input)?;
         assert_eq!(res.len(), 3);
         assert_eq!(res[0].mode, 0);
         assert_eq!(res[0].production, 0);
@@ -532,5 +597,6 @@ mod tests {
         assert_eq!(res[1].production, 0);
         assert_eq!(res[2].mode, 1);
         assert_eq!(res[2].production, 1);
+        Ok(())
     }
 }
