@@ -166,8 +166,16 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
                     Action::Mode(m) => {
                         *self.current_mode.last_mut().unwrap() = *m;
                     }
-                    Action::PushMode(_) => todo!(),
-                    Action::PopMode => todo!(),
+                    Action::PushMode(m) => self.current_mode.push(*m),
+                    Action::PopMode => {
+                        if self.current_mode.len() == 1 {
+                            return Err(ParseError::InternalError {
+                                message: "attempt to pop last mode".to_string(),
+                            });
+                        } else {
+                            self.current_mode.pop();
+                        }
+                    }
                     _ => (),
                 }
             }
@@ -598,5 +606,49 @@ mod tests {
         assert_eq!(res[2].mode, 1);
         assert_eq!(res[2].production, 1);
         Ok(())
+    }
+
+    #[test]
+    fn tokenize_action_pushmode_popmode() -> Result<(), ParseError> {
+        let mut grammar = Grammar::new(
+            &[("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into()],
+            &[],
+        );
+        grammar.add_terminals(
+            "INSIDE".to_string(),
+            &[
+                ("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into(),
+                ("CLOSE_PAR", "')'", btreeset! {Action::PopMode}).into(),
+            ],
+        );
+        let dfa = MultiDfa::new(&grammar);
+        let input = "((()))";
+        let res = tokenize_string(&dfa, input)?;
+        assert_eq!(res.len(), 6);
+        assert_eq!(res[0].mode, 0);
+        assert_eq!(res[1].mode, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn tokenize_action_popmode_bottom_stack() {
+        let mut grammar = Grammar::new(
+            &[
+                ("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into(),
+                ("CLOSE_PAR", "')'", btreeset! {Action::PopMode}).into(),
+            ],
+            &[],
+        );
+        grammar.add_terminals(
+            "INSIDE".to_string(),
+            &[
+                ("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into(),
+                ("CLOSE_PAR", "')'", btreeset! {Action::PopMode}).into(),
+            ],
+        );
+        let dfa = MultiDfa::new(&grammar);
+        let input = "(()))))";
+        let res = tokenize_string(&dfa, input);
+        assert!(res.is_err());
     }
 }
