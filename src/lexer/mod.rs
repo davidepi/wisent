@@ -2,10 +2,7 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
-use std::fmt::Write;
-use std::path::Path;
 
-// from ANTLR grammar to a lexer friendly-one
 mod dfa;
 mod grammar_conversion;
 mod simulator;
@@ -14,86 +11,6 @@ mod ureader;
 pub use self::dfa::{Dfa, MultiDfa};
 pub use self::simulator::{tokenize_file, tokenize_string, DfaSimulator, Token};
 pub use self::ureader::UnicodeReader;
-
-/// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
-pub trait GraphvizDot {
-    /// Returns a graphviz dot representation of the object as string.
-    /// # Examples
-    /// Implementation of the [`Dfa`] class:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// # use wisent::lexer::{MultiDfa, GraphvizDot};
-    /// let grammar = Grammar::new(
-    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
-    ///     &[],
-    /// );
-    /// let dfa = MultiDfa::new(&grammar);
-    /// dfa.to_dot();
-    /// ```
-    fn to_dot(&self) -> String;
-
-    /// Writes a graphviz dot representation to to file.
-    fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
-        std::fs::write(path, self.to_dot())
-    }
-}
-
-/// A Tree data structure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Tree<T> {
-    /// The value contained in the tree.
-    value: T,
-    /// The right child of the tree.
-    children: Vec<Tree<T>>,
-}
-
-impl<T> Tree<T> {
-    /// Creates a new leaf node with the given value.
-    pub fn new_leaf(value: T) -> Self {
-        Self {
-            value,
-            children: Vec::new(),
-        }
-    }
-    /// Creates a new node with the given value and children.
-    pub fn new_node(value: T, children: Vec<Tree<T>>) -> Self {
-        Self { value, children }
-    }
-
-    /// Retrieves the value contained inside the node.
-    pub fn value(&self) -> &T {
-        &self.value
-    }
-
-    /// Consumes the node and iterates its children.
-    pub fn into_children(self) -> impl Iterator<Item = Self> {
-        self.children.into_iter()
-    }
-
-    /// Iterator visiting references to the node children.
-    pub fn children(&self) -> impl Iterator<Item = &Self> {
-        self.children.iter()
-    }
-}
-
-impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
-    fn to_dot(&self) -> String {
-        let mut retval = "digraph Tree {\n".to_string();
-        let mut next_id = 0;
-        let mut nodes = vec![(self, next_id)];
-        next_id += 1;
-        while let Some((node, id)) = nodes.pop() {
-            writeln!(retval, "    {}[label=\"{}\"];", id, node.value).unwrap();
-            for child in node.children() {
-                nodes.push((child, next_id));
-                writeln!(retval, "    {}->{}", id, next_id).unwrap();
-                next_id += 1;
-            }
-        }
-        retval.push('}');
-        retval
-    }
-}
 
 /// Table assigning unique numerical values (IDs) to symbols.
 ///

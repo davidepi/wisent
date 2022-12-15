@@ -2,42 +2,28 @@ use crate::error::ParseError;
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write;
 use std::io::ErrorKind;
+use std::path::Path;
 
-use self::bootstrap::bootstrap_parse_string;
-
-// load the manually written ANTLR g4 parser
-mod bootstrap;
-
-/// Struct representing a grammar production.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Production {
+/// Struct representing a lexer production.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexerProduction {
     /// Name of the production.
     pub head: String,
     /// Body of the production.
-    pub body: String,
+    pub body: Tree<LexerRuleElement<char>>,
     /// If this production belongs to a lexer, this field contains the lexer actions.
-    pub actions: Option<BTreeSet<Action>>,
+    pub actions: BTreeSet<Action>,
 }
 
-impl<S: Into<String>> From<(S, S)> for Production {
-    fn from((head, body): (S, S)) -> Self {
-        Self {
-            head: head.into(),
-            body: body.into(),
-            actions: None,
-        }
-    }
-}
-
-impl<S: Into<String>> From<(S, S, BTreeSet<Action>)> for Production {
-    fn from((head, body, actions): (S, S, BTreeSet<Action>)) -> Self {
-        Self {
-            head: head.into(),
-            body: body.into(),
-            actions: Some(actions),
-        }
-    }
+/// Struct representing a parser production.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserProduction {
+    /// Name of the production.
+    pub head: String,
+    /// Body of the production.
+    pub body: Tree<ParserRuleElement>,
 }
 
 /// Struct representing a parsed grammar.
@@ -54,9 +40,9 @@ impl<S: Into<String>> From<(S, S, BTreeSet<Action>)> for Production {
 pub struct Grammar {
     //vector containing the bodies of the terminal productions.
     //the first dimension of the array represent the lexer mode (context).
-    terminals: Vec<Vec<Production>>,
+    terminals: Vec<Vec<LexerProduction>>,
     //vector containing the bodies of the non-terminal productions
-    non_terminals: Vec<Production>,
+    non_terminals: Vec<ParserProduction>,
     // map a mode name to a specific index, used in the first dimension of this struct lexer rules
     modes_index: HashMap<String, u32>,
 }
@@ -83,40 +69,6 @@ impl Grammar {
     /// ```
     pub fn empty() -> Self {
         Self::default()
-    }
-
-    /// Constructs a new Grammar with the given terminals and non terminals.
-    ///
-    /// The set of terminals and non terminals will be added to the `DEFAULT_MODE`.
-    ///
-    /// No checks will be performed on the productions naming and no recursion will be resolved.
-    ///
-    /// Using [`Grammar::parse_antlr`] or [`Grammar::parse_grammar`] instead of this method is
-    /// **HIGHLY** recommended.
-    pub fn new(terminals: &[Production], non_terminals: &[Production]) -> Self {
-        Grammar {
-            terminals: vec![terminals.to_vec()],
-            non_terminals: non_terminals.to_vec(),
-            ..Default::default()
-        }
-    }
-
-    /// Adds lexer productions to the grammar.
-    ///
-    /// Adds additional lexer productions to the grammar with the given mode.
-    ///
-    /// This method has the same limitations of [`Grammar::new`], being intended for debug
-    /// purposes, and [`Grammar::parse_antlr`] or [`Grammar::parse_grammar`] are suggested.
-    ///
-    /// The terminal tuple is similar to the one explained in [`Grammar::new`], with the
-    /// addition of the action set for each recognized terminal.
-    pub fn add_terminals(&mut self, mode: String, terminals: &[Production]) {
-        if let Some(&mode_index) = self.modes_index.get(&mode) {
-            self.terminals[mode_index as usize].extend_from_slice(terminals);
-        } else {
-            self.modes_index.insert(mode, self.modes_index.len() as u32);
-            self.terminals.push(terminals.to_vec());
-        }
     }
 
     /// Returns the total number of productions.
@@ -269,7 +221,7 @@ impl Grammar {
     ///
     /// assert_eq!(grammar.iter_term().count(), 2);
     /// ```
-    pub fn iter_term(&self) -> impl Iterator<Item = &Production> {
+    pub fn iter_term(&self) -> impl Iterator<Item = &LexerProduction> {
         if let Some(terminals) = self.terminals.get(0) {
             terminals.iter()
         } else {
@@ -292,7 +244,7 @@ impl Grammar {
     ///
     /// assert_eq!(grammar.iter_term_in_mode("STR").count(), 2);
     /// ```
-    pub fn iter_term_in_mode(&self, mode: &str) -> impl Iterator<Item = &Production> {
+    pub fn iter_term_in_mode(&self, mode: &str) -> impl Iterator<Item = &LexerProduction> {
         if let Some(index) = self.modes_index.get(mode) {
             if let Some(terminals) = self.terminals.get(*index as usize) {
                 terminals.iter()
@@ -319,7 +271,7 @@ impl Grammar {
     /// assert_eq!(iterator.next().unwrap().body, "LT_LO | LT_UP");
     /// assert_eq!(iterator.next(), None);
     /// ```
-    pub fn iter_nonterm(&self) -> impl Iterator<Item = &Production> {
+    pub fn iter_nonterm(&self) -> impl Iterator<Item = &ParserProduction> {
         self.non_terminals.iter()
     }
 
@@ -373,7 +325,8 @@ impl Grammar {
     /// assert_eq!(grammar.len(), 1);
     /// ```
     pub fn parse_antlr(content: &str) -> Result<Grammar, ParseError> {
-        bootstrap_parse_string(content)
+        // TODO: replace with full version
+        todo!()
     }
 }
 
@@ -421,5 +374,159 @@ impl std::fmt::Display for Action {
             Action::PushMode(p) => write!(f, "PUSHMODE({})", p),
             Action::PopMode => write!(f, "POPMODE"),
         }
+    }
+}
+
+/// The type of operation that can be found in a lexer production.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LexerOp {
+    /// Kleene star operator `*`.
+    Kleene,
+    /// Question mark operator `?`.
+    Qm,
+    /// Plus sign operator `+`.
+    Pl,
+    /// Not sign operator `~`.
+    Not,
+    /// Alternation between elements `|`.
+    Or,
+    /// Concatenation of elements `&`.
+    And,
+}
+
+impl std::fmt::Display for LexerOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            LexerOp::Kleene => write!(f, "*"),
+            LexerOp::Qm => write!(f, "?"),
+            LexerOp::Pl => write!(f, "+"),
+            LexerOp::Not => write!(f, "~"),
+            LexerOp::Or => write!(f, "|"),
+            LexerOp::And => write!(f, "&"),
+        }
+    }
+}
+
+/// The elements that can be found in a lexer production.
+///
+/// A literal should be represented as a concatenation of 1-element [`CharSet`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LexerRuleElement<T> {
+    /// A set containing `T`. `T` is usually a character or its ID in the [`SymbolTable`].
+    CharSet(BTreeSet<T>),
+    /// The *any value* operator `.`.
+    AnyValue,
+    /// An operation between the other elements.
+    Operation(LexerOp),
+}
+
+impl<T: std::fmt::Display> std::fmt::Display for LexerRuleElement<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexerRuleElement::CharSet(i) => {
+                let mut string = String::from("[");
+                for charz in i {
+                    write!(string, "{}", charz)?;
+                }
+                string.push(']');
+                write!(f, "VALUE({})", string)
+            }
+            LexerRuleElement::AnyValue => write!(f, "ANY"),
+            LexerRuleElement::Operation(tp) => write!(f, "OP({})", tp),
+        }
+    }
+}
+
+/// The elements that can be found in a parser production.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParserRuleElement {
+    NonTerminal(String),
+    Terminal(u32),
+    Empty,
+    Operation(LexerOp),
+}
+
+/// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).
+pub trait GraphvizDot {
+    /// Returns a graphviz dot representation of the object as string.
+    /// # Examples
+    /// Implementation of the [`Dfa`] class:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::lexer::{MultiDfa, GraphvizDot};
+    /// let grammar = Grammar::new(
+    ///     &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
+    ///     &[],
+    /// );
+    /// let dfa = MultiDfa::new(&grammar);
+    /// dfa.to_dot();
+    /// ```
+    fn to_dot(&self) -> String;
+
+    /// Writes a graphviz dot representation to to file.
+    fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
+        std::fs::write(path, self.to_dot())
+    }
+}
+
+/// A Tree data structure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tree<T> {
+    /// The value contained in the tree.
+    value: T,
+    /// The right child of the tree.
+    children: Vec<Tree<T>>,
+}
+
+impl<T> Tree<T> {
+    /// Creates a new leaf node with the given value.
+    pub fn new_leaf(value: T) -> Self {
+        Self {
+            value,
+            children: Vec::new(),
+        }
+    }
+    /// Creates a new node with the given value and children.
+    pub fn new_node(value: T, children: Vec<Tree<T>>) -> Self {
+        Self { value, children }
+    }
+
+    /// Retrieves the value contained inside the node.
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// Returns a reference to the nth child.
+    pub fn child(&self, nth: usize) -> Option<&Self> {
+        self.children.get(nth)
+    }
+
+    /// Consumes the node and iterates its children.
+    pub fn into_children(self) -> impl Iterator<Item = Self> {
+        self.children.into_iter()
+    }
+
+    /// Iterator visiting references to the node children.
+    pub fn children(&self) -> impl Iterator<Item = &Self> {
+        self.children.iter()
+    }
+}
+
+impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
+    fn to_dot(&self) -> String {
+        let mut retval = "digraph Tree {\n".to_string();
+        let mut next_id = 0;
+        let mut nodes = vec![(self, next_id)];
+        next_id += 1;
+        while let Some((node, id)) = nodes.pop() {
+            writeln!(retval, "    {}[label=\"{}\"];", id, node.value).unwrap();
+            for child in node.children() {
+                nodes.push((child, next_id));
+                writeln!(retval, "    {}->{}", id, next_id).unwrap();
+                next_id += 1;
+            }
+        }
+        retval.push('}');
+        retval
     }
 }

@@ -1,8 +1,12 @@
 use crate::error::ParseError;
-use crate::grammar::{Action, Grammar};
-use maplit::hashmap;
+use crate::grammar::{Action, Grammar, LexerRuleElement, LexerOp, Tree};
+use maplit::{hashmap, btreeset};
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::iter::Peekable;
+use std::str::Chars;
+
+use super::{LexerProduction, ParserProduction};
 
 const SINGLE_QUOTE_AS_U8: u8 = b'\'';
 
@@ -48,9 +52,14 @@ fn reindex(mut grammar: GrammarInternal) -> Grammar {
     for head in grammar.order {
         if let Some(body) = grammar.terminals.remove(&head) {
             let actions = grammar.actions.remove(&head).unwrap(); // this should always exist
-            terminals.push((head, body, actions).into());
+            let body = expand_literals(gen_precedence_tree(&body));
+            terminals.push(LexerProduction {
+                head,
+                body,
+                actions,
+            });
         } else if let Some(body) = grammar.non_terminals.remove(&head) {
-            non_terminals.push((head, body).into());
+            non_terminals.push(ParserProduction { head, body });
         } else {
             panic!("Expected production to be either in terminals or non terminals.");
         }
@@ -666,6 +675,419 @@ where
             escapes = 0;
         }
     }
+}
+
+////////////// HANDLING LEXER PRODUCTIONS //////////
+
+///Operators for a regex (and an operand, ID).
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
+pub(super) enum ProdToken<'a> {
+    /// Kleenee star `*`.
+    KLEENE,
+    /// Question mark `?`.
+    QM,
+    /// Plus sign `+`.
+    PL,
+    /// Left parenthesis `(`.
+    LP,
+    /// Right parenthesis `)`.
+    RP,
+    /// Not `~`.
+    NOT,
+    /// Alternation of two operands.
+    OR,
+    /// Concatenation of two operands.
+    AND,
+    /// An Operand.
+    Id(&'a str),
+}
+
+impl ProdToken<'_> {
+    /// Returns the number of operands required for each operator.
+    fn required_operands(&self) -> u8 {
+        match self {
+            ProdToken::LP | ProdToken::RP | ProdToken::Id(_) => 0,
+            ProdToken::KLEENE | ProdToken::QM | ProdToken::PL | ProdToken::NOT => 1,
+            ProdToken::OR | ProdToken::AND => 2,
+        }
+    }
+
+    // returns true if the operator is instead an ID (simplifies syntax)
+    fn is_id(&self) -> bool {
+        matches!(self, ProdToken::Id(_))
+    }
+
+    /// Returns the operator precedence priority of this operator.
+    fn priority(&self) -> u8 {
+        match self {
+            ProdToken::LP => 5,
+            ProdToken::RP => 5,
+            ProdToken::NOT => 4,
+            ProdToken::KLEENE => 3,
+            ProdToken::QM => 3,
+            ProdToken::PL => 3,
+            ProdToken::AND => 2,
+            ProdToken::OR => 1,
+            ProdToken::Id(_) => 0,
+        }
+    }
+}
+
+impl std::fmt::Display for ProdToken<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProdToken::KLEENE => write!(f, "*"),
+            ProdToken::QM => write!(f, "?"),
+            ProdToken::PL => write!(f, "+"),
+            ProdToken::LP => write!(f, "("),
+            ProdToken::RP => write!(f, ")"),
+            ProdToken::NOT => write!(f, "~"),
+            ProdToken::OR => write!(f, "|"),
+            ProdToken::AND => write!(f, "&"),
+            ProdToken::Id(i) => write!(f, "{}", i),
+        }
+    }
+}
+
+/// Parse tree for the regex operands, accounting for precedence.
+type PrecedenceTree<'a> = Tree<ProdToken<'a>>;
+
+/// Creates a parse tree with correct precedence given the input regex.
+///
+/// This is essentially the shunting yard algorithm.
+/// All non-unary operators are left associative.
+fn gen_precedence_tree(regex: &str) -> PrecedenceTree {
+    let mut operands = Vec::new();
+    let mut operators: Vec<ProdToken> = Vec::new();
+    // first get a sequence of operands and operators
+    let mut tokens = regex_to_operands(regex).into_iter().peekable();
+    // for each in the sequence do the following actions
+    while let Some(operator) = tokens.next() {
+        match operator {
+            //operators: solve if precedent has higher priority and is not OpType::LP then push cur
+            ProdToken::NOT
+            | ProdToken::OR
+            | ProdToken::AND
+            | ProdToken::KLEENE
+            | ProdToken::QM
+            | ProdToken::PL => {
+                while !operators.is_empty()
+                    && operators.last().unwrap() != &ProdToken::LP
+                    && operators.last().unwrap().priority() >= operator.priority()
+                {
+                    combine_nodes(&mut operands, &mut operators);
+                }
+                operators.push(operator);
+            }
+            // left parenthesis: push. Will be resolved by a right parenthesis.
+            ProdToken::LP => operators.push(operator),
+            // right parenthesis: combine all the nodes until left parenthesis is found.
+            ProdToken::RP => {
+                // corner case: avoid *)? ?)? +)? to become *? ?? +?, these are different ops
+                if let Some(next) = tokens.peek() {
+                    if let Some(top) = operators.last() {
+                        if let Some(update) = avoid_unwanted_nongreedy(*top, *next) {
+                            *operators.last_mut().unwrap() = update;
+                            tokens.next(); // skip the next ?
+                        }
+                    }
+                }
+                // normal case
+                while !operators.is_empty() && operators.last().unwrap() != &ProdToken::LP {
+                    combine_nodes(&mut operands, &mut operators);
+                }
+                operators.pop();
+            }
+            // id: push to stack
+            ProdToken::Id(_) => {
+                let leaf = Tree::new_leaf(operator);
+                operands.push(leaf);
+            }
+        }
+    }
+    //solve all remaining operators
+    while !operators.is_empty() {
+        combine_nodes(&mut operands, &mut operators);
+    }
+    operands.pop().unwrap()
+}
+
+/// Complementary to the function gen_precedence_tree, combines two nodes with the last operator
+/// in the stack.
+fn combine_nodes<'a>(operands: &mut Vec<PrecedenceTree<'a>>, operators: &mut Vec<ProdToken<'a>>) {
+    let operator = operators.pop().unwrap();
+    let children = if operator.required_operands() == 2 {
+        //binary operator
+        let right = operands.pop().unwrap();
+        let left = operands.pop().unwrap();
+        vec![left, right]
+    } else {
+        // unary operator
+        debug_assert!(operator.required_operands() == 1);
+        vec![operands.pop().unwrap()]
+    };
+    let node = Tree::new_node(operator, children);
+    operands.push(node);
+}
+
+/// Used in the gen_precedence_tree function.
+/// If last is */?/+ next is ? and current is ), the parenthesis removal will introduce an unwanted
+/// non-greedy operation. This function simplifies the `last` and `next` operators so the meaning
+/// is the intended one
+fn avoid_unwanted_nongreedy<'a, 'b>(
+    last: ProdToken<'a>,
+    next: ProdToken<'b>,
+) -> Option<ProdToken<'a>> {
+    if next == ProdToken::QM {
+        match last {
+            ProdToken::KLEENE => Some(last),
+            ProdToken::QM => Some(last),
+            ProdToken::PL => Some(ProdToken::KLEENE),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Transforms a precedence parse tree in a precedence parse tree where the groups like `[a-z]`
+/// are expanded in `a | b | c ... | y | z`
+fn expand_literals(node: PrecedenceTree) -> Tree<LexerRuleElement<char>> {
+    match node.value {
+        ProdToken::Id(lit) => expand_literal_node(lit),
+        n => {
+            let children = node.into_children().map(expand_literals).collect();
+            let operation = match n {
+                ProdToken::KLEENE => LexerOp::Kleene,
+                ProdToken::QM => LexerOp::Qm,
+                ProdToken::NOT => LexerOp::Not,
+                ProdToken::OR => LexerOp::Or,
+                ProdToken::AND => LexerOp::And,
+                _ => panic!(), // ( and ) already removed by the precedende function
+            };
+            Tree::new_node(LexerRuleElement::Operation(operation), children)
+        }
+    }
+}
+
+/// Expands a single node containing sets like `[a-z]` in a set with all the simbols like
+/// `{a, b, c, d....}`. Replace also the . symbol with the special placeholder to represent any
+/// value and any eventual set with .
+fn expand_literal_node(literal: &str) -> Tree<LexerRuleElement<char>> {
+    if literal == "." {
+        Tree::new_leaf(LexerRuleElement::AnyValue)
+    } else {
+        let mut charz = Vec::new();
+        let mut iter = literal.chars();
+        let start = iter.next().unwrap();
+        let end;
+        let mut last = '\x00';
+        let mut is_set = false;
+        if start == '[' {
+            end = ']';
+            is_set = true;
+        } else {
+            end = '\'';
+        };
+        // process all character between quotes or braces
+        while let Some(char) = iter.next() {
+            let mut pushme = char;
+            if char == '\\' {
+                //escaped char
+                pushme = unescape_character(iter.next().unwrap(), &mut iter);
+                last = pushme;
+                charz.push(pushme);
+            } else if start == '[' && char == '-' {
+                //set in form a-z, A-Z, 0-9, etc..
+                let from = last as u32 + 1;
+                let until = iter.next().unwrap() as u32 + 1; //included
+                for i in from..until {
+                    pushme = std::char::from_u32(i).unwrap();
+                    charz.push(pushme);
+                }
+            } else if char == end {
+                //end of sequence
+                break;
+            } else {
+                //normal char
+                last = pushme;
+                charz.push(pushme);
+            }
+        }
+        //check possible range in form 'a'..'z', at this point I ASSUME this can be a literal only
+        //and the syntax has already been checked.
+        if let Some(_c @ '.') = iter.next() {
+            iter.next();
+            iter.next();
+            is_set = true;
+            let mut until_char = iter.next().unwrap();
+            if until_char == '\\' {
+                until_char = unescape_character(iter.next().unwrap(), &mut iter);
+            }
+            let from = last as u32 + 1;
+            let until = until_char as u32 + 1;
+            for i in from..until {
+                charz.push(std::char::from_u32(i).unwrap());
+            }
+        }
+        // set of characters will be transformed into an "or" by the Symbol table later
+        if is_set || charz.is_empty() {
+            Tree::new_leaf(LexerRuleElement::CharSet(charz.into_iter().collect()))
+        } else {
+            // concatenation instead must be addressed here
+            let mut done = charz
+                .into_iter()
+                .map(|x| Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {x})))
+                .collect::<Vec<_>>();
+            while done.len() > 1 {
+                let right = done.pop().unwrap();
+                let left = done.pop().unwrap();
+                let new =
+                    Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![left, right]);
+                done.push(new);
+            }
+            done.pop().unwrap()
+        }
+    }
+}
+
+/// Transforms escaped strings in the form "\\n" to the single character they represent '\n'.
+/// Works also for unicode in the form "\\UXXXX".
+///
+/// **NOTE**: it does NOT work for every unicode character (as they can be up to \uXXXXXX) because
+/// ANTLR grammars support only up to \u{FFFF}.
+fn unescape_character<T: Iterator<Item = char>>(letter: char, iter: &mut T) -> char {
+    match letter {
+        'n' => '\n',
+        'r' => '\r',
+        'b' => '\x08',
+        't' => '\t',
+        'f' => '\x0C',
+        'u' | 'U' => {
+            //NOTE: ANTLR grammars support only the BMP(0th) plane. Max is \uXXXX
+            //      So no escaped emojis :'(
+            let digit3 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit2 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit1 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit0 = iter.next().unwrap().to_digit(16).unwrap();
+            let code = digit3 << 12 | digit2 << 8 | digit1 << 4 | digit0;
+            std::char::from_u32(code).unwrap()
+        }
+        'x' | 'X' => {
+            let digit1 = iter.next().unwrap().to_digit(16).unwrap();
+            let digit0 = iter.next().unwrap().to_digit(16).unwrap();
+            let code = digit1 << 4 | digit0;
+            std::char::from_u32(code).unwrap()
+        }
+        _ => letter,
+    }
+}
+
+/// Transforms a regexp in a sequence of operands or operators.
+fn regex_to_operands(regex: &str) -> Vec<ProdToken> {
+    let mut tokenz = Vec::<ProdToken>::new();
+    let mut iter = regex.chars().peekable();
+    let mut index = 0;
+    while let Some(char) = iter.next() {
+        let op = match char {
+            '*' => ProdToken::KLEENE,
+            '|' => ProdToken::OR,
+            '?' => ProdToken::QM,
+            '+' => ProdToken::PL,
+            '~' => ProdToken::NOT,
+            '(' => ProdToken::LP,
+            ')' => ProdToken::RP,
+            _ => {
+                let val = read_token(&regex[index..], char, &mut iter);
+                index += val.len() - 1;
+                ProdToken::Id(val)
+            }
+        };
+        if !tokenz.is_empty() && implicit_concatenation(tokenz.last().unwrap(), &op) {
+            tokenz.push(ProdToken::AND);
+        }
+        index += 1;
+        tokenz.push(op);
+    }
+    tokenz
+}
+
+//No clippy, this is not more readable.
+#[allow(clippy::useless_let_if_seq)]
+/// Returns the slice of the regexp representing the token as 'a' or 'a'..'b' or '[a-z]'.
+fn read_token<'a>(input: &'a str, first: char, it: &mut Peekable<Chars>) -> &'a str {
+    match first {
+        '.' => &input[..1],
+        '[' => {
+            let counted = consume_counting_until(it, ']');
+            &input[..counted + 2] //2 is to match [], plus all the bytes counted inside
+        }
+        '\'' => {
+            let mut counted = consume_counting_until(it, '\'');
+            let mut id = &input[..counted + 2]; //this is a valid literal. check for range ''..''
+            if input.len() > counted + 5 && &input[(counted + 2)..(counted + 5)] == "..\'" {
+                //this is actually a range ''..'' so first advance the iterator by 3 pos
+                it.next();
+                it.next();
+                it.next();
+                //then update the counter for the literal length by accounting also the new lit.
+                counted += consume_counting_until(it, '\'');
+                id = &input[..counted + 6];
+            }
+            id
+        }
+        _ => panic!("Unsupported literal {}", input),
+    }
+}
+
+/// Given two tokens, `a` and `b` returns true if a concatenation is implied between the two.
+/// For example if the tokens are `'a'` and `'b'` the result will be true, because the word `ab`
+/// is the concatenation of the two letters.
+/// If the tokens are `'a'` and `*` the result will be false as there is no implicit operator.
+///
+/// Refer to the following table for each rule:
+/// - `/` = Not allowed.
+/// - `✗` = Concatenation not required.
+/// - `✓` = Concatenation required.
+/// - Rows: parameter `last`
+/// - Columns: parameter `current`
+/// Operator `*` is valid also for `?` and `+`.
+///
+/// |last|`|`|`~`|`*`|`(`|`)`| ID|
+///  |---|---|---|---|---|---|---|
+///  |`|`|`/`|`/`|`/`|`/`|`/`|`✗`|
+///  |`*`|`/`|`✓`|`/`|`✓`|`✗`|`✓`|
+///  |`)`|`✗`|`✓`|`✗`|`✓`|`✗`|`✓`|
+///  |`~`|`/`|`✗`|`/`|`✗`|`/`|`✗`|
+///  |`(`|`/`|`✗`|`/`|`✗`|`✗`|`✗`|
+///  |ID |`✗`|`✓`|`✗`|`✓`|`✗`|`✓`|
+fn implicit_concatenation(last: &ProdToken, current: &ProdToken) -> bool {
+    let last_is_kleene_family =
+        *last == ProdToken::KLEENE || *last == ProdToken::PL || *last == ProdToken::QM;
+    let not_lp_id = *current == ProdToken::LP || current.is_id() || *current == ProdToken::NOT;
+    (last.is_id() || *last == ProdToken::RP || last_is_kleene_family) && not_lp_id
+}
+
+/// Consumes the input (accounting for escaped chars) until the `until` character is found.
+/// Returns the number of bytes (u8) consumed.
+fn consume_counting_until(it: &mut Peekable<Chars>, until: char) -> usize {
+    let mut escapes = 0;
+    let mut skipped = 0;
+    for skip in it {
+        if skip == until {
+            if escapes % 2 == 0 {
+                break;
+            }
+            escapes = 0;
+        } else if skip == '\\' {
+            escapes += 1;
+        } else {
+            escapes = 0;
+        }
+        skipped += skip.len_utf8();
+    }
+    skipped
 }
 
 #[cfg(test)]

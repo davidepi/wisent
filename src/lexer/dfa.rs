@@ -1,6 +1,8 @@
-use super::grammar_conversion::{canonicalise, parse_trees, CanonicalTree, Literal};
-use super::{GraphvizDot, SymbolTable, Tree};
-use crate::grammar::{Action, Grammar};
+use super::grammar_conversion::{
+    alphabet_from_node, canonicalise, is_nongreedy, CanonicalTree, Literal,
+};
+use crate::grammar::{Action, Grammar, GraphvizDot, Tree};
+use crate::lexer::SymbolTable;
 use maplit::{btreeset, hashmap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -54,6 +56,7 @@ impl MultiDfa {
     ///
     /// The generated DFAs have the minimum number of states required to recognized the requested
     /// language.
+    ///
     /// # Examples
     /// Basic usage:
     /// ```
@@ -71,13 +74,17 @@ impl MultiDfa {
         let mut symtables = Vec::with_capacity(modes);
         let mut tts = Vec::with_capacity(modes);
         for mode in grammar.iter_modes() {
-            let terminals = grammar.iter_term_in_mode(mode);
-            let (parse_tree, symtable, nongreedy) = parse_trees(terminals);
-            let actions = grammar
+            let (parse_trees, actions): (Vec<_>, Vec<_>) = grammar
                 .iter_term_in_mode(mode)
-                .map(|prod| prod.actions.as_ref().cloned().unwrap_or_default())
+                .map(|l| (&l.body, l.actions.clone()))
+                .unzip();
+            let nongreedy = parse_trees.iter().map(|pt| is_nongreedy(pt)).collect();
+            let alphabet = parse_trees
+                .iter()
+                .flat_map(|pt| alphabet_from_node(pt))
                 .collect::<Vec<_>>();
-            trees.push((parse_tree, nongreedy, actions));
+            let symtable = SymbolTable::new(&alphabet);
+            trees.push((parse_trees, nongreedy, actions));
             symtables.push(symtable);
         }
         let joined_symtable = SymbolTable::join(&symtables);
@@ -438,19 +445,19 @@ struct DCHelper {
 /// Guaranteed to have a move on every symbol for every node.
 fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
     let helper = build_dc_helper(&node, 0, symtable.epsilon_id());
-    let mut indices = vec![symtable.epsilon_id(); (helper.value.index + 1) as usize];
-    let mut followpos = vec![BTreeSet::new(); (helper.value.index + 1) as usize];
+    let mut indices = vec![symtable.epsilon_id(); (helper.value().index + 1) as usize];
+    let mut followpos = vec![BTreeSet::new(); (helper.value().index + 1) as usize];
     //retrieve accepting nodes (they are embedded in the helper tree, we don't have NFA here)
     let mut accepting_nodes = FxHashMap::default();
     dc_assign_index_to_literal(&helper, &mut indices, &mut accepting_nodes);
     dc_compute_followpos(&helper, &mut followpos);
     let mut accept_map = FxHashMap::default();
     let mut done = HashMap::new();
-    done.insert(helper.value.firstpos.clone(), 0);
+    done.insert(helper.value().firstpos.clone(), 0);
     // check the first node if it can be accepting, this is done in the loop at creation time.
     // pick the production with the lowest index in the same group.
     if let Some(acc_prod) = helper
-        .value
+        .value()
         .firstpos
         .iter()
         .flat_map(|x| accepting_nodes.get(x))
@@ -459,7 +466,7 @@ fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
         accept_map.insert(0, *acc_prod);
     }
     let mut index = 1;
-    let mut unmarked = vec![helper.value.firstpos];
+    let mut unmarked = vec![helper.value().firstpos.clone()];
     let mut tran = FxHashMap::default();
     // loop, conceptually similar to subset construction, but uses followpos instead of NFA
     // (followpos is essentially an NFA without epsilon moves)
@@ -537,14 +544,14 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
         .children()
         .map(|c| {
             let helper = build_dc_helper(c, index, epsilon_id);
-            index = helper.value.index + 1;
+            index = helper.value().index + 1;
             helper
         })
         .collect::<Vec<_>>();
     let nullable;
     let mut firstpos;
     let mut lastpos;
-    match &node.value {
+    match node.value() {
         Literal::Symbol(val) => {
             if *val == epsilon_id {
                 nullable = true;
@@ -557,7 +564,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
             }
         }
         Literal::KLEENE => {
-            let c1 = &children[0].value;
+            let c1 = &children[0].value();
             nullable = true;
             firstpos = c1.firstpos.clone();
             lastpos = c1.lastpos.clone();
@@ -598,7 +605,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
         }
     }
     let new_value = DCHelper {
-        ttype: node.value,
+        ttype: *node.value(),
         index,
         nullable,
         firstpos,
@@ -613,7 +620,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
 /// content of that cell is the followpos set.
 fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
     node.children().for_each(|c| dc_compute_followpos(c, graph));
-    match &node.value.ttype {
+    match &node.value().ttype {
         Literal::Symbol(_) => {}
         Literal::Acc(_) => {}
         Literal::OR => {}
@@ -622,13 +629,13 @@ fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
                 node.children().count() == 2,
                 "AND node can have up to 2 children"
             );
-            for i in &node.children[0].value.lastpos {
-                graph[*i as usize].extend(node.children[1].value.firstpos.iter().copied());
+            for i in &node.child(0).unwrap().value().lastpos {
+                graph[*i as usize].extend(node.child(1).unwrap().value().firstpos.iter().copied());
             }
         }
         Literal::KLEENE => {
-            for i in &node.value.lastpos {
-                graph[*i as usize].extend(node.value.firstpos.iter().copied());
+            for i in &node.value().lastpos {
+                graph[*i as usize].extend(node.value().firstpos.iter().copied());
             }
         }
     }
@@ -644,10 +651,10 @@ fn dc_assign_index_to_literal(
 ) {
     node.children()
         .for_each(|c| dc_assign_index_to_literal(c, indices, acc));
-    match &node.value.ttype {
-        Literal::Symbol(val) => indices[node.value.index as usize] = *val,
+    match &node.value().ttype {
+        Literal::Symbol(val) => indices[node.value().index as usize] = *val,
         Literal::Acc(prod) => {
-            acc.insert(node.value.index, *prod);
+            acc.insert(node.value().index, *prod);
         }
         _ => {}
     }
@@ -843,34 +850,29 @@ fn remap(
 #[cfg(test)]
 mod tests {
     use super::{direct_construction, merge_regex_trees};
-    use crate::grammar::{Action, Grammar, Production};
+    use crate::grammar::{Action, Grammar};
     use crate::lexer::dfa::min_dfa;
-    use crate::lexer::grammar_conversion::{canonicalise, parse_trees};
-    use crate::lexer::MultiDfa;
+    use crate::lexer::grammar_conversion::{alphabet_from_node, canonicalise};
+    use crate::lexer::{MultiDfa, SymbolTable};
     use maplit::btreeset;
     use std::collections::BTreeSet;
 
     #[test]
     fn dfa_conflicts_resolution() {
         //they should be different: the second accept abb as a*b+ (appearing first in the productions)
-        let grammar1 = Grammar::new(
-            &[
-                ("A", "'a'").into(),
-                ("ABB", "'abb'").into(),
-                ("ASTARBPLUS", "'a'*'b'+").into(),
-            ],
-            &[],
-        );
+        let g1 = "grammar g1;
+                  A: 'a';
+                  ABB: 'abb';
+                  ASTARBPLUS: 'a'* 'b'+;";
+        let grammar1 = Grammar::parse_bootstrap(g1).unwrap();
         let mdfa1 = MultiDfa::new(&grammar1);
         let dfa1 = mdfa1.dfa(0).unwrap();
-        let grammar2 = Grammar::new(
-            &[
-                ("ASTARBPLUS", "'a'*'b'+").into(),
-                ("ABB", "'abb'").into(),
-                ("A", "'a'").into(),
-            ],
-            &[],
-        );
+        let g2 = "grammar g2;
+                  ASTARBPLUS: 'a'* 'b'+;
+                  ABB: 'abb';
+                  A: 'a';";
+        let grammar2 = Grammar::parse_bootstrap(g2).unwrap();
+
         let mdfa2 = MultiDfa::new(&grammar2);
         let dfa2 = mdfa2.dfa(0).unwrap();
         assert!(!dfa1.is_empty());
@@ -881,8 +883,9 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_no_sink() {
-        let terminal = Production::from(("PROD1", "('a'|'b')*'abb'"));
-        let grammar = Grammar::new(&[terminal], &[]);
+        let g = "grammar g;
+                 PROD1: ('a' | 'b')* 'abb';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -891,10 +894,10 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_sink_accepting() {
-        let grammar = Grammar::new(
-            &[("DIGIT", "[0-9]").into(), ("NUMBER", "[0-9]+").into()],
-            &[],
-        );
+        let g = "grammar g;
+                 DIGIT: [0-9];
+                 NUMBER [0-9]+;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -903,13 +906,10 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_set_productions() {
-        let grammar = Grammar::new(
-            &[
-                ("LONG1", "[a-c]([b-d]?[e-g])*").into(),
-                ("LONG2", "[fg]+").into(),
-            ],
-            &[],
-        );
+        let g = "grammar g;
+                 LONG1: [a-c]([b-d]?[e-g])*;
+                 LONG2: [fg]+";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert_eq!(dfa.states(), 4);
@@ -917,7 +917,9 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_start_accepting() {
-        let grammar = Grammar::new(&[("ABSTAR", "'ab'*").into()], &[]);
+        let g = "grammar g;
+                 ABSTAR: 'ab'*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -926,8 +928,9 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_single_acc() {
-        let terminal = Production::from(("PROD1", "(('a'*'b')|'c')?'c'"));
-        let grammar = Grammar::new(&[terminal], &[]);
+        let g = "grammar g;
+                 PROD1: (('a'*'b')|'c')?'c';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -936,10 +939,10 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_multi_production() {
-        let grammar = Grammar::new(
-            &[("LETTER_A", "'a'").into(), ("LETTER_B", "'b'*").into()],
-            &[],
-        );
+        let g = "grammar g;
+                 LETTER_A: 'a';
+                 LETTERS_B: 'b'*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -956,15 +959,15 @@ mod tests {
 
     #[test]
     fn dfa_minimization() {
-        let grammar = Grammar::new(
-            &[(
-                "SEQ",
-                "('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*",
-            )
-                .into()],
-            &[],
-        );
-        let (parse_trees, symtable, _) = parse_trees(grammar.iter_term());
+        let g = "grammar g;
+                 SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let parse_trees = grammar.iter_term().map(|l| &l.body).collect::<Vec<_>>();
+        let alphabet = parse_trees
+            .iter()
+            .flat_map(|pt| alphabet_from_node(pt))
+            .collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_trees = parse_trees
             .into_iter()
             .map(|pt| canonicalise(pt, &symtable))
@@ -978,15 +981,15 @@ mod tests {
 
     #[test]
     fn dfa_transition_correct_size() {
-        let grammar = Grammar::new(
-            &[(
-                "SEQ",
-                "('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*",
-            )
-                .into()],
-            &[],
-        );
-        let (parse_trees, symtable, _) = parse_trees(grammar.iter_term());
+        let g = "grammar g;
+                 SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let parse_trees = grammar.iter_term().map(|l| &l.body).collect::<Vec<_>>();
+        let alphabet = parse_trees
+            .iter()
+            .flat_map(|pt| alphabet_from_node(pt))
+            .collect::<Vec<_>>();
+        let symtable = SymbolTable::new(&alphabet);
         let canonical_trees = parse_trees
             .into_iter()
             .map(|pt| canonicalise(pt, &symtable))
@@ -1002,8 +1005,9 @@ mod tests {
 
     #[test]
     fn dfa_moves() {
-        let terminal = Production::from(("PROD1", "'c'*'ab'"));
-        let grammar = Grammar::new(&[terminal], &[]);
+        let g = "grammar g;
+                 PROD1: 'c'* 'ab';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         let a = mdfa.symbol_table().symbol_id('a');
@@ -1016,8 +1020,9 @@ mod tests {
 
     #[test]
     fn dfa_accepting_single() {
-        let terminal = Production::from(("PROD1", "'a'"));
-        let grammar = Grammar::new(&[terminal], &[]);
+        let g = "grammar g;
+                 PROD1: 'a';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
@@ -1029,10 +1034,10 @@ mod tests {
 
     #[test]
     fn nongreedy_rule() {
-        let grammar = Grammar::new(
-            &[("GREEDY", "'a'+").into(), ("NON_GREEDY", "'b'+?").into()],
-            &[],
-        );
+        let g = "grammar g;
+                 GREEDY: 'a'+;
+                 NON_GREEDY: 'b'+?;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
@@ -1049,16 +1054,13 @@ mod tests {
 
     #[test]
     fn dfa_actions() {
+        let g = "grammar g;
+                 A: 'a';
+                 ABB: 'abb';
+                 ASTARBPLUS: 'a'* 'b'+;
+                 SPACE: [ \n\t]+ -> Skip, Mode(WHITESPACE)";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let actions = btreeset! {Action::Skip, Action::Mode(1)};
-        let grammar = Grammar::new(
-            &[
-                ("A", "'a'").into(),
-                ("ABB", "'abb'").into(),
-                ("ASTARBPLUS", "'a'*'b'+").into(),
-                ("SPACE", "[ \n\t]+", actions.clone()).into(),
-            ],
-            &[],
-        );
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         let state = dfa
