@@ -1,10 +1,13 @@
 use crate::error::ParseError;
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::Path;
+
+mod ebnf;
+use crate::grammar::ebnf::bootstrap_ebnf;
 
 /// Struct representing a lexer production.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +313,11 @@ impl Grammar {
         }
     }
 
+    /// Builds a grammar from a String in EBNF syntax.
+    pub fn parse_ebnf(content: &str) -> Result<Grammar, ParseError> {
+        bootstrap_ebnf(content)
+    }
+
     /// Builds a grammar from a String with the content in ANTLR syntax.
     ///
     /// This method constructs and initializes a Grammar class by parsing a String following the
@@ -325,7 +333,6 @@ impl Grammar {
     /// assert_eq!(grammar.len(), 1);
     /// ```
     pub fn parse_antlr(content: &str) -> Result<Grammar, ParseError> {
-        // TODO: replace with full version
         todo!()
     }
 }
@@ -441,7 +448,7 @@ impl<T: std::fmt::Display> std::fmt::Display for LexerRuleElement<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParserRuleElement {
     NonTerminal(String),
-    Terminal(u32),
+    Terminal(String),
     Empty,
     Operation(LexerOp),
 }
@@ -496,19 +503,57 @@ impl<T> Tree<T> {
         &self.value
     }
 
+    /// Retrieves the mutable value contained inside the node.
+    pub fn value_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+
     /// Returns a reference to the nth child.
     pub fn child(&self, nth: usize) -> Option<&Self> {
         self.children.get(nth)
     }
 
+    /// Returns a mutable reference to the nth child.
+    pub fn child_mut(&mut self, nth: usize) -> Option<&mut Self> {
+        self.children.get_mut(nth)
+    }
+
     /// Consumes the node and iterates its children.
-    pub fn into_children(self) -> impl Iterator<Item = Self> {
+    pub fn into_children(self) -> impl DoubleEndedIterator<Item = Self> {
         self.children.into_iter()
     }
 
     /// Iterator visiting references to the node children.
-    pub fn children(&self) -> impl Iterator<Item = &Self> {
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
         self.children.iter()
+    }
+
+    /// Iterator visiting mutable references to the node children.
+    pub fn children_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Self> {
+        self.children.iter_mut()
+    }
+
+    /// Iterator performing a pre-order depth-first visit of the Tree
+    pub fn dfs_preorder(&self) -> impl DoubleEndedIterator<Item = &Self> {
+        let mut order = Vec::new();
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            order.push(node);
+            stack.extend(node.children().rev());
+        }
+        order.into_iter()
+    }
+
+    /// Iterator performing a pre-order breadth-first visit of the Tree
+    pub fn bfs_postorder(&self) -> impl DoubleEndedIterator<Item = &Self> {
+        let mut order = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(self);
+        while let Some(node) = queue.pop_front() {
+            order.push(node);
+            queue.extend(node.children())
+        }
+        order.into_iter()
     }
 }
 

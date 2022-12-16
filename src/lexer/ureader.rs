@@ -95,7 +95,7 @@ impl<R: Iterator<Item = Result<u8, std::io::Error>>> Iterator for UnicodeReader<
     }
 }
 
-const UTF8_TRANSITION_0: [u8; 256] = [
+const UTF8_EQUIVALENCE_CLASSES: [u8; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -107,7 +107,7 @@ const UTF8_TRANSITION_0: [u8; 256] = [
     8,
 ];
 
-const UTF8_TRANSITION_1: [u8; 108] = [
+const UTF8_TRANSITION_TABLE: [u8; 108] = [
     0, 12, 24, 36, 60, 96, 84, 12, 12, 12, 48, 72, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
     12, 0, 12, 12, 12, 12, 12, 0, 12, 0, 12, 12, 12, 24, 12, 12, 12, 12, 12, 24, 12, 24, 12, 12,
     12, 12, 12, 12, 12, 12, 12, 24, 12, 12, 12, 12, 12, 24, 12, 12, 12, 12, 12, 12, 12, 24, 12, 12,
@@ -117,13 +117,13 @@ const UTF8_TRANSITION_1: [u8; 108] = [
 
 // utf8 decoder from bytes. See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
 fn utf8_dfa(state: u8, byte: u8, codepoint: &mut u32) -> u8 {
-    let tp = UTF8_TRANSITION_0[byte as usize];
+    let class = UTF8_EQUIVALENCE_CLASSES[byte as usize];
     *codepoint = if state != 0 {
         (byte as u32 & 0x3F) | (*codepoint << 6)
     } else {
-        (0xFF >> tp) & (byte as u32)
+        (0xFF >> class) & (byte as u32)
     };
-    UTF8_TRANSITION_1[(state + tp) as usize]
+    UTF8_TRANSITION_TABLE[(state + class) as usize]
 }
 
 #[cfg(test)]
