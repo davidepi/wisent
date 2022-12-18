@@ -1486,4 +1486,237 @@ mod tests {
             ),
         }
     }
+
+    #[test]
+    fn identify_literal_empty() {
+        let char_literal = "''";
+        let tree = Tree {
+            value: ProdToken::Id(char_literal),
+            children: vec![],
+        };
+        let expanded_tree = expand_literals(tree);
+        let expected = "VALUE([])";
+        assert_eq!(as_str(&expanded_tree), expected);
+    }
+
+    #[test]
+    fn identify_literal_basic_concat() {
+        let char_literal = "'aaa'";
+        let tree = Tree {
+            value: ProdToken::Id(char_literal),
+            children: vec![],
+        };
+        let expanded_tree = expand_literals(tree);
+        let expected = "OP(&)[VALUE([a]),OP(&)[VALUE([a]),VALUE([a])]]";
+        assert_eq!(as_str(&expanded_tree), expected);
+    }
+
+    #[test]
+    fn identify_literal_escaped() {
+        let char_literal = "'a\\x24'";
+        let tree = Tree {
+            value: ProdToken::Id(char_literal),
+            children: vec![],
+        };
+        let expanded_tree = expand_literals(tree);
+        let expected = "OP(&)[VALUE([a]),VALUE([$])]";
+        assert_eq!(as_str(&expanded_tree), expected);
+    }
+
+    #[test]
+    fn identify_literal_unicode_seq() {
+        let unicode_seq = "'დოლორ'";
+        let tree = Tree {
+            value: ProdToken::Id(unicode_seq),
+            children: vec![],
+        };
+        let expanded_tree = expand_literals(tree);
+        let expected =
+            "OP(&)[VALUE([დ]),OP(&)[VALUE([ო]),OP(&)[VALUE([ლ]),OP(&)[VALUE([ო]),VALUE([რ])]]]]";
+        assert_eq!(as_str(&expanded_tree), expected);
+    }
+
+    #[test]
+    fn identify_literal_escaped_range() {
+        let square = "[\\-a-d\\]]";
+        let tree = Tree {
+            value: ProdToken::Id(square),
+            children: vec![],
+        };
+        let expanded_tree = expand_literals(tree);
+        let expected = "VALUE([-]abcd])";
+        assert_eq!(as_str(&expanded_tree), expected);
+    }
+
+    #[test]
+    fn identify_literal_unicode_range() {
+        let range = "'\\U16C3'..'\\u16C5'";
+        let tree = Tree {
+            value: ProdToken::Id(range),
+            children: vec![],
+        };
+        let expanded_tree = expand_literals(tree);
+        let expected = "VALUE([ᛃᛄᛅ])";
+        assert_eq!(as_str(&expanded_tree), expected);
+    }
+
+    #[test]
+    fn identify_nongreedy_kleene() {
+        let expr_greedy = "'a'.*'a'";
+        let expr_nongreedy = "'a'.*?'a'";
+        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        assert!(!is_nongreedy(&prec_greedy));
+        assert!(is_nongreedy(&prec_nongreedy));
+    }
+
+    #[test]
+    fn identify_nongreedy_qm() {
+        let expr_greedy = "'a'.?'a'";
+        let expr_nongreedy = "'a'.??'a'";
+        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        assert!(!is_nongreedy(&prec_greedy));
+        assert!(is_nongreedy(&prec_nongreedy));
+    }
+
+    #[test]
+    fn identify_nongreedy_plus() {
+        let expr_greedy = "'a'.+'a'";
+        let expr_nongreedy = "'a'.+?'a'";
+        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        assert!(!is_nongreedy(&prec_greedy));
+        assert!(is_nongreedy(&prec_nongreedy));
+    }
+
+    #[test]
+    fn regex_with_unicode_literals() {
+        // ANTLR does not support unicode literals in the grammar,
+        // but this library does for convenience.
+        let regex = "[あいうえお]|[アイウエオ]";
+        let prec_tree = gen_precedence_tree(regex);
+        let expected = "|[[あいうえお],[アイウエオ]]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_correct_precedence_or_klenee() {
+        let expr = "'a'|'b'*'c'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "|['a',&[*['b'],'c']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_correct_precedence_klenee_par() {
+        let expr = "'a'*('b'|'c')*'d'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[&[*['a'],*[|['b','c']]],'d']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_correct_precedence_negation_par() {
+        let expr = "('a')~'b'('c')('d')'e'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[&[&[&['a',~['b']],'c'],'d'],'e']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_correct_precedence_negation() {
+        let expr = "'a'~'b''c'('d')";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[&[&['a',~['b']],'c'],'d']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_correct_precedence_qm_plus_klenee_par() {
+        let expr = "'a'?('b'*|'c'*)+'d'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[&[?['a'],+[|[*['b'],*['c']]]],'d']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_precedence_negation_klenee() {
+        let expr = "~'a'*";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*[~['a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_precedence_negation_klenee_or() {
+        let expr = "~'a'*|'b'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "|[*[~['a']],'b']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_precedence_literal_negation_literal() {
+        let expr = "'a'~'a'*'a'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[&['a',*[~['a']]],'a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_nongreedy_negation() {
+        let expr = "'a'~'a'*?'a'";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[&['a',?[*[~['a']]]],'a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_kleene_qm() {
+        let expr = "(('a')*)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*['a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_not_kleene_qm() {
+        let expr = "(~('a')*)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*[~['a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_qm_qm() {
+        let expr = "(('a')?)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "?['a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_simplify_plus_qm() {
+        let expr = "(('a')+)?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "*['a']";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regex_dont_simplify_nongreedy() {
+        let expr = "('a')+?";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "?[+['a']]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
+
+    #[test]
+    fn regression_disappearing_literal() {
+        let expr = "'a'*~'b'*";
+        let prec_tree = gen_precedence_tree(expr);
+        let expected = "&[*['a'],*[~['b']]]";
+        assert_eq!(as_str(&prec_tree), expected);
+    }
 }

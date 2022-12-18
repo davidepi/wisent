@@ -1,5 +1,5 @@
 use super::grammar_conversion::{
-    alphabet_from_node, canonicalise, is_nongreedy, CanonicalTree, Literal,
+    alphabet_from_node, canonicalise, is_nongreedy, CanonicalLexerRuleElement,
 };
 use crate::grammar::{Action, Grammar, GraphvizDot, Tree};
 use crate::lexer::SymbolTable;
@@ -168,7 +168,7 @@ impl Dfa {
     /// symbol table. The vector index correspond to the accepted production index.
     /// The nongreedy array specifies if each production is nongreedy.
     fn new(
-        canonical_trees: Vec<CanonicalTree>,
+        canonical_trees: Vec<Tree<CanonicalLexerRuleElement>>,
         symtable: &SymbolTable,
         nongreedy: Vec<bool>,
         actions: Vec<BTreeSet<Action>>,
@@ -403,20 +403,25 @@ impl GraphvizDot for MultiDfa {
 
 /// Merges different canonical trees into a single canonical tree with multiple accepting nodes.
 /// Accepting states are labeled with a new node in the canonical tree.
-fn merge_regex_trees(nodes: Vec<CanonicalTree>) -> CanonicalTree {
+fn merge_regex_trees(
+    nodes: Vec<Tree<CanonicalLexerRuleElement>>,
+) -> Tree<CanonicalLexerRuleElement> {
     // for each regex assign an acceptance node with ID
     let mut roots = nodes
         .into_iter()
         .enumerate()
         .map(|(node_no, root)| {
             Tree::new_node(
-                Literal::AND,
-                vec![root, Tree::new_leaf(Literal::Acc(node_no as u32))],
+                CanonicalLexerRuleElement::AND,
+                vec![
+                    root,
+                    Tree::new_leaf(CanonicalLexerRuleElement::Acc(node_no as u32)),
+                ],
             )
         })
         .collect::<Vec<_>>();
     if roots.len() > 1 {
-        Tree::new_node(Literal::OR, roots)
+        Tree::new_node(CanonicalLexerRuleElement::OR, roots)
     } else {
         roots.pop().unwrap()
     }
@@ -426,7 +431,7 @@ fn merge_regex_trees(nodes: Vec<CanonicalTree>) -> CanonicalTree {
 struct DCHelper {
     /// Literal type (need to know if kleenee or AND in the followpos computation)
     /// and the followpos is deferred from the firstpos, nullable, lastpos.
-    ttype: Literal,
+    ttype: CanonicalLexerRuleElement,
     ///
     index: u32,
     /// true if the current node is nullable.
@@ -443,7 +448,7 @@ struct DCHelper {
 /// Refers to "Compilers, principle techniques and tools" of A.Aho et al. (p.179 on 2nd edition).
 ///
 /// Guaranteed to have a move on every symbol for every node.
-fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
+fn direct_construction(node: Tree<CanonicalLexerRuleElement>, symtable: &SymbolTable) -> Dfa {
     let helper = build_dc_helper(&node, 0, symtable.epsilon_id());
     let mut indices = vec![symtable.epsilon_id(); (helper.value().index + 1) as usize];
     let mut followpos = vec![BTreeSet::new(); (helper.value().index + 1) as usize];
@@ -502,7 +507,7 @@ fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
         let ids_no = symtable.ids() as usize;
         let mut next_nodes = Vec::with_capacity(ids_no);
         let mut all_same = FxHashSet::with_capacity_and_hasher(ids_no, Default::default());
-        for symbol in 0..symtable.ids() as u32 {
+        for symbol in 0..symtable.ids() {
             let next = *tran.get(&(node, symbol)).unwrap_or(&sink);
             next_nodes.push(next);
             all_same.insert(next);
@@ -537,7 +542,11 @@ fn direct_construction(node: CanonicalTree, symtable: &SymbolTable) -> Dfa {
 ///
 /// - `node`: the root of the tree (it's a recursive function)
 /// - `start_index`: starting index of the output DFA (0 for the first invocation)
-fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> Tree<DCHelper> {
+fn build_dc_helper(
+    node: &Tree<CanonicalLexerRuleElement>,
+    start_index: u32,
+    epsilon_id: u32,
+) -> Tree<DCHelper> {
     //postorder because I need to build it bottom up
     let mut index = start_index;
     let children = node
@@ -552,7 +561,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
     let mut firstpos;
     let mut lastpos;
     match node.value() {
-        Literal::Symbol(val) => {
+        CanonicalLexerRuleElement::Symbol(val) => {
             if *val == epsilon_id {
                 nullable = true;
                 firstpos = BTreeSet::new();
@@ -563,13 +572,13 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
                 lastpos = btreeset! {index};
             }
         }
-        Literal::KLEENE => {
+        CanonicalLexerRuleElement::KLEENE => {
             let c1 = &children[0].value();
             nullable = true;
             firstpos = c1.firstpos.clone();
             lastpos = c1.lastpos.clone();
         }
-        Literal::AND => {
+        CanonicalLexerRuleElement::AND => {
             nullable = children.iter().all(|c| c.value().nullable);
             firstpos = Default::default();
             lastpos = Default::default();
@@ -589,7 +598,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
                 }
             }
         }
-        Literal::OR => {
+        CanonicalLexerRuleElement::OR => {
             nullable = children.iter().any(|c| c.value().nullable);
             firstpos = Default::default();
             lastpos = Default::default();
@@ -598,7 +607,7 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
                 lastpos.extend(child.value().lastpos.iter().cloned());
             }
         }
-        Literal::Acc(_) => {
+        CanonicalLexerRuleElement::Acc(_) => {
             nullable = false;
             firstpos = btreeset! {index};
             lastpos = btreeset! {index};
@@ -621,10 +630,10 @@ fn build_dc_helper(node: &CanonicalTree, start_index: u32, epsilon_id: u32) -> T
 fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
     node.children().for_each(|c| dc_compute_followpos(c, graph));
     match &node.value().ttype {
-        Literal::Symbol(_) => {}
-        Literal::Acc(_) => {}
-        Literal::OR => {}
-        Literal::AND => {
+        CanonicalLexerRuleElement::Symbol(_) => {}
+        CanonicalLexerRuleElement::Acc(_) => {}
+        CanonicalLexerRuleElement::OR => {}
+        CanonicalLexerRuleElement::AND => {
             debug_assert!(
                 node.children().count() == 2,
                 "AND node can have up to 2 children"
@@ -633,7 +642,7 @@ fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
                 graph[*i as usize].extend(node.child(1).unwrap().value().firstpos.iter().copied());
             }
         }
-        Literal::KLEENE => {
+        CanonicalLexerRuleElement::KLEENE => {
             for i in &node.value().lastpos {
                 graph[*i as usize].extend(node.value().firstpos.iter().copied());
             }
@@ -652,8 +661,8 @@ fn dc_assign_index_to_literal(
     node.children()
         .for_each(|c| dc_assign_index_to_literal(c, indices, acc));
     match &node.value().ttype {
-        Literal::Symbol(val) => indices[node.value().index as usize] = *val,
-        Literal::Acc(prod) => {
+        CanonicalLexerRuleElement::Symbol(val) => indices[node.value().index as usize] = *val,
+        CanonicalLexerRuleElement::Acc(prod) => {
             acc.insert(node.value().index, *prod);
         }
         _ => {}
@@ -864,14 +873,14 @@ mod tests {
                   A: 'a';
                   ABB: 'abb';
                   ASTARBPLUS: 'a'* 'b'+;";
-        let grammar1 = Grammar::parse_bootstrap(g1).unwrap();
+        let grammar1 = Grammar::parse_antlr(g1).unwrap();
         let mdfa1 = MultiDfa::new(&grammar1);
         let dfa1 = mdfa1.dfa(0).unwrap();
         let g2 = "grammar g2;
                   ASTARBPLUS: 'a'* 'b'+;
                   ABB: 'abb';
                   A: 'a';";
-        let grammar2 = Grammar::parse_bootstrap(g2).unwrap();
+        let grammar2 = Grammar::parse_antlr(g2).unwrap();
 
         let mdfa2 = MultiDfa::new(&grammar2);
         let dfa2 = mdfa2.dfa(0).unwrap();
@@ -885,7 +894,7 @@ mod tests {
     fn dfa_direct_construction_no_sink() {
         let g = "grammar g;
                  PROD1: ('a' | 'b')* 'abb';";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -897,7 +906,7 @@ mod tests {
         let g = "grammar g;
                  DIGIT: [0-9];
                  NUMBER [0-9]+;";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -909,7 +918,7 @@ mod tests {
         let g = "grammar g;
                  LONG1: [a-c]([b-d]?[e-g])*;
                  LONG2: [fg]+";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert_eq!(dfa.states(), 4);
@@ -919,7 +928,7 @@ mod tests {
     fn dfa_direct_construction_start_accepting() {
         let g = "grammar g;
                  ABSTAR: 'ab'*;";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -930,7 +939,7 @@ mod tests {
     fn dfa_direct_construction_single_acc() {
         let g = "grammar g;
                  PROD1: (('a'*'b')|'c')?'c';";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -942,7 +951,7 @@ mod tests {
         let g = "grammar g;
                  LETTER_A: 'a';
                  LETTERS_B: 'b'*;";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -961,7 +970,7 @@ mod tests {
     fn dfa_minimization() {
         let g = "grammar g;
                  SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let parse_trees = grammar.iter_term().map(|l| &l.body).collect::<Vec<_>>();
         let alphabet = parse_trees
             .iter()
@@ -983,7 +992,7 @@ mod tests {
     fn dfa_transition_correct_size() {
         let g = "grammar g;
                  SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let parse_trees = grammar.iter_term().map(|l| &l.body).collect::<Vec<_>>();
         let alphabet = parse_trees
             .iter()
@@ -1007,7 +1016,7 @@ mod tests {
     fn dfa_moves() {
         let g = "grammar g;
                  PROD1: 'c'* 'ab';";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         let a = mdfa.symbol_table().symbol_id('a');
@@ -1022,7 +1031,7 @@ mod tests {
     fn dfa_accepting_single() {
         let g = "grammar g;
                  PROD1: 'a';";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
@@ -1037,7 +1046,7 @@ mod tests {
         let g = "grammar g;
                  GREEDY: 'a'+;
                  NON_GREEDY: 'b'+?;";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
@@ -1059,7 +1068,7 @@ mod tests {
                  ABB: 'abb';
                  ASTARBPLUS: 'a'* 'b'+;
                  SPACE: [ \n\t]+ -> Skip, Mode(WHITESPACE)";
-        let grammar = Grammar::parse_bootstrap(g).unwrap();
+        let grammar = Grammar::parse_antlr(g).unwrap();
         let actions = btreeset! {Action::Skip, Action::Mode(1)};
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();

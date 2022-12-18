@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 /// Used to build the canonical parse tree.
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-pub enum Literal {
+pub enum CanonicalLexerRuleElement {
     /// The input symbol (a single byte).
     Symbol(u32),
     /// The given accepting state.
@@ -20,20 +20,17 @@ pub enum Literal {
     OR,
 }
 
-impl std::fmt::Display for Literal {
+impl std::fmt::Display for CanonicalLexerRuleElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Symbol(i) => write!(f, "{}", i),
-            Literal::Acc(i) => write!(f, "ACC({})", i),
-            Literal::KLEENE => write!(f, "*"),
-            Literal::AND => write!(f, "&"),
-            Literal::OR => write!(f, "|"),
+            CanonicalLexerRuleElement::Symbol(i) => write!(f, "{}", i),
+            CanonicalLexerRuleElement::Acc(i) => write!(f, "ACC({})", i),
+            CanonicalLexerRuleElement::KLEENE => write!(f, "*"),
+            CanonicalLexerRuleElement::AND => write!(f, "&"),
+            CanonicalLexerRuleElement::OR => write!(f, "|"),
         }
     }
 }
-
-/// Parse tree for the regex with only *, AND, OR. Thus removing + or ? or ^.
-pub(super) type CanonicalTree = Tree<Literal>;
 
 /// Checks if a parsing tree contains non-greedy productions
 pub(super) fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
@@ -60,7 +57,7 @@ pub(super) fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
 pub(super) fn canonicalise(
     node: &Tree<LexerRuleElement<char>>,
     symtable: &SymbolTable,
-) -> CanonicalTree {
+) -> Tree<CanonicalLexerRuleElement> {
     match node.value() {
         LexerRuleElement::CharSet(i) => {
             create_literal_node(symtable.symbols_ids(i), symtable.epsilon_id())
@@ -75,11 +72,11 @@ pub(super) fn canonicalise(
                 }
                 LexerOp::Or => {
                     let children = node.children().map(|c| canonicalise(c, symtable)).collect();
-                    Tree::new_node(Literal::OR, children)
+                    Tree::new_node(CanonicalLexerRuleElement::OR, children)
                 }
                 LexerOp::And => {
                     let children = node.children().map(|c| canonicalise(c, symtable)).collect();
-                    Tree::new_node(Literal::AND, children)
+                    Tree::new_node(CanonicalLexerRuleElement::AND, children)
                 }
                 LexerOp::Kleene => {
                     let child = node
@@ -87,7 +84,7 @@ pub(super) fn canonicalise(
                         .map(|c| canonicalise(c, symtable))
                         .next()
                         .expect("* node must have a child node");
-                    Tree::new_node(Literal::KLEENE, vec![child])
+                    Tree::new_node(CanonicalLexerRuleElement::KLEENE, vec![child])
                 }
                 LexerOp::Qm => {
                     let child = node
@@ -103,7 +100,10 @@ pub(super) fn canonicalise(
                     } else {
                         let canonical_child = canonicalise(child, symtable);
                         let epsilon = create_literal_node(BTreeSet::new(), symtable.epsilon_id());
-                        Tree::new_node(Literal::OR, vec![epsilon, canonical_child])
+                        Tree::new_node(
+                            CanonicalLexerRuleElement::OR,
+                            vec![epsilon, canonical_child],
+                        )
                     }
                 }
                 LexerOp::Pl => {
@@ -112,8 +112,9 @@ pub(super) fn canonicalise(
                         .map(|c| canonicalise(c, symtable))
                         .next()
                         .expect("+ node must have a child node");
-                    let right = Tree::new_node(Literal::KLEENE, vec![child.clone()]);
-                    Tree::new_node(Literal::AND, vec![child, right])
+                    let right =
+                        Tree::new_node(CanonicalLexerRuleElement::KLEENE, vec![child.clone()]);
+                    Tree::new_node(CanonicalLexerRuleElement::AND, vec![child, right])
                 }
             }
         }
@@ -123,17 +124,19 @@ pub(super) fn canonicalise(
 /// converts a set of IDs into a several nodes concatenated with the | operators.
 /// (e.g. from `[a,b,c]` to `'a'|'b'|'c'`.
 /// Returns epsilon if the set is empty.
-fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> CanonicalTree {
+fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> Tree<CanonicalLexerRuleElement> {
     if set.is_empty() {
-        Tree::new_leaf(Literal::Symbol(epsilon_id))
+        Tree::new_leaf(CanonicalLexerRuleElement::Symbol(epsilon_id))
     } else if set.len() == 1 {
-        Tree::new_leaf(Literal::Symbol(set.into_iter().next().unwrap()))
+        Tree::new_leaf(CanonicalLexerRuleElement::Symbol(
+            set.into_iter().next().unwrap(),
+        ))
     } else {
         let children = set
             .into_iter()
-            .map(|val| Tree::new_leaf(Literal::Symbol(val)))
+            .map(|val| Tree::new_leaf(CanonicalLexerRuleElement::Symbol(val)))
             .collect();
-        Tree::new_node(Literal::OR, children)
+        Tree::new_node(CanonicalLexerRuleElement::OR, children)
     }
 }
 
@@ -187,11 +190,12 @@ fn solve_negated(node: &Tree<LexerRuleElement<char>>, symtable: &SymbolTable) ->
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::grammar_conversion::{
-        alphabet_from_node, canonicalise, expand_literals, gen_precedence_tree, is_nongreedy,
-        ProdToken,
-    };
-    use crate::lexer::{SymbolTable, Tree};
+    use super::{alphabet_from_node, canonicalise};
+    use crate::grammar::{LexerOp, LexerRuleElement, Tree};
+    use crate::lexer::SymbolTable;
+    use maplit::btreeset;
+    use std::char;
+    use std::collections::BTreeSet;
     use std::fmt::Write;
 
     /// encoded representation of a tree in form of string
@@ -201,356 +205,198 @@ mod tests {
         let children = node.children().map(as_str).collect::<Vec<_>>();
         write!(&mut string, "{}", node.value()).unwrap();
         if !children.is_empty() {
-            write!(&mut string, "[{}]", children.join(",")).unwrap();
+            write!(&mut string, "({})", children.join(",")).unwrap();
         }
         string
     }
 
+    // fast way of creating a tree. For tests only.
+    fn from_str<T: Iterator<Item = char>>(chars: &mut T) -> Tree<LexerRuleElement<char>> {
+        let op = chars.next().unwrap();
+        match op {
+            '&' => {
+                assert_eq!(chars.next().unwrap(), '(');
+                let left = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ',');
+                let right = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ')');
+                Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![left, right])
+            }
+            '|' => {
+                assert_eq!(chars.next().unwrap(), '(');
+                let left = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ',');
+                let right = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ')');
+                Tree::new_node(LexerRuleElement::Operation(LexerOp::Or), vec![left, right])
+            }
+            '*' => {
+                assert_eq!(chars.next().unwrap(), '(');
+                let child = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ')');
+                Tree::new_node(LexerRuleElement::Operation(LexerOp::Kleene), vec![child])
+            }
+            '?' => {
+                assert_eq!(chars.next().unwrap(), '(');
+                let child = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ')');
+                Tree::new_node(LexerRuleElement::Operation(LexerOp::Qm), vec![child])
+            }
+            '+' => {
+                assert_eq!(chars.next().unwrap(), '(');
+                let child = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ')');
+                Tree::new_node(LexerRuleElement::Operation(LexerOp::Pl), vec![child])
+            }
+            '~' => {
+                assert_eq!(chars.next().unwrap(), '(');
+                let child = from_str(chars);
+                assert_eq!(chars.next().unwrap(), ')');
+                Tree::new_node(LexerRuleElement::Operation(LexerOp::Not), vec![child])
+            }
+            '.' => Tree::new_leaf(LexerRuleElement::AnyValue),
+            '[' => {
+                let mut set = BTreeSet::new();
+                for next in chars.by_ref() {
+                    if next != ']' {
+                        set.insert(next);
+                    } else {
+                        break;
+                    }
+                }
+                Tree::new_leaf(LexerRuleElement::CharSet(set))
+            }
+            '\'' => {
+                let mut seq = Vec::new();
+                for next in chars.by_ref() {
+                    if next != '\'' {
+                        seq.push(next);
+                    } else {
+                        break;
+                    }
+                }
+                if seq.len() <= 1 {
+                    Tree::new_leaf(LexerRuleElement::CharSet(seq.into_iter().collect()))
+                } else {
+                    seq.reverse();
+                    let left =
+                        Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {seq.pop().unwrap()}));
+                    let right =
+                        Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {seq.pop().unwrap()}));
+                    let op = LexerRuleElement::Operation(LexerOp::And);
+                    let mut root = Tree::new_node(op, vec![left, right]);
+                    while let Some(next) = seq.pop() {
+                        let new = Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {next}));
+                        root = Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![new]);
+                    }
+                    root
+                }
+            }
+            _ => panic!(),
+        }
+    }
+
     #[test]
     fn canonical_tree_any() {
-        let expr = "('a'*.)*'a'";
-        let tree = expand_literals(gen_precedence_tree(expr));
+        let tree = from_str(&mut "&(*(&(*('a'),.)),'a')".chars()); // ('a'*.)*'a'
         let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(tree, &symtable);
-        let expected = "&[*[&[*[0],|[0,1]]],0]";
+        let canonical_tree = canonicalise(&tree, &symtable);
+        let expected = "&(*(&(*(0),|(0,1))),0)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_plus() {
-        let expr = "('a'*'b')+'a'";
-        let tree = expand_literals(gen_precedence_tree(expr));
+        let tree = from_str(&mut "&(+(&(*('a'),'b')),'a')".chars()); // ('a'*'b')+'a'
         let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(tree, &symtable);
-        let expected = "&[&[&[*[0],1],*[&[*[0],1]]],0]";
+        let canonical_tree = canonicalise(&tree, &symtable);
+        let expected = "&(&(&(*(0),1),*(&(*(0),1))),0)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_qm() {
-        let expr = "('a'*'b')?'a'";
-        let tree = expand_literals(gen_precedence_tree(expr));
+        let tree = from_str(&mut "&(?(&(*('a'),'b')),'a')".chars()); // ('a'*'b')?'a'
         let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(tree, &symtable);
-        let expected = "&[|[3,&[*[0],1]],0]";
+        let canonical_tree = canonicalise(&tree, &symtable);
+        let expected = "&(|(3,&(*(0),1)),0)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_neg() {
-        let expr = "~[ab]('a'|'c')";
-        let tree = expand_literals(gen_precedence_tree(expr));
+        let tree = from_str(&mut "&(~([ab]),|('a','c'))".chars()); // ~[ab]('a'|'c')
         let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(tree, &symtable);
-        let expected = "&[|[2,3],|[0,2]]";
+        let canonical_tree = canonicalise(&tree, &symtable);
+        let expected = "&(|(2,3),|(0,2))";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_double_negation() {
-        let expr = "~(~[a-c])|'d'";
-        let tree = expand_literals(gen_precedence_tree(expr));
+        let tree = from_str(&mut "|(~(~([abc])),'d')".chars()); // ~(~[a-c])|'d'
         let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(tree, &symtable);
-        let expected = "|[0,1]";
+        let canonical_tree = canonicalise(&tree, &symtable);
+        let expected = "|(0,1)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_ignores_nongreedy_kleene() {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
-        let expr_greedy = "'a'.*'a'";
-        let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let tree_greedy = from_str(&mut "&(&('a',*(.)),'a')".chars()); // 'a'.*'a'
         let alphabet_greedy = alphabet_from_node(&tree_greedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_greedy = SymbolTable::new(&alphabet_greedy);
-        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
-        let expr_nongreedy = "'a'.*?'a'";
-        let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        let canonical_tree_greedy = canonicalise(&tree_greedy, &symtable_greedy);
+        let tree_nongreedy = from_str(&mut "&(&('a',?(*(.))),'a')".chars()); // 'a'.*?'a'
         let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
-        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(&tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
 
     #[test]
     fn canonical_tree_ignores_nongreedy_plus() {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
-        let expr_greedy = "'a'.+'a'";
-        let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let tree_greedy = from_str(&mut "&(&('a',+(.)),'a')".chars()); // 'a'.+'a'
         let alphabet_greedy = alphabet_from_node(&tree_greedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_greedy = SymbolTable::new(&alphabet_greedy);
-        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
-        let expr_nongreedy = "'a'.+?'a'";
-        let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        let canonical_tree_greedy = canonicalise(&tree_greedy, &symtable_greedy);
+        let tree_nongreedy = from_str(&mut "&(&('a',?(+(.))),'a')".chars()); // 'a'.+?'a'
         let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
-        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(&tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
 
     #[test]
     fn canonical_tree_ignores_nongreedy_qm() {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
-        let expr_greedy = "'a'.?'a'";
-        let tree_greedy = expand_literals(gen_precedence_tree(expr_greedy));
+        let tree_greedy = from_str(&mut "&(&('a',?(.)),'a')".chars()); // 'a'.?'a'
         let alphabet_greedy = alphabet_from_node(&tree_greedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_greedy = SymbolTable::new(&alphabet_greedy);
-        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
-        let expr_nongreedy = "'a'.??'a'";
-        let tree_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
+        let canonical_tree_greedy = canonicalise(&tree_greedy, &symtable_greedy);
+        let tree_nongreedy = from_str(&mut "&(&('a',?(?(.))),'a')".chars()); // 'a'.??'a'
         let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
-        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(&tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
-    }
-
-    #[test]
-    fn identify_literal_empty() {
-        let char_literal = "''";
-        let tree = Tree {
-            value: ProdToken::Id(char_literal),
-            children: vec![],
-        };
-        let expanded_tree = expand_literals(tree);
-        let expected = "VALUE([])";
-        assert_eq!(as_str(&expanded_tree), expected);
-    }
-
-    #[test]
-    fn identify_literal_basic_concat() {
-        let char_literal = "'aaa'";
-        let tree = Tree {
-            value: ProdToken::Id(char_literal),
-            children: vec![],
-        };
-        let expanded_tree = expand_literals(tree);
-        let expected = "OP(&)[VALUE([a]),OP(&)[VALUE([a]),VALUE([a])]]";
-        assert_eq!(as_str(&expanded_tree), expected);
-    }
-
-    #[test]
-    fn identify_literal_escaped() {
-        let char_literal = "'a\\x24'";
-        let tree = Tree {
-            value: ProdToken::Id(char_literal),
-            children: vec![],
-        };
-        let expanded_tree = expand_literals(tree);
-        let expected = "OP(&)[VALUE([a]),VALUE([$])]";
-        assert_eq!(as_str(&expanded_tree), expected);
-    }
-
-    #[test]
-    fn identify_literal_unicode_seq() {
-        let unicode_seq = "'დოლორ'";
-        let tree = Tree {
-            value: ProdToken::Id(unicode_seq),
-            children: vec![],
-        };
-        let expanded_tree = expand_literals(tree);
-        let expected =
-            "OP(&)[VALUE([დ]),OP(&)[VALUE([ო]),OP(&)[VALUE([ლ]),OP(&)[VALUE([ო]),VALUE([რ])]]]]";
-        assert_eq!(as_str(&expanded_tree), expected);
-    }
-
-    #[test]
-    fn identify_literal_escaped_range() {
-        let square = "[\\-a-d\\]]";
-        let tree = Tree {
-            value: ProdToken::Id(square),
-            children: vec![],
-        };
-        let expanded_tree = expand_literals(tree);
-        let expected = "VALUE([-]abcd])";
-        assert_eq!(as_str(&expanded_tree), expected);
-    }
-
-    #[test]
-    fn identify_literal_unicode_range() {
-        let range = "'\\U16C3'..'\\u16C5'";
-        let tree = Tree {
-            value: ProdToken::Id(range),
-            children: vec![],
-        };
-        let expanded_tree = expand_literals(tree);
-        let expected = "VALUE([ᛃᛄᛅ])";
-        assert_eq!(as_str(&expanded_tree), expected);
-    }
-
-    #[test]
-    fn identify_nongreedy_kleene() {
-        let expr_greedy = "'a'.*'a'";
-        let expr_nongreedy = "'a'.*?'a'";
-        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
-        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
-        assert!(!is_nongreedy(&prec_greedy));
-        assert!(is_nongreedy(&prec_nongreedy));
-    }
-
-    #[test]
-    fn identify_nongreedy_qm() {
-        let expr_greedy = "'a'.?'a'";
-        let expr_nongreedy = "'a'.??'a'";
-        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
-        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
-        assert!(!is_nongreedy(&prec_greedy));
-        assert!(is_nongreedy(&prec_nongreedy));
-    }
-
-    #[test]
-    fn identify_nongreedy_plus() {
-        let expr_greedy = "'a'.+'a'";
-        let expr_nongreedy = "'a'.+?'a'";
-        let prec_greedy = expand_literals(gen_precedence_tree(expr_greedy));
-        let prec_nongreedy = expand_literals(gen_precedence_tree(expr_nongreedy));
-        assert!(!is_nongreedy(&prec_greedy));
-        assert!(is_nongreedy(&prec_nongreedy));
-    }
-
-    #[test]
-    fn regex_with_unicode_literals() {
-        // ANTLR does not support unicode literals in the grammar,
-        // but this library does for convenience.
-        let regex = "[あいうえお]|[アイウエオ]";
-        let prec_tree = gen_precedence_tree(regex);
-        let expected = "|[[あいうえお],[アイウエオ]]";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_correct_precedence_or_klenee() {
-        let expr = "'a'|'b'*'c'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "|['a',&[*['b'],'c']]";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_correct_precedence_klenee_par() {
-        let expr = "'a'*('b'|'c')*'d'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[&[*['a'],*[|['b','c']]],'d']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_correct_precedence_negation_par() {
-        let expr = "('a')~'b'('c')('d')'e'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[&[&[&['a',~['b']],'c'],'d'],'e']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_correct_precedence_negation() {
-        let expr = "'a'~'b''c'('d')";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[&[&['a',~['b']],'c'],'d']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_correct_precedence_qm_plus_klenee_par() {
-        let expr = "'a'?('b'*|'c'*)+'d'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[&[?['a'],+[|[*['b'],*['c']]]],'d']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_precedence_negation_klenee() {
-        let expr = "~'a'*";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "*[~['a']]";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_precedence_negation_klenee_or() {
-        let expr = "~'a'*|'b'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "|[*[~['a']],'b']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_precedence_literal_negation_literal() {
-        let expr = "'a'~'a'*'a'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[&['a',*[~['a']]],'a']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_nongreedy_negation() {
-        let expr = "'a'~'a'*?'a'";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[&['a',?[*[~['a']]]],'a']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_simplify_kleene_qm() {
-        let expr = "(('a')*)?";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "*['a']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_simplify_not_kleene_qm() {
-        let expr = "(~('a')*)?";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "*[~['a']]";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_simplify_qm_qm() {
-        let expr = "(('a')?)?";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "?['a']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_simplify_plus_qm() {
-        let expr = "(('a')+)?";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "*['a']";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regex_dont_simplify_nongreedy() {
-        let expr = "('a')+?";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "?[+['a']]";
-        assert_eq!(as_str(&prec_tree), expected);
-    }
-
-    #[test]
-    fn regression_disappearing_literal() {
-        let expr = "'a'*~'b'*";
-        let prec_tree = gen_precedence_tree(expr);
-        let expected = "&[*['a'],*[~['b']]]";
-        assert_eq!(as_str(&prec_tree), expected);
     }
 }

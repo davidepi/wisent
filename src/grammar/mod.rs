@@ -385,7 +385,7 @@ impl std::fmt::Display for Action {
 }
 
 /// The type of operation that can be found in a lexer production.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum LexerOp {
     /// Kleene star operator `*`.
     Kleene,
@@ -445,7 +445,7 @@ impl<T: std::fmt::Display> std::fmt::Display for LexerRuleElement<T> {
 }
 
 /// The elements that can be found in a parser production.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ParserRuleElement {
     NonTerminal(String),
     Terminal(String),
@@ -477,7 +477,7 @@ pub trait GraphvizDot {
 }
 
 /// A Tree data structure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Tree<T> {
     /// The value contained in the tree.
     value: T,

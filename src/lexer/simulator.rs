@@ -62,7 +62,7 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::{MultiDfa, DfaSimulator};
     /// # use std::io::{BufReader, Read};
-    /// let grammar = Grammar::new(
+    /// let grammar = Grammar::parse_antlr("grammar g;
     ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
     ///     &[],
     /// );
@@ -90,7 +90,7 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
     /// # use wisent::grammar::Grammar;
     /// # use wisent::lexer::{MultiDfa, DfaSimulator};
     /// # use std::io::{BufReader, Read};
-    /// let grammar = Grammar::new(
+    /// let grammar = Grammar::parse_antlr("grammar g;
     ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
     ///     &[],
     /// );
@@ -243,7 +243,7 @@ fn decode_char_len(v: u32) -> (u32, u8) {
 /// ```
 /// # use wisent::grammar::Grammar;
 /// # use wisent::lexer::{MultiDfa, DfaSimulator, tokenize_string};
-/// let grammar = Grammar::new(
+/// let grammar = Grammar::parse_antlr("grammar g;
 ///     &[("NUMBER", "([0-9])+").into(), ("WORD", "([a-z])+").into()],
 ///     &[],
 /// );
@@ -285,10 +285,9 @@ pub fn tokenize_file<P: AsRef<Path>>(dfa: &MultiDfa, path: P) -> Result<Vec<Toke
 mod tests {
     use super::tokenize_string;
     use crate::error::ParseError;
-    use crate::grammar::{Action, Grammar};
+    use crate::grammar::Grammar;
     use crate::lexer::simulator::READ_SIZE;
     use crate::lexer::{DfaSimulator, MultiDfa};
-    use maplit::btreeset;
     use std::io::{BufReader, Read};
     use std::iter::repeat;
 
@@ -298,10 +297,12 @@ mod tests {
     fn simulator_next_char() -> Result<(), ParseError> {
         // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the tokenize
         // function
-        let grammar = Grammar::new(
-            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             NOT_SPACE: (~[ ])+;
+             SPACE: ' '+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let reader = BufReader::new(UTF8_INPUT.as_bytes()).bytes();
         let mut simulator = DfaSimulator::new(&dfa, reader);
@@ -315,10 +316,12 @@ mod tests {
     #[test]
     fn simulator_multiple_eof() -> Result<(), ParseError> {
         // after next_char returns eof once, additional calls return always eof
-        let grammar = Grammar::new(
-            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             NOT_SPACE: (~[ ])+;
+             SPACE: ' '+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let reader = BufReader::new(UTF8_INPUT.as_bytes()).bytes();
         let mut simulator = DfaSimulator::new(&dfa, reader);
@@ -331,10 +334,12 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_small() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             NOT_SPACE: (~[ ])+;
+             SPACE: ' '+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let expected_prods = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0];
         let expected_start = vec![0, 9, 10, 23, 24, 29, 30, 36, 37, 48, 49];
@@ -351,14 +356,16 @@ mod tests {
     #[test]
     fn simulator_tokenize_big() -> Result<(), ParseError> {
         // input bigger than BUFFER_SIZE to allow a single buffer swap
-        let grammar = Grammar::new(
-            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             NOT_SPACE: (~[ ])+;
+             SPACE: ' '+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let mut input = String::new();
         let mut prods = 1;
-        while input.chars().count() < READ_SIZE as usize {
+        while input.chars().count() < READ_SIZE {
             input.push_str(UTF8_INPUT);
             prods += 10;
         }
@@ -374,13 +381,15 @@ mod tests {
             .filter(|c| !c.is_whitespace())
             .collect::<String>();
         let mut input = String::new();
-        while input.chars().count() < 2 * READ_SIZE as usize {
+        while input.chars().count() < 2 * READ_SIZE {
             input.push_str(&piece);
         }
-        let grammar = Grammar::new(
-            &[("NOT_SPACE", "(~[ ])+").into(), ("SPACE", "' '+").into()],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             NOT_SPACE: (~[ ])+;
+             SPACE: ' '+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let tokens = tokenize_string(&dfa, &input)?;
         assert_eq!(tokens.len(), 1);
@@ -389,13 +398,12 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_match_longest() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("INT", "([0-9])+").into(),
-                ("REAL", "([0-9])+'.'[0-9]+").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             INT: ([0-9])+;
+             REAL: ([0-9])+'.'[0-9]+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "123.456789";
         let tokens = tokenize_string(&dfa, input)?;
@@ -408,13 +416,12 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_match_longest_incomplete() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("INT", "([0-9])+").into(),
-                ("REAL", "([0-9])+'.'[0-9]+").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             INT: ([0-9])+;
+             REAL: ([0-9])+'.'[0-9]+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "123.";
         let tokens = tokenize_string(&dfa, input)?;
@@ -427,14 +434,13 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_greedy_complete() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("COMMENT", "'/*'.*'*/'").into(),
-                ("NUMBER", "[0-9]+").into(),
-                ("SPACE", "[\r\n\t ]").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             COMMENT: '/*'.*'*/';
+             NUMBER: [0-9]+;
+             SPACE: [\\r\\n\\t ];",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ 123456 /* test comment 2 */";
         let tokens = tokenize_string(&dfa, input)?;
@@ -445,14 +451,13 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_greedy_incomplete() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("COMMENT", "'/*'.*'*/'").into(),
-                ("NUMBER", "[0-9]+").into(),
-                ("SPACE", "[\r\n\t ]").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             COMMENT: '/*'.*'*/';
+             NUMBER: [0-9]+;
+             SPACE: [\\r\\n\\t ];",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ 123456 ";
         let tokens = tokenize_string(&dfa, input)?;
@@ -466,14 +471,13 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_nongreedy_kleene() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("COMMENT", "'/*'.*?'*/'").into(),
-                ("SPACE", "[\r\n\t ]").into(),
-                ("LITERAL", "'\"'~'\"'*'\"'").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             COMMENT: '/*'.*?'*/';
+             SPACE: [\\r\\n\\t ];
+             LITERAL: '\"'~'\"'*'\"';",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "/* test comment */ \"/*this is not a comment*/\"";
         let tokens = tokenize_string(&dfa, input)?;
@@ -484,14 +488,13 @@ mod tests {
     #[test]
     fn simulator_backtrack_refresh() -> Result<(), ParseError> {
         // asserts that after backtracking the buffer 2 does not get refreshed again
-        let grammar = Grammar::new(
-            &[
-                ("A", "'a'*").into(),
-                ("AB", "'a'*'bbbbbb'").into(),
-                ("BC", "'bbb'('c'*)").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             A:'a'*;
+             AB: 'a'*'bbbbbb';
+             BC: 'bbb'('c'*);",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = repeat('a')
             .take(READ_SIZE - 3)
@@ -505,7 +508,12 @@ mod tests {
 
     #[test]
     fn tokenize_empty() -> Result<(), ParseError> {
-        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             A: 'a';
+             B: 'b';",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "";
         let res = tokenize_string(&dfa, input)?;
@@ -515,7 +523,12 @@ mod tests {
 
     #[test]
     fn tokenize_full() -> Result<(), ParseError> {
-        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             A: 'a';
+             B: 'b';",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "aaabb";
         let res = tokenize_string(&dfa, input)?;
@@ -525,7 +538,12 @@ mod tests {
 
     #[test]
     fn tokenize_err_no_partial() -> Result<(), ParseError> {
-        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             A: 'a';
+             B: 'b';",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "d";
         let res = tokenize_string(&dfa, input)?;
@@ -535,7 +553,12 @@ mod tests {
 
     #[test]
     fn tokenize_err_some_partial() -> Result<(), ParseError> {
-        let grammar = Grammar::new(&[("A", "'a'").into(), ("B", "'b'").into()], &[]);
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+             A: 'a';
+             B: 'b';",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "aad";
         let res = tokenize_string(&dfa, input)?;
@@ -545,14 +568,13 @@ mod tests {
 
     #[test]
     fn tokenize_action_skip() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("ID", "[a-zA-Z]+").into(),
-                ("INT", "[0-9]+").into(),
-                ("WS", "[ \\t\\n\\t]+", btreeset! {Action::Skip}).into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+            ID: [a-zA-Z]+;
+            INT: [0-9]+;
+            WS: [ \\t\\n\\t]+ -> Skip;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "aad abc 123 bcd";
         let res = tokenize_string(&dfa, input)?;
@@ -566,13 +588,12 @@ mod tests {
 
     #[test]
     fn tokenize_action_more() -> Result<(), ParseError> {
-        let grammar = Grammar::new(
-            &[
-                ("PRIVATE", "'_'", btreeset! {Action::More}).into(),
-                ("LETTERS", "[a-zA-Z]+").into(),
-            ],
-            &[],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+            PRIVATE: '_' -> More;
+            LETTERS: [a-zA-Z]+;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "_test";
         let res = tokenize_string(&dfa, input)?;
@@ -584,17 +605,14 @@ mod tests {
 
     #[test]
     fn tokenize_action_mode() -> Result<(), ParseError> {
-        let mut grammar = Grammar::new(
-            &[("START_STRING", "'\"'", btreeset! {Action::Mode(1)}).into()],
-            &[],
-        );
-        grammar.add_terminals(
-            "STR".to_string(),
-            &[
-                ("TEXT", "~'\"'+").into(),
-                ("END_STRING", "'\"'", btreeset! {Action::Mode(0)}).into(),
-            ],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+            START_STRING: '\"' -> Mode(STR);
+            mode STR;
+            TEXT: ~'\"'+;
+            END_STRING: '\"' -> Mode(DEFAULT_MODE);",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "\"string\"";
         let res = tokenize_string(&dfa, input)?;
@@ -610,17 +628,14 @@ mod tests {
 
     #[test]
     fn tokenize_action_pushmode_popmode() -> Result<(), ParseError> {
-        let mut grammar = Grammar::new(
-            &[("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into()],
-            &[],
-        );
-        grammar.add_terminals(
-            "INSIDE".to_string(),
-            &[
-                ("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into(),
-                ("CLOSE_PAR", "')'", btreeset! {Action::PopMode}).into(),
-            ],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+            OPEN_PAR: '(' -> PushMode(INSIDE);
+            mode INSIDE;
+            OPEN_PAR:'(' -> PushMode(INSIDE);
+            CLOSE_PAR: ')' -> PopMode;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "((()))";
         let res = tokenize_string(&dfa, input)?;
@@ -632,20 +647,15 @@ mod tests {
 
     #[test]
     fn tokenize_action_popmode_bottom_stack() {
-        let mut grammar = Grammar::new(
-            &[
-                ("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into(),
-                ("CLOSE_PAR", "')'", btreeset! {Action::PopMode}).into(),
-            ],
-            &[],
-        );
-        grammar.add_terminals(
-            "INSIDE".to_string(),
-            &[
-                ("OPEN_PAR", "'('", btreeset! {Action::PushMode(1)}).into(),
-                ("CLOSE_PAR", "')'", btreeset! {Action::PopMode}).into(),
-            ],
-        );
+        let grammar = Grammar::parse_antlr(
+            "grammar g;
+            OPEN_PAR: '(' -> PushMode(INSIDE);
+            CLOSE_PAR: ')' -> PopMode;
+            mode INSIDE;
+            OPEN_PAR: '(' -> PushMode(INSIDE);
+            CLOSE_PAR: ')' -> PopMode;",
+        )
+        .unwrap();
         let dfa = MultiDfa::new(&grammar);
         let input = "(()))))";
         let res = tokenize_string(&dfa, input);

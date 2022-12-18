@@ -16,13 +16,13 @@ pub use self::ureader::UnicodeReader;
 ///
 /// Symbols are grouped by productions: if two or more symbols are **always** found in the same
 /// set (or subset) in every production, they are assigned the same index. This effectively reduces
-/// the amount of edges required to build the NFA/DFA.
+/// the amount of edges required to build the NFA/DFA. These groups are called equivalence classes.
 ///
 /// As an example, the productions `'a'` and `[a-z]` can be split into `'a'` and `[b-z]`
 /// because the symbols from `b` to `z` will result in the same move in the NFA/DFA (as there are
 /// no other productions). So, each letter `'a'` in the input can be converted to a number,
-/// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively reducing
-/// the possible inputs to two single values instead of 26.
+/// let's say `1`, and each letter from `'b'` to `'z'` can be converted to `2`, effectively
+/// reducing the possible inputs to two single values instead of 26.
 #[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolTable {
     // table (char, assigned number). table.len() is the number for ANY char not in table.
