@@ -1,7 +1,7 @@
-use super::grammar_conversion::{
+use crate::grammar::{Action, Grammar, GraphvizDot, Tree};
+use crate::lexer::conversion::{
     alphabet_from_node, canonicalise, is_nongreedy, CanonicalLexerRuleElement,
 };
-use crate::grammar::{Action, Grammar, GraphvizDot, Tree};
 use crate::lexer::SymbolTable;
 use maplit::{btreeset, hashmap};
 use rustc_hash::{FxHashMap, FxHashSet};

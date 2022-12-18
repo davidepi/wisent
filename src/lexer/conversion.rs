@@ -54,7 +54,7 @@ pub(super) fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
 /// the *any symbol* placeholder, concatenation, alternation, kleene star).
 /// **note** that non-greediness of a rule is removed by this function, so it must be recorded
 /// somewhere else beforehand.
-pub(super) fn canonicalise(
+pub fn canonicalise(
     node: &Tree<LexerRuleElement<char>>,
     symtable: &SymbolTable,
 ) -> Tree<CanonicalLexerRuleElement> {
@@ -141,7 +141,7 @@ fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> Tree<CanonicalLex
 }
 
 /// Returns the entire set of symbols used in a given tree.
-pub(super) fn alphabet_from_node(root: &Tree<LexerRuleElement<char>>) -> FxHashSet<BTreeSet<char>> {
+pub fn alphabet_from_node(root: &Tree<LexerRuleElement<char>>) -> FxHashSet<BTreeSet<char>> {
     let mut ret = FxHashSet::default();
     let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {

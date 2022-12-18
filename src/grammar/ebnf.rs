@@ -360,9 +360,8 @@ fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::grammar::{ParserRuleElement, Tree};
-
     use super::{bootstrap_ebnf, next_token, Acc, Token, CHAR_CLASS};
+    use crate::grammar::{ParserRuleElement, Tree};
 
     #[test]
     fn char_class() {

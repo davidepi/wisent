@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Iter;
 use std::collections::BTreeSet;
 
+mod conversion;
 mod dfa;
-mod grammar_conversion;
 mod simulator;
 mod ureader;
 
