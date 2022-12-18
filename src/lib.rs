@@ -5,3 +5,5 @@ pub mod error;
 pub mod grammar;
 /// Module responsible of generating the lexer transition table and running it.
 pub mod lexer;
+/// Module responsible of generating the parser transition table and running it.
+pub mod parser;
