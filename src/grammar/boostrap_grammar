@@ -1,0 +1,15 @@
+rule_nonterm: NAME_NONTERM ASSIGN expression_nonterm SEMI;
+expression_nonterm: list_nonterm [BAR list_nonterm]*;
+list_nonterm: term_nonterm*;
+term_nonterm: NAME_NONTERM | NAME_TERM;
+
+rule_term: NAME_TERM ASSIGN expression_term SEMI;
+expression_term: list_term [BAR list_term]*;
+list_term: grouped_term+;
+grouped_term: NOT? LPAR expression_term RPAR (KLEENE | QM | PL)?
+            | NOT? term_term (KLEENE | QM | PL)?
+            ;
+term_term: CHARSET
+         | LITERAL
+         | ANY
+         ;

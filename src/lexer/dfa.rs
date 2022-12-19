@@ -413,10 +413,7 @@ fn merge_regex_trees(
         .map(|(node_no, root)| {
             Tree::new_node(
                 CanonicalLexerRuleElement::AND,
-                vec![
-                    root,
-                    Tree::new_leaf(CanonicalLexerRuleElement::Acc(node_no as u32)),
-                ],
+                vec![root, Tree::new_leaf(CanonicalLexerRuleElement::Acc(node_no as u32))],
             )
         })
         .collect::<Vec<_>>();
@@ -860,8 +857,8 @@ fn remap(
 mod tests {
     use super::{direct_construction, merge_regex_trees};
     use crate::grammar::{Action, Grammar};
+    use crate::lexer::conversion::{alphabet_from_node, canonicalise};
     use crate::lexer::dfa::min_dfa;
-    use crate::lexer::grammar_conversion::{alphabet_from_node, canonicalise};
     use crate::lexer::{MultiDfa, SymbolTable};
     use maplit::btreeset;
     use std::collections::BTreeSet;

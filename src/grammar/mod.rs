@@ -6,8 +6,8 @@ use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::Path;
 
-mod ebnf;
-use crate::grammar::ebnf::bootstrap_ebnf;
+mod bootstrap;
+use crate::grammar::bootstrap::bootstrap_grammar;
 
 /// Struct representing a lexer production.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,9 +313,21 @@ impl Grammar {
         }
     }
 
-    /// Builds a grammar from a String in EBNF syntax.
-    pub fn parse_ebnf(content: &str) -> Result<Grammar, ParseError> {
-        bootstrap_ebnf(content)
+    /// Builds a grammar using a simil-ANTLR syntax.
+    ///
+    /// The main purpose of this method is to read a grammar without depending on this crate
+    /// itself. This is done by manually implementing a recursive descent parser.
+    ///
+    /// The recognized grammar is similar to ANTLR in syntax, with a few key difference to
+    /// simplify the manual implementation of the parser:
+    /// - no modes or lexer actions are supported.
+    /// - no escaping is possible.
+    /// - ranges must be fully specified (`[abc]` instead of `[a-c]`).
+    /// - no unicode is supported.
+    /// - no fragments are supported.
+    /// - the syntax 'a'..'c' is not supported.
+    pub fn parse_bootstrap(content: &str) -> Result<Grammar, ParseError> {
+        bootstrap_grammar(content)
     }
 
     /// Builds a grammar from a String with the content in ANTLR syntax.
@@ -506,6 +518,11 @@ impl<T> Tree<T> {
     /// Retrieves the mutable value contained inside the node.
     pub fn value_mut(&mut self) -> &mut T {
         &mut self.value
+    }
+
+    /// Pushes a child to the current node
+    pub fn add_child(&mut self, child: Self) {
+        self.children.push(child)
     }
 
     /// Returns a reference to the nth child.
