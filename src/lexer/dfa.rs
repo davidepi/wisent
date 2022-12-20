@@ -866,18 +866,16 @@ mod tests {
     #[test]
     fn dfa_conflicts_resolution() {
         //they should be different: the second accept abb as a*b+ (appearing first in the productions)
-        let g1 = "grammar g1;
-                  A: 'a';
+        let g1 = "A: 'a';
                   ABB: 'abb';
                   ASTARBPLUS: 'a'* 'b'+;";
-        let grammar1 = Grammar::parse_antlr(g1).unwrap();
+        let grammar1 = Grammar::parse_bootstrap(g1).unwrap();
         let mdfa1 = MultiDfa::new(&grammar1);
         let dfa1 = mdfa1.dfa(0).unwrap();
-        let g2 = "grammar g2;
-                  ASTARBPLUS: 'a'* 'b'+;
+        let g2 = "ASTARBPLUS: 'a'* 'b'+;
                   ABB: 'abb';
                   A: 'a';";
-        let grammar2 = Grammar::parse_antlr(g2).unwrap();
+        let grammar2 = Grammar::parse_bootstrap(g2).unwrap();
 
         let mdfa2 = MultiDfa::new(&grammar2);
         let dfa2 = mdfa2.dfa(0).unwrap();
@@ -889,9 +887,8 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_no_sink() {
-        let g = "grammar g;
-                 PROD1: ('a' | 'b')* 'abb';";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "PROD1: ('a' | 'b')* 'abb';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -900,10 +897,9 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_sink_accepting() {
-        let g = "grammar g;
-                 DIGIT: [0-9];
-                 NUMBER [0-9]+;";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "DIGIT: [0123456789];
+                 NUMBER: [0123456789]+;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -912,10 +908,9 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_set_productions() {
-        let g = "grammar g;
-                 LONG1: [a-c]([b-d]?[e-g])*;
-                 LONG2: [fg]+";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "LONG1: [abc]([bcd]?[efg])*;
+                 LONG2: [fg]+;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert_eq!(dfa.states(), 4);
@@ -923,9 +918,8 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_start_accepting() {
-        let g = "grammar g;
-                 ABSTAR: 'ab'*;";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "ABSTAR: 'ab'*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -934,9 +928,8 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_single_acc() {
-        let g = "grammar g;
-                 PROD1: (('a'*'b')|'c')?'c';";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "PROD1: (('a'*'b')|'c')?'c';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -945,10 +938,9 @@ mod tests {
 
     #[test]
     fn dfa_direct_construction_multi_production() {
-        let g = "grammar g;
-                 LETTER_A: 'a';
+        let g = "LETTER_A: 'a';
                  LETTERS_B: 'b'*;";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(!dfa.is_empty());
@@ -965,9 +957,8 @@ mod tests {
 
     #[test]
     fn dfa_minimization() {
-        let g = "grammar g;
-                 SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let parse_trees = grammar.iter_term().map(|l| &l.body).collect::<Vec<_>>();
         let alphabet = parse_trees
             .iter()
@@ -987,9 +978,8 @@ mod tests {
 
     #[test]
     fn dfa_transition_correct_size() {
-        let g = "grammar g;
-                 SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "SEQ: ('00'|'11')*(('01'|'10')('00'|'11')*('01'|'10')('00'|'11')*)*;";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let parse_trees = grammar.iter_term().map(|l| &l.body).collect::<Vec<_>>();
         let alphabet = parse_trees
             .iter()
@@ -1011,9 +1001,8 @@ mod tests {
 
     #[test]
     fn dfa_moves() {
-        let g = "grammar g;
-                 PROD1: 'c'* 'ab';";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "PROD1: 'c'* 'ab';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         let a = mdfa.symbol_table().symbol_id('a');
@@ -1026,9 +1015,8 @@ mod tests {
 
     #[test]
     fn dfa_accepting_single() {
-        let g = "grammar g;
-                 PROD1: 'a';";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let g = "PROD1: 'a';";
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());
@@ -1040,10 +1028,9 @@ mod tests {
 
     #[test]
     fn nongreedy_rule() {
-        let g = "grammar g;
-                 GREEDY: 'a'+;
+        let g = "GREEDY: 'a'+;
                  NON_GREEDY: 'b'+?;";
-        let grammar = Grammar::parse_antlr(g).unwrap();
+        let grammar = Grammar::parse_bootstrap(g).unwrap();
         let mdfa = MultiDfa::new(&grammar);
         let dfa = mdfa.dfa(0).unwrap();
         assert!(dfa.accepting(dfa.start()).is_none());

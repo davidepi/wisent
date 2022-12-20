@@ -297,9 +297,8 @@ mod tests {
     fn simulator_next_char() -> Result<(), ParseError> {
         // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the tokenize
         // function
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             NOT_SPACE: (~[ ])+;
+        let grammar = Grammar::parse_bootstrap(
+            "NOT_SPACE: (~[ ])+;
              SPACE: ' '+;",
         )
         .unwrap();
@@ -316,9 +315,8 @@ mod tests {
     #[test]
     fn simulator_multiple_eof() -> Result<(), ParseError> {
         // after next_char returns eof once, additional calls return always eof
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             NOT_SPACE: (~[ ])+;
+        let grammar = Grammar::parse_bootstrap(
+            "NOT_SPACE: (~[ ])+;
              SPACE: ' '+;",
         )
         .unwrap();
@@ -334,9 +332,8 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_small() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             NOT_SPACE: (~[ ])+;
+        let grammar = Grammar::parse_bootstrap(
+            "NOT_SPACE: (~[ ])+;
              SPACE: ' '+;",
         )
         .unwrap();
@@ -356,9 +353,8 @@ mod tests {
     #[test]
     fn simulator_tokenize_big() -> Result<(), ParseError> {
         // input bigger than BUFFER_SIZE to allow a single buffer swap
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             NOT_SPACE: (~[ ])+;
+        let grammar = Grammar::parse_bootstrap(
+            "NOT_SPACE: (~[ ])+;
              SPACE: ' '+;",
         )
         .unwrap();
@@ -384,9 +380,8 @@ mod tests {
         while input.chars().count() < 2 * READ_SIZE {
             input.push_str(&piece);
         }
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             NOT_SPACE: (~[ ])+;
+        let grammar = Grammar::parse_bootstrap(
+            "NOT_SPACE: (~[ ])+;
              SPACE: ' '+;",
         )
         .unwrap();
@@ -398,10 +393,9 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_match_longest() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             INT: ([0-9])+;
-             REAL: ([0-9])+'.'[0-9]+;",
+        let grammar = Grammar::parse_bootstrap(
+            "INT: ([0123456789])+;
+             REAL: ([0123456789])+'.'[0123456789]+;",
         )
         .unwrap();
         let dfa = MultiDfa::new(&grammar);
@@ -416,10 +410,9 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_match_longest_incomplete() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             INT: ([0-9])+;
-             REAL: ([0-9])+'.'[0-9]+;",
+        let grammar = Grammar::parse_bootstrap(
+            "INT: ([0123456789])+;
+             REAL: ([0123456789])+'.'[0123456789]+;",
         )
         .unwrap();
         let dfa = MultiDfa::new(&grammar);
@@ -434,10 +427,9 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_greedy_complete() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             COMMENT: '/*'.*'*/';
-             NUMBER: [0-9]+;
+        let grammar = Grammar::parse_bootstrap(
+            "COMMENT: '/*'.*'*/';
+             NUMBER: [0123456789]+;
              SPACE: [\\r\\n\\t ];",
         )
         .unwrap();
@@ -451,10 +443,9 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_greedy_incomplete() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             COMMENT: '/*'.*'*/';
-             NUMBER: [0-9]+;
+        let grammar = Grammar::parse_bootstrap(
+            "COMMENT: '/*'.*'*/';
+             NUMBER: [0123456789]+;
              SPACE: [\\r\\n\\t ];",
         )
         .unwrap();
@@ -471,9 +462,8 @@ mod tests {
 
     #[test]
     fn simulator_tokenize_nongreedy_kleene() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             COMMENT: '/*'.*?'*/';
+        let grammar = Grammar::parse_bootstrap(
+            "COMMENT: '/*'.*?'*/';
              SPACE: [\\r\\n\\t ];
              LITERAL: '\"'~'\"'*'\"';",
         )
@@ -488,9 +478,8 @@ mod tests {
     #[test]
     fn simulator_backtrack_refresh() -> Result<(), ParseError> {
         // asserts that after backtracking the buffer 2 does not get refreshed again
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             A:'a'*;
+        let grammar = Grammar::parse_bootstrap(
+            "A: 'a'*;
              AB: 'a'*'bbbbbb';
              BC: 'bbb'('c'*);",
         )
@@ -508,9 +497,8 @@ mod tests {
 
     #[test]
     fn tokenize_empty() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             A: 'a';
+        let grammar = Grammar::parse_bootstrap(
+            "A: 'a';
              B: 'b';",
         )
         .unwrap();
@@ -523,9 +511,8 @@ mod tests {
 
     #[test]
     fn tokenize_full() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             A: 'a';
+        let grammar = Grammar::parse_bootstrap(
+            "A: 'a';
              B: 'b';",
         )
         .unwrap();
@@ -538,9 +525,8 @@ mod tests {
 
     #[test]
     fn tokenize_err_no_partial() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             A: 'a';
+        let grammar = Grammar::parse_bootstrap(
+            "A: 'a';
              B: 'b';",
         )
         .unwrap();
@@ -553,9 +539,8 @@ mod tests {
 
     #[test]
     fn tokenize_err_some_partial() -> Result<(), ParseError> {
-        let grammar = Grammar::parse_antlr(
-            "grammar g;
-             A: 'a';
+        let grammar = Grammar::parse_bootstrap(
+            "A: 'a';
              B: 'b';",
         )
         .unwrap();

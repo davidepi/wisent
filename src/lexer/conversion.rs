@@ -33,7 +33,7 @@ impl std::fmt::Display for CanonicalLexerRuleElement {
 }
 
 /// Checks if a parsing tree contains non-greedy productions
-pub(super) fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
+pub fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
     let mut nodes = vec![node];
     while let Some(node) = nodes.pop() {
         if *node.value() == LexerRuleElement::Operation(LexerOp::Qm) {
@@ -190,12 +190,9 @@ fn solve_negated(node: &Tree<LexerRuleElement<char>>, symtable: &SymbolTable) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{alphabet_from_node, canonicalise};
-    use crate::grammar::{LexerOp, LexerRuleElement, Tree};
+    use super::{alphabet_from_node, canonicalise, is_nongreedy};
+    use crate::grammar::{Grammar, Tree};
     use crate::lexer::SymbolTable;
-    use maplit::btreeset;
-    use std::char;
-    use std::collections::BTreeSet;
     use std::fmt::Write;
 
     /// encoded representation of a tree in form of string
@@ -210,138 +207,87 @@ mod tests {
         string
     }
 
-    // fast way of creating a tree. For tests only.
-    fn from_str<T: Iterator<Item = char>>(chars: &mut T) -> Tree<LexerRuleElement<char>> {
-        let op = chars.next().unwrap();
-        match op {
-            '&' => {
-                assert_eq!(chars.next().unwrap(), '(');
-                let left = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ',');
-                let right = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ')');
-                Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![left, right])
-            }
-            '|' => {
-                assert_eq!(chars.next().unwrap(), '(');
-                let left = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ',');
-                let right = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ')');
-                Tree::new_node(LexerRuleElement::Operation(LexerOp::Or), vec![left, right])
-            }
-            '*' => {
-                assert_eq!(chars.next().unwrap(), '(');
-                let child = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ')');
-                Tree::new_node(LexerRuleElement::Operation(LexerOp::Kleene), vec![child])
-            }
-            '?' => {
-                assert_eq!(chars.next().unwrap(), '(');
-                let child = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ')');
-                Tree::new_node(LexerRuleElement::Operation(LexerOp::Qm), vec![child])
-            }
-            '+' => {
-                assert_eq!(chars.next().unwrap(), '(');
-                let child = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ')');
-                Tree::new_node(LexerRuleElement::Operation(LexerOp::Pl), vec![child])
-            }
-            '~' => {
-                assert_eq!(chars.next().unwrap(), '(');
-                let child = from_str(chars);
-                assert_eq!(chars.next().unwrap(), ')');
-                Tree::new_node(LexerRuleElement::Operation(LexerOp::Not), vec![child])
-            }
-            '.' => Tree::new_leaf(LexerRuleElement::AnyValue),
-            '[' => {
-                let mut set = BTreeSet::new();
-                for next in chars.by_ref() {
-                    if next != ']' {
-                        set.insert(next);
-                    } else {
-                        break;
-                    }
-                }
-                Tree::new_leaf(LexerRuleElement::CharSet(set))
-            }
-            '\'' => {
-                let mut seq = Vec::new();
-                for next in chars.by_ref() {
-                    if next != '\'' {
-                        seq.push(next);
-                    } else {
-                        break;
-                    }
-                }
-                if seq.len() <= 1 {
-                    Tree::new_leaf(LexerRuleElement::CharSet(seq.into_iter().collect()))
-                } else {
-                    seq.reverse();
-                    let left =
-                        Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {seq.pop().unwrap()}));
-                    let right =
-                        Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {seq.pop().unwrap()}));
-                    let op = LexerRuleElement::Operation(LexerOp::And);
-                    let mut root = Tree::new_node(op, vec![left, right]);
-                    while let Some(next) = seq.pop() {
-                        let new = Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {next}));
-                        root = Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![new]);
-                    }
-                    root
-                }
-            }
-            _ => panic!(),
-        }
+    #[test]
+    fn identify_nongreedy_kleene() {
+        let grammar_greedy = Grammar::parse_bootstrap("Rule: 'a'.*'a';").unwrap();
+        let tree_greedy = &grammar_greedy.iter_term().next().unwrap().body;
+        assert!(!is_nongreedy(tree_greedy));
+        let grammar_nongreedy = Grammar::parse_bootstrap("Rule: 'a'.*?'a';").unwrap();
+        let tree_nongreedy = &grammar_nongreedy.iter_term().next().unwrap().body;
+        assert!(is_nongreedy(tree_nongreedy));
+    }
+
+    #[test]
+    fn identify_nongreedy_qm() {
+        let grammar_greedy = Grammar::parse_bootstrap("Rule: 'a'.?'a';").unwrap();
+        let tree_greedy = &grammar_greedy.iter_term().next().unwrap().body;
+        assert!(!is_nongreedy(tree_greedy));
+        let grammar_nongreedy = Grammar::parse_bootstrap("Rule: 'a'.??'a';").unwrap();
+        let tree_nongreedy = &grammar_nongreedy.iter_term().next().unwrap().body;
+        assert!(is_nongreedy(tree_nongreedy));
+    }
+
+    #[test]
+    fn identify_nongreedy_plus() {
+        let grammar_greedy = Grammar::parse_bootstrap("Rule: 'a'.+'a';").unwrap();
+        let tree_greedy = &grammar_greedy.iter_term().next().unwrap().body;
+        assert!(!is_nongreedy(tree_greedy));
+        let grammar_nongreedy = Grammar::parse_bootstrap("Rule: 'a'.+?'a';").unwrap();
+        let tree_nongreedy = &grammar_nongreedy.iter_term().next().unwrap().body;
+        assert!(is_nongreedy(tree_nongreedy));
     }
 
     #[test]
     fn canonical_tree_any() {
-        let tree = from_str(&mut "&(*(&(*('a'),.)),'a')".chars()); // ('a'*.)*'a'
-        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let grammar = Grammar::parse_bootstrap("Rule: ('a'*.)*'a';").unwrap();
+        let tree = &grammar.iter_term().next().unwrap().body;
+        let alphabet = alphabet_from_node(tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(&tree, &symtable);
+        let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&(*(&(*(0),|(0,1))),0)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_plus() {
-        let tree = from_str(&mut "&(+(&(*('a'),'b')),'a')".chars()); // ('a'*'b')+'a'
-        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let grammar = Grammar::parse_bootstrap("Rule: ('a'*'b')+'a';").unwrap();
+        let tree = &grammar.iter_term().next().unwrap().body;
+        let alphabet = alphabet_from_node(tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(&tree, &symtable);
+        let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&(&(&(*(0),1),*(&(*(0),1))),0)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_qm() {
-        let tree = from_str(&mut "&(?(&(*('a'),'b')),'a')".chars()); // ('a'*'b')?'a'
-        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let grammar = Grammar::parse_bootstrap("Rule: ('a'*'b')?'a';").unwrap();
+        let tree = &grammar.iter_term().next().unwrap().body;
+        let alphabet = alphabet_from_node(tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(&tree, &symtable);
+        let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&(|(3,&(*(0),1)),0)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_neg() {
-        let tree = from_str(&mut "&(~([ab]),|('a','c'))".chars()); // ~[ab]('a'|'c')
-        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let grammar = Grammar::parse_bootstrap("Rule: ~[ab]('a'|'c');").unwrap();
+        let tree = &grammar.iter_term().next().unwrap().body;
+        let alphabet = alphabet_from_node(tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(&tree, &symtable);
+        let canonical_tree = canonicalise(tree, &symtable);
         let expected = "&(|(2,3),|(0,2))";
         assert_eq!(as_str(&canonical_tree), expected);
     }
 
     #[test]
     fn canonical_tree_double_negation() {
-        let tree = from_str(&mut "|(~(~([abc])),'d')".chars()); // ~(~[a-c])|'d'
-        let alphabet = alphabet_from_node(&tree).into_iter().collect::<Vec<_>>();
+        let grammar = Grammar::parse_bootstrap("Rule: ~(~[a-c])|'d';").unwrap();
+        let tree = &grammar.iter_term().next().unwrap().body;
+        let alphabet = alphabet_from_node(tree).into_iter().collect::<Vec<_>>();
         let symtable = SymbolTable::new(&alphabet);
-        let canonical_tree = canonicalise(&tree, &symtable);
+        let canonical_tree = canonicalise(tree, &symtable);
         let expected = "|(0,1)";
         assert_eq!(as_str(&canonical_tree), expected);
     }
@@ -349,54 +295,60 @@ mod tests {
     #[test]
     fn canonical_tree_ignores_nongreedy_kleene() {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
-        let tree_greedy = from_str(&mut "&(&('a',*(.)),'a')".chars()); // 'a'.*'a'
-        let alphabet_greedy = alphabet_from_node(&tree_greedy)
+        let grammar_greedy = Grammar::parse_bootstrap("Rule: 'a'.*'a';").unwrap();
+        let tree_greedy = &grammar_greedy.iter_term().next().unwrap().body;
+        let alphabet_greedy = alphabet_from_node(tree_greedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_greedy = SymbolTable::new(&alphabet_greedy);
-        let canonical_tree_greedy = canonicalise(&tree_greedy, &symtable_greedy);
-        let tree_nongreedy = from_str(&mut "&(&('a',?(*(.))),'a')".chars()); // 'a'.*?'a'
-        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
+        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
+        let grammar_nongreedy = Grammar::parse_bootstrap("Rule: 'a'.*?'a';").unwrap();
+        let tree_nongreedy = &grammar_nongreedy.iter_term().next().unwrap().body;
+        let alphabet_nongreedy = alphabet_from_node(tree_nongreedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
-        let canonical_tree_nongreedy = canonicalise(&tree_nongreedy, &symtable_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
 
     #[test]
     fn canonical_tree_ignores_nongreedy_plus() {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
-        let tree_greedy = from_str(&mut "&(&('a',+(.)),'a')".chars()); // 'a'.+'a'
-        let alphabet_greedy = alphabet_from_node(&tree_greedy)
+        let grammar_greedy = Grammar::parse_bootstrap("Rule: 'a'.+'a';").unwrap();
+        let tree_greedy = &grammar_greedy.iter_term().next().unwrap().body;
+        let alphabet_greedy = alphabet_from_node(tree_greedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_greedy = SymbolTable::new(&alphabet_greedy);
-        let canonical_tree_greedy = canonicalise(&tree_greedy, &symtable_greedy);
-        let tree_nongreedy = from_str(&mut "&(&('a',?(+(.))),'a')".chars()); // 'a'.+?'a'
-        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
+        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
+        let grammar_nongreedy = Grammar::parse_bootstrap("Rule: 'a'.+?'a';").unwrap();
+        let tree_nongreedy = &grammar_nongreedy.iter_term().next().unwrap().body;
+        let alphabet_nongreedy = alphabet_from_node(tree_nongreedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
-        let canonical_tree_nongreedy = canonicalise(&tree_nongreedy, &symtable_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
 
     #[test]
     fn canonical_tree_ignores_nongreedy_qm() {
         // nongreedines is handled by the DFA and DFA simulator, not the grammar
-        let tree_greedy = from_str(&mut "&(&('a',?(.)),'a')".chars()); // 'a'.?'a'
-        let alphabet_greedy = alphabet_from_node(&tree_greedy)
+        let grammar_greedy = Grammar::parse_bootstrap("Rule: 'a'.?'a';").unwrap();
+        let tree_greedy = &grammar_greedy.iter_term().next().unwrap().body;
+        let alphabet_greedy = alphabet_from_node(tree_greedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_greedy = SymbolTable::new(&alphabet_greedy);
-        let canonical_tree_greedy = canonicalise(&tree_greedy, &symtable_greedy);
-        let tree_nongreedy = from_str(&mut "&(&('a',?(?(.))),'a')".chars()); // 'a'.??'a'
-        let alphabet_nongreedy = alphabet_from_node(&tree_nongreedy)
+        let canonical_tree_greedy = canonicalise(tree_greedy, &symtable_greedy);
+        let grammar_nongreedy = Grammar::parse_bootstrap("Rule: 'a'.??'a';").unwrap();
+        let tree_nongreedy = &grammar_nongreedy.iter_term().next().unwrap().body;
+        let alphabet_nongreedy = alphabet_from_node(tree_nongreedy)
             .into_iter()
             .collect::<Vec<_>>();
         let symtable_nongreedy = SymbolTable::new(&alphabet_nongreedy);
-        let canonical_tree_nongreedy = canonicalise(&tree_nongreedy, &symtable_nongreedy);
+        let canonical_tree_nongreedy = canonicalise(tree_nongreedy, &symtable_nongreedy);
         assert_eq!(canonical_tree_nongreedy, canonical_tree_greedy);
     }
 }

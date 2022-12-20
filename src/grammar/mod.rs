@@ -320,6 +320,7 @@ impl Grammar {
     ///
     /// The recognized grammar is similar to ANTLR in syntax, with a few key difference to
     /// simplify the manual implementation of the parser:
+    /// - `=` instead of `:` (originally this was an EBNF grammar)
     /// - no modes or lexer actions are supported.
     /// - no escaping is possible.
     /// - ranges must be fully specified (`[abc]` instead of `[a-c]`).
@@ -443,15 +444,14 @@ impl<T: std::fmt::Display> std::fmt::Display for LexerRuleElement<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LexerRuleElement::CharSet(i) => {
-                let mut string = String::from("[");
+                write!(f, "[")?;
                 for charz in i {
-                    write!(string, "{}", charz)?;
+                    write!(f, "{}", charz)?;
                 }
-                string.push(']');
-                write!(f, "VALUE({})", string)
+                write!(f, "]")
             }
-            LexerRuleElement::AnyValue => write!(f, "ANY"),
-            LexerRuleElement::Operation(tp) => write!(f, "OP({})", tp),
+            LexerRuleElement::AnyValue => write!(f, "."),
+            LexerRuleElement::Operation(tp) => write!(f, "{}", tp),
         }
     }
 }
@@ -463,6 +463,17 @@ pub enum ParserRuleElement {
     Terminal(String),
     Empty,
     Operation(LexerOp),
+}
+
+impl std::fmt::Display for ParserRuleElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParserRuleElement::NonTerminal(name) => write!(f, "NT[{}]", name),
+            ParserRuleElement::Terminal(name) => write!(f, "T[{}]", name),
+            ParserRuleElement::Empty => write!(f, "ε"),
+            ParserRuleElement::Operation(tp) => write!(f, "{}", tp),
+        }
+    }
 }
 
 /// Trait used to represents various object in [Graphviz Dot notation](https://graphviz.org/).

@@ -59,7 +59,7 @@ struct Token<'a> {
 //  1: space \r \n \t
 //  2: uppercase_letter
 //  3: lowercase_letter
-//  4: '='
+//  4: ':'
 //  5: ';'
 //  6: '|'
 //  7: '['
@@ -79,7 +79,7 @@ struct Token<'a> {
 const CHAR_CLASS: [u8; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     1, 20, 17, 20, 20, 20, 20, 16, 9, 10, 11, 12, 20, 20, 15, 20, 19, 19, 19, 19, 19, 19, 19, 19,
-    19, 19, 20, 5, 20, 4, 20, 13, 20, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    19, 19, 4, 5, 20, 20, 20, 13, 20, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
     2, 2, 2, 2, 2, 2, 7, 20, 8, 20, 18, 20, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
     3, 3, 3, 3, 3, 3, 3, 3, 20, 6, 20, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -206,7 +206,7 @@ fn parse_rule_nonterm<'a>(
             }
         } else {
             Err(ParseError::SyntaxError {
-                message: format!("Unexpected {:?}, expecting `=` ", assign.tp),
+                message: format!("Unexpected {:?}, expecting `:` ", assign.tp),
             })
         }
     } else {
@@ -225,7 +225,7 @@ fn parse_rule_term<'a>(
     let lookahead = get_lookahead(buffer, position, lookahead_cache, "NAME_TERM")?;
     if lookahead.tp == Acc::NAME_TERM {
         consume_lookahead(lookahead_cache);
-        let assign = get_lookahead(buffer, position, lookahead_cache, "`=`")?;
+        let assign = get_lookahead(buffer, position, lookahead_cache, "`:`")?;
         if assign.tp == Acc::ASSIGN {
             consume_lookahead(lookahead_cache);
             let expression = parse_expression_term(buffer, position, lookahead_cache)?;
@@ -244,7 +244,7 @@ fn parse_rule_term<'a>(
             }
         } else {
             Err(ParseError::SyntaxError {
-                message: format!("Unexpected {:?}, expecting `=` ", assign.tp),
+                message: format!("Unexpected {:?}, expecting `:` ", assign.tp),
             })
         }
     } else {
@@ -337,12 +337,19 @@ fn parse_list_term<'a>(
     let tree = if terms.len() == 1 {
         terms.pop().unwrap()
     } else {
-        Tree::new_node(LexerRuleElement::Operation(LexerOp::And), terms)
+        terms.reverse();
+        let l = terms.pop().unwrap();
+        let r = terms.pop().unwrap();
+        let mut tree = Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![l, r]);
+        while let Some(n) = terms.pop() {
+            tree = Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![tree, n]);
+        }
+        tree
     };
     Ok(tree)
 }
 
-//grouped_term: (NOT? LPAR expression_term RPAR (KLEENE|QM|PL)?) | (NOT? term_term (KLEENE|QM|PL)?)
+//grouped_term: (NOT? LPAR expression_term RPAR ((KLEENE|QM|PL) QM?)?) | (NOT? term_term ((KLEENE|QM|PL) QM?)?)
 fn parse_grouped_term<'a>(
     buffer: &'a [u8],
     position: &mut usize,
@@ -366,7 +373,7 @@ fn parse_grouped_term<'a>(
         lookahead_cache,
         "LPAR or CHARSET or LITERAL or ANY",
     )?;
-    let main = if lookahead.tp == Acc::LPAR {
+    let mut main = if lookahead.tp == Acc::LPAR {
         consume_lookahead(lookahead_cache);
         let tree = parse_expression_term(buffer, position, lookahead_cache)?;
         if get_lookahead(buffer, position, lookahead_cache, "RPAR")?.tp != Acc::RPAR {
@@ -380,24 +387,35 @@ fn parse_grouped_term<'a>(
     } else {
         parse_term_term(buffer, position, lookahead_cache)?
     };
+    if negated {
+        main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Not), vec![main]);
+    }
+    // at least a semicolon is expected after this production, hence why the hint for SEMI
     let lookahead = get_lookahead(buffer, position, lookahead_cache, "SEMI")?;
-    let mut main = match lookahead.tp {
+    let search_nongreedy = match lookahead.tp {
         Acc::KLEENE => {
             consume_lookahead(lookahead_cache);
-            Tree::new_node(LexerRuleElement::Operation(LexerOp::Kleene), vec![main])
+            main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Kleene), vec![main]);
+            true
         }
         Acc::QM => {
             consume_lookahead(lookahead_cache);
-            Tree::new_node(LexerRuleElement::Operation(LexerOp::Qm), vec![main])
+            main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Qm), vec![main]);
+            true
         }
         Acc::PL => {
             consume_lookahead(lookahead_cache);
-            Tree::new_node(LexerRuleElement::Operation(LexerOp::Pl), vec![main])
+            main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Pl), vec![main]);
+            true
         }
-        _ => main,
+        _ => false,
     };
-    if negated {
-        main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Not), vec![main]);
+    if search_nongreedy {
+        let ng = get_lookahead(buffer, position, lookahead_cache, "SEMI")?;
+        if ng.tp == Acc::QM {
+            consume_lookahead(lookahead_cache);
+            main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Qm), vec![main]);
+        }
     }
     Ok(main)
 }
@@ -571,7 +589,20 @@ fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
 mod tests {
     use super::{next_token, Acc, Token, CHAR_CLASS};
     use crate::grammar::bootstrap::bootstrap_grammar;
-    use crate::grammar::{ParserRuleElement, Tree};
+    use crate::grammar::Tree;
+    use std::fmt::Write;
+
+    /// encoded representation of a tree in form of string
+    /// otherwise the formatted version takes a lot of space (macros too, given the tree generics)
+    fn as_str<T: std::fmt::Display>(node: &Tree<T>) -> String {
+        let mut string = String::new();
+        let children = node.children().map(as_str).collect::<Vec<_>>();
+        write!(&mut string, "{}", node.value()).unwrap();
+        if !children.is_empty() {
+            write!(&mut string, "({})", children.join(",")).unwrap();
+        }
+        string
+    }
 
     #[test]
     fn char_class() {
@@ -589,7 +620,7 @@ mod tests {
             assert_eq!(CHAR_CLASS[u32::from(code) as usize], 3)
         }
         //single symbols
-        assert_eq!(CHAR_CLASS[u32::from('=') as usize], 4);
+        assert_eq!(CHAR_CLASS[u32::from(':') as usize], 4);
         assert_eq!(CHAR_CLASS[u32::from(';') as usize], 5);
         assert_eq!(CHAR_CLASS[u32::from('|') as usize], 6);
         assert_eq!(CHAR_CLASS[u32::from('[') as usize], 7);
@@ -609,7 +640,7 @@ mod tests {
             assert_eq!(CHAR_CLASS[u32::from(code) as usize], 19)
         }
         // symbols
-        let symbols = "!#$%&,/:<>^@\\{}-`";
+        let symbols = "!#$%&,/=<>^@\\{}-`";
         for code in symbols.chars() {
             assert_eq!(CHAR_CLASS[u32::from(code) as usize], 20)
         }
@@ -623,7 +654,7 @@ mod tests {
         let test = [
             ("rule0", Acc::NAME_NONTERM),
             ("Rule_0", Acc::NAME_TERM),
-            ("=", Acc::ASSIGN),
+            (":", Acc::ASSIGN),
             (";", Acc::SEMI),
             ("|", Acc::BAR),
             ("(", Acc::LPAR),
@@ -658,74 +689,170 @@ mod tests {
 
     #[test]
     fn nonterm_ok() {
-        let grammar = "rule0 = rule1;";
-        let parsed = bootstrap_grammar(grammar);
-        assert!(parsed.is_ok());
+        let grammar = "rule0: rule1;";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_nonterm().next().unwrap().body;
+        let expected = "NT[rule1]";
+        assert_eq!(as_str(tree), expected);
     }
 
     #[test]
     fn nonterm_missing_semi() {
-        let grammar = "rule0 = rule1";
+        let grammar = "rule0: rule1";
         let parsed = bootstrap_grammar(grammar);
         assert!(parsed.is_err());
     }
 
     #[test]
     fn nonterm_call_term() {
-        let grammar = "rule0 = Rule1;";
-        let parsed = bootstrap_grammar(grammar);
-        assert!(parsed.is_ok());
+        let grammar = "rule0: Rule1;";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_nonterm().next().unwrap().body;
+        let expected = "T[Rule1]";
+        assert_eq!(as_str(tree), expected);
     }
 
     #[test]
     fn term_literal_ok() {
-        let grammar = "Rule0 = 'literal';";
-        let parsed = bootstrap_grammar(grammar);
-        assert!(parsed.is_ok());
+        let grammar = "Rule0: 'ab';";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_term().next().unwrap().body;
+        let expected = "&([a],[b])";
+        assert_eq!(as_str(tree), expected);
     }
 
     #[test]
     fn term_charset_ok() {
-        let grammar = "Rule0 = [abcde];";
-        let parsed = bootstrap_grammar(grammar);
-        assert!(parsed.is_ok());
+        let grammar = "Rule0: [abcde];";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_term().next().unwrap().body;
+        let expected = "[abcde]";
+        assert_eq!(as_str(tree), expected);
     }
 
     #[test]
     fn term_missing_semi() {
-        let grammar = "Rule0 = 'literal'";
+        let grammar = "Rule0: 'literal'";
         let parsed = bootstrap_grammar(grammar);
         assert!(parsed.is_err());
     }
 
     #[test]
     fn nonterm_same_line() {
-        let grammar = "rule0 = Rule1; Rule1 = \"literal\";";
+        let grammar = "rule0: Rule1; Rule1: \"ab\";";
         let parsed = bootstrap_grammar(grammar).unwrap();
-        assert_eq!(parsed.len_term(), 1);
-        assert_eq!(parsed.len_nonterm(), 1);
+        let tree = &parsed.iter_nonterm().next().unwrap().body;
+        let expected = "T[Rule1]";
+        assert_eq!(as_str(tree), expected);
     }
 
     #[test]
     fn nonterm_or() {
-        let grammar = "rule0 = rule1 | rule2;
-            rule1 = rule2 | rule3;";
+        let grammar = "rule0: rule1 | rule2 Rule3;";
         let parsed = bootstrap_grammar(grammar).unwrap();
-        assert_eq!(parsed.len_nonterm(), 2);
+        let tree = &parsed.iter_nonterm().next().unwrap().body;
+        let expected = "|(NT[rule1],&(NT[rule2],T[Rule3]))";
+        assert_eq!(as_str(tree), expected);
     }
 
     #[test]
     fn nonterm_empty() {
-        let grammar = "rule0 = Rule1
-                          |
-                          ;
-                    Rule1 = 'b';";
+        let grammar = "rule0: Rule1
+                            |
+                            ;";
         let parsed = bootstrap_grammar(grammar).unwrap();
-        assert_eq!(
-            *parsed.non_terminals[0].body.child(1).unwrap(),
-            Tree::new_leaf(ParserRuleElement::Empty)
-        );
-        assert_eq!(parsed.len_term(), 1);
-        assert_eq!(parsed.len_nonterm(), 1);
+        let tree = &parsed.iter_nonterm().next().unwrap().body;
+        let expected = "|(T[Rule1],ε)";
+        assert_eq!(as_str(tree), expected);
+    }
+
+    #[test]
+    fn term_correct_precedence_or_klenee() {
+        let expr = "Rule: 'a'|'b'*'c';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "|([a],&(*([b]),[c]))";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_correct_precedence_klenee_par() {
+        let expr = "Rule: 'a'*('b'|'c')*'d';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(&(*([a]),*(|([b],[c]))),[d])";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_correct_precedence_negation_par() {
+        let expr = "Rule: ('a')~'b'('c')('d')'e';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(&(&(&([a],~([b])),[c]),[d]),[e])";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_correct_precedence_negation() {
+        let expr = "Rule: 'a'~'b''c'('d');";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(&(&([a],~([b])),[c]),[d])";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_correct_precedence_qm_plus_klenee_par() {
+        let expr = "Rule: 'a'?('b'*|'c'*)+'d';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(&(?([a]),+(|(*([b]),*([c])))),[d])";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_precedence_negation_klenee() {
+        let expr = "Rule: ~'a'*;";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "*(~([a]))";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_precedence_negation_klenee_or() {
+        let expr = "Rule: ~'a'*|'b';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "|(*(~([a])),[b])";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_precedence_literal_negation_literal() {
+        let expr = "Rule: 'a'~'a'*'a';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(&([a],*(~([a]))),[a])";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn regression_disappearing_literal() {
+        let expr = "Rule: 'a'*~'b'*;";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(*([a]),*(~([b])))";
+        assert_eq!(as_str(prec_tree), expected);
+    }
+
+    #[test]
+    fn term_precedence_nongreedy_negation() {
+        let expr = "Rule: 'a'~'a'*?'a';";
+        let grammar = bootstrap_grammar(expr).unwrap();
+        let prec_tree = &grammar.iter_term().next().unwrap().body;
+        let expected = "&(&([a],?(*(~([a])))),[a])";
+        assert_eq!(as_str(prec_tree), expected);
     }
 }

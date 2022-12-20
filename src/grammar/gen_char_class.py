@@ -7,7 +7,7 @@ for code in range(0, 256):
       print("2, ", end="")
     elif l >= 'a' and l <= 'z':
       print("3, ", end="")
-    elif l == '=':
+    elif l == ':':
       print("4, ", end="")
     elif l == ';':
       print("5, ", end="")
@@ -39,7 +39,7 @@ for code in range(0, 256):
       print("18, ", end="")
     elif l >= '0' and l <= '9':
       print("19, ", end="")
-    elif l in {"!","#","$","%","&",",","-","/",":","<",">","@","\\","^","`","{","}"}:
+    elif l in {"!","#","$","%","&",",","-","/","=","<",">","@","\\","^","`","{","}"}:
       print("20, ", end="")
     else:
       print("0, ", end="")
