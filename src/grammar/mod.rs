@@ -15,7 +15,7 @@ pub struct LexerProduction {
     /// Name of the production.
     pub head: String,
     /// Body of the production.
-    pub body: Tree<LexerRuleElement<char>>,
+    pub body: Tree<LexerRuleElement>,
     /// If this production belongs to a lexer, this field contains the lexer actions.
     pub actions: BTreeSet<Action>,
 }
@@ -431,16 +431,16 @@ impl std::fmt::Display for LexerOp {
 ///
 /// A literal should be represented as a concatenation of 1-element [`CharSet`]s.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LexerRuleElement<T> {
+pub enum LexerRuleElement {
     /// A set containing `T`. `T` is usually a character or its ID in the [`SymbolTable`].
-    CharSet(BTreeSet<T>),
+    CharSet(BTreeSet<char>),
     /// The *any value* operator `.`.
     AnyValue,
     /// An operation between the other elements.
     Operation(LexerOp),
 }
 
-impl<T: std::fmt::Display> std::fmt::Display for LexerRuleElement<T> {
+impl std::fmt::Display for LexerRuleElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LexerRuleElement::CharSet(i) => {

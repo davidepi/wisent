@@ -33,7 +33,7 @@ impl std::fmt::Display for CanonicalLexerRuleElement {
 }
 
 /// Checks if a parsing tree contains non-greedy productions
-pub fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
+pub fn is_nongreedy(node: &Tree<LexerRuleElement>) -> bool {
     let mut nodes = vec![node];
     while let Some(node) = nodes.pop() {
         if *node.value() == LexerRuleElement::Operation(LexerOp::Qm) {
@@ -55,7 +55,7 @@ pub fn is_nongreedy(node: &Tree<LexerRuleElement<char>>) -> bool {
 /// **note** that non-greediness of a rule is removed by this function, so it must be recorded
 /// somewhere else beforehand.
 pub fn canonicalise(
-    node: &Tree<LexerRuleElement<char>>,
+    node: &Tree<LexerRuleElement>,
     symtable: &SymbolTable,
 ) -> Tree<CanonicalLexerRuleElement> {
     match node.value() {
@@ -141,7 +141,7 @@ fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> Tree<CanonicalLex
 }
 
 /// Returns the entire set of symbols used in a given tree.
-pub fn alphabet_from_node(root: &Tree<LexerRuleElement<char>>) -> FxHashSet<BTreeSet<char>> {
+pub fn alphabet_from_node(root: &Tree<LexerRuleElement>) -> FxHashSet<BTreeSet<char>> {
     let mut ret = FxHashSet::default();
     let mut todo_nodes = vec![root];
     while let Some(node) = todo_nodes.pop() {
@@ -160,7 +160,7 @@ pub fn alphabet_from_node(root: &Tree<LexerRuleElement<char>>) -> FxHashSet<BTre
 
 // Solve a node with a negated set, by returning the allowed set of literals.
 // panics in case an operator different from OR or NOT is encountered.
-fn solve_negated(node: &Tree<LexerRuleElement<char>>, symtable: &SymbolTable) -> BTreeSet<u32> {
+fn solve_negated(node: &Tree<LexerRuleElement>, symtable: &SymbolTable) -> BTreeSet<u32> {
     debug_assert!(*node.value() == LexerRuleElement::Operation(LexerOp::Not));
     let entire_alphabet = symtable.any_value_id();
     let mut descendant_alphabet = BTreeSet::new();

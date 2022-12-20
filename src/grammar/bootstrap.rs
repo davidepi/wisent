@@ -284,7 +284,7 @@ fn parse_expression_term<'a>(
     buffer: &'a [u8],
     position: &mut usize,
     lookahead_cache: &mut Option<Token<'a>>,
-) -> Result<Tree<LexerRuleElement<char>>, ParseError> {
+) -> Result<Tree<LexerRuleElement>, ParseError> {
     let mut lists = vec![parse_list_term(buffer, position, lookahead_cache)?];
     while let Ok(lookahead) = get_lookahead(buffer, position, lookahead_cache, "") {
         match lookahead.tp {
@@ -329,7 +329,7 @@ fn parse_list_term<'a>(
     buffer: &'a [u8],
     position: &mut usize,
     lookahead_cache: &mut Option<Token<'a>>,
-) -> Result<Tree<LexerRuleElement<char>>, ParseError> {
+) -> Result<Tree<LexerRuleElement>, ParseError> {
     let mut terms = vec![parse_grouped_term(buffer, position, lookahead_cache)?];
     while let Ok(term) = parse_grouped_term(buffer, position, lookahead_cache) {
         terms.push(term);
@@ -354,7 +354,7 @@ fn parse_grouped_term<'a>(
     buffer: &'a [u8],
     position: &mut usize,
     lookahead_cache: &mut Option<Token<'a>>,
-) -> Result<Tree<LexerRuleElement<char>>, ParseError> {
+) -> Result<Tree<LexerRuleElement>, ParseError> {
     let lookahead = get_lookahead(
         buffer,
         position,
@@ -459,7 +459,7 @@ fn parse_term_term<'a>(
     buffer: &'a [u8],
     position: &mut usize,
     lookahead_cache: &mut Option<Token<'a>>,
-) -> Result<Tree<LexerRuleElement<char>>, ParseError> {
+) -> Result<Tree<LexerRuleElement>, ParseError> {
     let lookahead = get_lookahead(
         buffer,
         position,
