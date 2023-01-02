@@ -4,6 +4,7 @@ use crate::error::ParseError;
 use crate::fxhashset;
 use crate::grammar::{Grammar, Tree};
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 
 fn first(prods: &[Tree<CanonicalParserRuleElement>]) -> Vec<FxHashSet<u32>> {
     let mut old = vec![FxHashSet::default(); prods.len()];
@@ -243,6 +244,35 @@ pub fn first_follow(
     let first = first(&canonical);
     let follow = follow(&canonical, &first, start_index);
     Ok((first, follow))
+}
+
+/// Stores the parsing table for a LL(1) parser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LL1ParsingTable {
+    /// The amount of terminal productions in the grammar.
+    terminals: u32,
+    /// The parsing table.
+    /// First dimension is the current nonterminal production.
+    /// Second dimension is the read terminal/token or ENDLINE_VAL.
+    /// The table value is the expanded nonterminal production and alternative
+    /// (which or alternative is chosen).
+    table: Vec<Vec<Option<(u32, u32)>>>,
+}
+
+impl LL1ParsingTable {
+    /// Computes the LL(1) parsing table from the given grammar.
+    ///
+    /// This table can be used in a [`TableDrivenParser`].
+    ///
+    /// Expects the grammar and the index of the starting non-terminal as input.
+    pub fn new(grammar: &Grammar, start_index: u32) -> Result<Self, ParseError> {
+        let canonical = canonicalise(grammar)?;
+        let first = first(&canonical);
+        let follow = follow(&canonical, &first, start_index);
+        let terminals = grammar.len_term() as u32;
+        let table = ll1_parsing_table(&canonical, terminals, &first, &follow);
+        Ok(Self { terminals, table })
+    }
 }
 
 #[cfg(test)]

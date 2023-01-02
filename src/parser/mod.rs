@@ -1,7 +1,7 @@
 mod conversion;
 mod ll;
 
-pub use self::ll::first_follow;
+pub use self::ll::{first_follow, LL1ParsingTable};
 
 /// Represents the empty value `ε` when appearing in the first set or follow set.
 pub const EPSILON_VAL: u32 = 0xFFFFFFFE;
