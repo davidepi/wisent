@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 /// Module containing the errors that may arise during the parser generation.
 pub mod error;
 /// Module providing the definition of a Grammar.

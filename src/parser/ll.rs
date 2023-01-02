@@ -1,7 +1,8 @@
-use super::conversion::CanonicalParserRuleElement;
+use super::conversion::{canonicalise, CanonicalParserRuleElement};
 use super::{ENDLINE_VAL, EPSILON_VAL};
+use crate::error::ParseError;
 use crate::fxhashset;
-use crate::grammar::Tree;
+use crate::grammar::{Grammar, Tree};
 use rustc_hash::FxHashSet;
 
 fn first(prods: &[Tree<CanonicalParserRuleElement>]) -> Vec<FxHashSet<u32>> {
@@ -52,10 +53,10 @@ fn first_rec(
 fn follow(
     prods: &[Tree<CanonicalParserRuleElement>],
     first: &[FxHashSet<u32>],
-    start: usize,
+    start: u32,
 ) -> Vec<FxHashSet<u32>> {
     let mut old = vec![FxHashSet::default(); prods.len()];
-    old[start].insert(ENDLINE_VAL);
+    old[start as usize].insert(ENDLINE_VAL);
     let mut saturated = false;
     while !saturated {
         let mut new = old.clone();
@@ -203,9 +204,49 @@ fn ll1_rec(
     }
 }
 
+/// Returns the first sets and the follow sets of a given grammar.
+///
+/// These sets represent the set of terminals appearing respectively at the start and to the right
+/// (following) a production. The terminals contained in each set are represented by their index in
+/// the grammar. Two special symbols can appear in these sets: [`EPSILON_VAL`] and [`ENDLINE_VAL`].
+///
+/// The returned vectors are indexed by the nonterminal production. This means that `first[0]`
+/// contains the first set of the first nonterminal production appearing in the grammar using
+/// [`Grammar::iter_nonterm`].
+/// The first set of each terminal production is trivial, being equal to the terminal itself.
+/// For this reason, these are not contained in the returned vector.
+///
+/// This function requires also the index of the starting production.
+/// # Example
+/// Basic usage:
+/// ```
+/// # use wisent::grammar::Grammar;
+/// # use wisent::parser::first_follow;
+/// # use wisent::parser::ENDLINE_VAL;
+/// let grammar_text = "LetterA: 'a';
+///                     LetterB: 'b';
+///                     LetterC: 'c';
+///                     s: s LetterA | s LetterB | LetterC;";
+/// let grammar = Grammar::parse_bootstrap(grammar_text).unwrap();
+/// let (first, follow) = first_follow(&grammar, 0).unwrap();
+///
+/// assert!(first[0].contains(&2));
+/// assert!(follow[0].contains(&0));
+/// assert!(follow[0].contains(&1));
+/// assert!(follow[0].contains(&ENDLINE_VAL));
+/// ```
+pub fn first_follow(
+    grammar: &Grammar,
+    start_index: u32,
+) -> Result<(Vec<FxHashSet<u32>>, Vec<FxHashSet<u32>>), ParseError> {
+    let canonical = canonicalise(grammar)?;
+    let first = first(&canonical);
+    let follow = follow(&canonical, &first, start_index);
+    Ok((first, follow))
+}
+
 #[cfg(test)]
 mod tests {
-
     use crate::fxhashset;
     use crate::grammar::Grammar;
     use crate::parser::conversion::canonicalise;
