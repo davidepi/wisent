@@ -133,14 +133,83 @@ fn follow_rec(
     }
 }
 
+// the last entry in the terminals is the $ sign (ENDLINE_VAL)
+fn ll1_parsing_table(
+    prods: &[Tree<CanonicalParserRuleElement>],
+    terminals: u32,
+    first: &[FxHashSet<u32>],
+    follow: &[FxHashSet<u32>],
+) -> Vec<Vec<Option<(u32, u32)>>> {
+    let mut table = vec![vec![None; terminals as usize + 1]; prods.len()]; // +1 is the $ sign
+    for (prod_id, prod) in prods.iter().enumerate() {
+        if prod.value() == &CanonicalParserRuleElement::OR {
+            for (child_id, child) in prod.children().enumerate() {
+                ll1_rec(
+                    prod_id as u32,
+                    child_id as u32,
+                    child,
+                    terminals,
+                    first,
+                    follow,
+                    &mut table,
+                );
+            }
+        } else {
+            ll1_rec(
+                prod_id as u32,
+                0,
+                prod,
+                terminals,
+                first,
+                follow,
+                &mut table,
+            );
+        }
+    }
+    table
+}
+
+fn ll1_rec(
+    id: u32,
+    alternative: u32,
+    prod: &Tree<CanonicalParserRuleElement>,
+    terminals: u32,
+    first: &[FxHashSet<u32>],
+    follow: &[FxHashSet<u32>],
+    table: &mut [Vec<Option<(u32, u32)>>],
+) {
+    let first = match prod.value() {
+        CanonicalParserRuleElement::Terminal(t) => fxhashset!(*t),
+        CanonicalParserRuleElement::NonTerminal(nt) => first[*nt as usize].clone(),
+        CanonicalParserRuleElement::Empty => fxhashset!(EPSILON_VAL),
+        CanonicalParserRuleElement::AND => match prod.children().next().unwrap().value() {
+            CanonicalParserRuleElement::Terminal(t) => fxhashset!(*t),
+            CanonicalParserRuleElement::NonTerminal(nt) => first[*nt as usize].clone(),
+            _ => panic!("Unexpected nested production in nonterminals"),
+        },
+        CanonicalParserRuleElement::OR => panic!("Unexpected nested production in nonterminals"),
+    };
+    for &term in first.iter().filter(|&&e| e != EPSILON_VAL) {
+        table[id as usize][term as usize] = Some((id, alternative));
+    }
+    if first.contains(&EPSILON_VAL) {
+        for &term in follow[id as usize].iter().filter(|&&e| e != EPSILON_VAL) {
+            if term != ENDLINE_VAL {
+                table[id as usize][term as usize] = Some((id, alternative));
+            } else {
+                table[id as usize][terminals as usize] = Some((id, alternative));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
-    use super::first;
     use crate::fxhashset;
     use crate::grammar::Grammar;
     use crate::parser::conversion::canonicalise;
-    use crate::parser::ll::follow;
+    use crate::parser::ll::{first, follow, ll1_parsing_table};
     use crate::parser::{ENDLINE_VAL, EPSILON_VAL};
 
     /// Grammar 4.28 of the dragon book. Page 217 on the second edition.
@@ -181,5 +250,22 @@ mod tests {
         assert_eq!(follow[2], fxhashset! {0, 3, ENDLINE_VAL});
         assert_eq!(follow[3], fxhashset! {0, 3, ENDLINE_VAL});
         assert_eq!(follow[4], fxhashset! {0, 1, 3, ENDLINE_VAL});
+    }
+
+    #[test]
+    fn parsing_table() {
+        let g = grammar_428();
+        let canonical = canonicalise(&g).unwrap();
+        let first = first(&canonical);
+        let follow = follow(&canonical, &first, 0);
+        let table = ll1_parsing_table(&canonical, g.len_term() as u32, &first, &follow);
+        let expected = [
+            [None, None, Some((0, 0)), None, Some((0, 0)), None],
+            [Some((1, 0)), None, None, Some((1, 1)), None, Some((1, 1))],
+            [None, None, Some((2, 0)), None, Some((2, 0)), None],
+            [Some((3, 1)), Some((3, 0)), None, Some((3, 1)), None, Some((3, 1))],
+            [None, None, Some((4, 0)), None, Some((4, 1)), None],
+        ];
+        assert_eq!(table, expected);
     }
 }
