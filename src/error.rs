@@ -11,6 +11,7 @@
 pub enum ParseError {
     IOError(std::io::Error),
     SyntaxError { message: String },
+    ParsingError { message: String },
     DeserializeError { message: String },
     InternalError { message: String },
 }
@@ -28,10 +29,11 @@ impl std::fmt::Display for ParseError {
         match self {
             ParseError::IOError(e) => write!(buffer, "IOError: {}", e),
             ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {}", message),
+            ParseError::ParsingError { message } => write!(buffer, "ParsingError: {}", message),
             ParseError::DeserializeError { message } => {
                 write!(buffer, "DeserializeError: {}", message)
             }
-            ParseError::InternalError { message } => write!(buffer, "SyntaxError: {}", message),
+            ParseError::InternalError { message } => write!(buffer, "InternalError: {}", message),
         }
     }
 }

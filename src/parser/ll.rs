@@ -195,6 +195,10 @@ pub fn first_follow(
 pub struct LL1ParsingTable {
     /// The amount of terminal productions in the grammar.
     terminals: u32,
+    /// The starting symbol of the grammar represented by this table.
+    start_index: u32,
+    /// Stores the flattened grammar.
+    nonterminals: Vec<Vec<Vec<ParserSymbol>>>,
     /// The parsing table.
     /// First dimension is the current nonterminal production.
     /// Second dimension is the read terminal/token or ENDLINE_VAL.
@@ -209,13 +213,53 @@ impl LL1ParsingTable {
     /// This table can be used in a [`TableDrivenParser`].
     ///
     /// Expects the grammar and the index of the starting non-terminal as input.
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::LL1ParsingTable;
+    /// let g = "sum: num PLUS num;
+    ///          num: INT | REAL;
+    ///          INT: [0-9]+;
+    ///          REAL: [0-9]+ '.' [0-9]+;
+    ///          PLUS: '+';";
+    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
+    /// let ll1_table = LL1ParsingTable::new(&grammar, 0).unwrap();
+    /// ```
     pub fn new(grammar: &Grammar, start_index: u32) -> Result<Self, ParseError> {
-        let canonical = flatten(grammar)?;
-        let first = first(&canonical);
-        let follow = follow(&canonical, &first, start_index);
+        let nonterminals = flatten(grammar)?;
+        let first = first(&nonterminals);
+        let follow = follow(&nonterminals, &first, start_index);
         let terminals = grammar.len_term() as u32;
-        let table = ll1_parsing_table(&canonical, terminals, &first, &follow);
-        Ok(Self { terminals, table })
+        let table = ll1_parsing_table(&nonterminals, terminals, &first, &follow);
+        Ok(Self {
+            terminals,
+            start_index,
+            nonterminals,
+            table,
+        })
+    }
+
+    /// The value assigned to the EOF character($) in the current table.
+    pub(super) fn eof_val(&self) -> u32 {
+        self.terminals
+    }
+
+    /// Returns the index of the starting nonterminal production in the original grammar
+    /// represented by this table.
+    pub(super) fn start(&self) -> u32 {
+        self.start_index
+    }
+
+    /// Given the current nonterminal production and the next token value, retireves the next set
+    /// of symbols.
+    ///
+    /// Returns None if the corresponding entry does not exist in the parsing table.
+    pub(super) fn entry(&self, nonterminal: u32, terminal: u32) -> Option<&[ParserSymbol]> {
+        let (prod, alternate) = self
+            .table
+            .get(nonterminal as usize)?
+            .get(terminal as usize)?
+            .as_ref()?;
+        Some(&self.nonterminals[*prod as usize][*alternate as usize])
     }
 }
 

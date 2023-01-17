@@ -14,7 +14,7 @@ use std::path::Path;
 /// bytes read.
 const READ_SIZE: usize = 1024;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 /// Token retrieved by the lexical analyzer.
 pub struct Token {
     /// The mode ID of the associated production.
@@ -83,6 +83,11 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
     }
 
     /// Runs the lexical analysis and retrieves the next token.
+    ///
+    /// Returns None if EOF was reached.
+    ///
+    /// Raises a ParseError if I/O problems were encountered, or the simulator performs tries to
+    /// call PopMode on the bottom of the stack.
     ///
     /// # Examples
     /// Basic usage:

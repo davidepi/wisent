@@ -500,7 +500,7 @@ pub trait GraphvizDot {
 }
 
 /// A Tree data structure.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Tree<T> {
     /// The value contained in the tree.
     value: T,
@@ -556,6 +556,11 @@ impl<T> Tree<T> {
         self.children.iter()
     }
 
+    /// Returns the amount of children contained in this node.
+    pub fn children_len(&self) -> usize {
+        self.children.len()
+    }
+
     /// Iterator visiting mutable references to the node children.
     pub fn children_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Self> {
         self.children.iter_mut()
@@ -601,5 +606,19 @@ impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
         }
         retval.push('}');
         retval
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Tree<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut stack = vec![(0, self)];
+        while let Some((indent, node)) = stack.pop() {
+            write!(f, "{}{:?}", " ".repeat(indent), node)?;
+            stack.extend(node.children().rev().map(|x| (indent + 1, x)));
+            if !stack.is_empty() {
+                writeln!(f)?;
+            }
+        }
+        Ok(())
     }
 }
