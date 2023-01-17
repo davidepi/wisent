@@ -6,6 +6,7 @@
 /// * `SyntaxError` - An error containing a `message` String that can arise when
 /// parsing fails due to syntax errors in the input grammar.
 /// * `DeserializeError` - An error arising during deserialization.
+/// * `InternalError` - TODO
 #[derive(Debug)]
 pub enum ParseError {
     IOError(std::io::Error),
