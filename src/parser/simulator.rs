@@ -1,8 +1,10 @@
 use super::ParseNode;
 use crate::error::ParseError;
-use crate::grammar::Tree;
+use crate::grammar::{Grammar, Tree};
 use crate::lexer::{DfaSimulator, MultiDfa, Token};
 use crate::parser::{LL1ParsingTable, ParserSymbol};
+#[cfg(trace_parser)]
+use std::fmt::Write;
 use std::io::{Bytes, Read};
 
 /// Trait implementing a pull parser.
@@ -42,6 +44,9 @@ pub struct LLParser {
     /// indexed nodes of the tree being built. Childless, children will be assigned at the end.
     /// First value is the parent_id, second value is the actual tree.
     built_nodes: Vec<(u32, Tree<ParseNode>)>,
+    /// Stores a grammar, to provide better debug informations.
+    #[cfg(trace_parser)]
+    grammar: Option<Grammar>,
 }
 
 impl LLParser {
@@ -68,6 +73,22 @@ impl LLParser {
             stack,
             table,
             built_nodes: Vec::new(),
+            #[cfg(trace_parser)]
+            grammar: None,
+        }
+    }
+
+    /// Supplies the production names to provide better debugging.
+    ///
+    /// Normally, when logging, the production index would be used. If this method is called (in
+    /// debug mode), the parser stores the grammar in order to provide the production name when
+    /// logging.
+    ///
+    /// This method requires the feature **trace-parser** to be active.
+    pub fn verbose_debug(&mut self, _grammar: Grammar) {
+        #[cfg(trace_parser)]
+        {
+            self.grammar = Some(_grammar);
         }
     }
 }
@@ -80,6 +101,7 @@ fn parse_ll1(
     let token_val = token
         .map(|t| t.production)
         .unwrap_or_else(|| status.table.eof_val());
+    debug_print_token(status, token);
     while let Some((parent_id, top_stack)) = status.stack.pop() {
         match top_stack {
             ParserSymbol::Terminal(t) => {
@@ -103,6 +125,7 @@ fn parse_ll1(
             }
             ParserSymbol::NonTerminal(nt) => {
                 if let Some(y) = status.table.entry(nt, token_val) {
+                    debug_print_accept(status, nt, y);
                     let current_id = status.built_nodes.len() as u32;
                     status
                         .built_nodes
@@ -120,6 +143,62 @@ fn parse_ll1(
         }
     }
     panic!("Unreachable")
+}
+
+/// Print the token received by the parser. prints nothing without trace_parser feature.
+fn debug_print_token(_parser: &LLParser, _tok: Option<Token>) {
+    #[cfg(trace_parser)]
+    {
+        let token_name = if let Some(grammar) = &_parser.grammar {
+            _tok.map(|x| {
+                grammar
+                    .iter_term()
+                    .nth(x.production as usize)
+                    .unwrap()
+                    .head
+                    .clone()
+            })
+            .unwrap_or_else(|| "EOF".to_string())
+        } else {
+            _tok.map(|x| format!("{}", x.production))
+                .unwrap_or_else(|| "EOF".to_string())
+        };
+        println!("Next token is {}", token_name);
+    }
+}
+
+/// prints the production accepted by the parser. Prints nothing without trace_parser feature.
+fn debug_print_accept(_parser: &LLParser, _lhs: u32, _rhs: &[ParserSymbol]) {
+    #[cfg(trace_parser)]
+    {
+        if let Some(grammar) = &_parser.grammar {
+            let mut string = format!(
+                "{}:",
+                &grammar.iter_nonterm().nth(lhs as usize).unwrap().head
+            );
+            for symbol in _rhs {
+                match symbol {
+                    ParserSymbol::Terminal(t) => {
+                        let name = &grammar
+                            .iter_term()
+                            .nth(*t as usize)
+                            .map(|x| x.head.clone())
+                            .unwrap_or_else(|| "EOF".to_string());
+                        write!(string, " {}", name)
+                    }
+                    ParserSymbol::NonTerminal(nt) => {
+                        let name = &grammar.iter_nonterm().nth(*nt as usize).unwrap().head;
+                        write!(string, " {}", name)
+                    }
+                    ParserSymbol::Empty => write!(string, " ε"),
+                }
+                .unwrap();
+            }
+            println!("Accepting rule {}", string);
+        } else {
+            println!("Accepting rule {}", lhs);
+        }
+    }
 }
 
 /// Transforms a flat list of nodes into a proper tree.
@@ -170,7 +249,7 @@ mod tests {
         let g = grammar_428();
         let dfa = MultiDfa::new(&g);
         let ll1_table = LL1ParsingTable::new(&g, 0).unwrap();
-        let input = "(3*(1+2))";
+        let input = "3+1*2";
         let reader = BufReader::new(input.as_bytes());
         let simulator = LLParser::new(ll1_table);
         assert!(simulator.parse(&dfa, reader.bytes()).is_ok());
