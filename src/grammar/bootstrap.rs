@@ -13,36 +13,39 @@ use std::collections::BTreeSet;
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Acc {
-    /// A literal 'abcd' or "abcd" (excluding non-representable symbols and non ASCII-chars).
+    /// A literal between two single quotes (i.e. 'literal' or 'int').
+    /// Can also represents a SINGLE unicode character written as 'U+XXXXXX'
     LITERAL,
     /// A charset [abc], can not contain ranges or square brackets.
     CHARSET,
     /// A whitespace [ \r\n\t]+
     WS,
-    /// An identifier in the form [a-z][a-z0-9_]*
+    /// An identifier in the form [a-z][a-zA-Z0-9_]*
     NAME_TERM,
-    /// An identifier in the form [A-Z][a-z0-9_]*
+    /// An identifier in the form [A-Z][a-zA-Z0-9_]*
     NAME_NONTERM,
-    /// `|`
-    BAR,
-    /// `=`
+    /// `:`
     ASSIGN,
     /// `;`
     SEMI,
-    /// `~`
-    NOT,
+    /// `|`
+    BAR,
     /// `(`
     LPAR,
     /// `)`
     RPAR,
-    /// `.`
-    ANY,
     /// `*`
     KLEENE,
     /// `?`
     QM,
     /// `+`
     PL,
+    /// `~`
+    NOT,
+    /// `.`
+    ANY,
+    /// ..
+    TWODOTS,
 }
 
 /// Token accepted by the lexer.
@@ -88,37 +91,44 @@ const CHAR_CLASS: [u8; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
-/// Transition table for the lexer. Starts from 0, sink in 9.
-const TRANSITION: [[u8; 21]; 20] = [
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 1, 1, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 1, 1, 19],
-    [19, 19, 2, 2, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 2, 2, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
-    [19, 0, 1, 2, 5, 6, 7, 16, 19, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 19, 19],
-    [19, 16, 16, 16, 16, 16, 16, 19, 3, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16],
-    [19, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 4, 17, 17, 17, 17],
-    [19, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 4, 18, 18, 18],
-    [19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
+/// Starting state for the lexer
+const DFA_START: u8 = 16;
+
+/// Sinking state for the lexer
+const DFA_SINK: u8 = 20;
+
+/// Transition table for the lexer. Starts from 0, sink in 20.
+const TRANSITION: [[u8; 21]; 21] = [
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 3, 3, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 3, 3, 20],
+    [20, 20, 4, 4, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 4, 4, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 15, 20, 20, 20, 20, 20],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    [20, 2, 4, 3, 5, 6, 7, 17, 20, 8, 9, 10, 11, 12, 13, 14, 18, 19, 20, 20, 20],
+    [20, 17, 17, 17, 17, 17, 17, 17, 1, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17],
+    [20, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 0, 18, 18, 18, 18],
+    [20, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 0, 19, 19, 19],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
 ];
 
 /// Accepting states for the lexer.
-const ACCEPT: [Option<Acc>; 20] = [
-    Some(Acc::WS),
-    Some(Acc::NAME_TERM),
-    Some(Acc::NAME_NONTERM),
-    Some(Acc::CHARSET),
+const ACCEPT: [Option<Acc>; 21] = [
     Some(Acc::LITERAL),
+    Some(Acc::CHARSET),
+    Some(Acc::WS),
+    Some(Acc::NAME_NONTERM),
+    Some(Acc::NAME_TERM),
     Some(Acc::ASSIGN),
     Some(Acc::SEMI),
     Some(Acc::BAR),
@@ -129,6 +139,7 @@ const ACCEPT: [Option<Acc>; 20] = [
     Some(Acc::QM),
     Some(Acc::NOT),
     Some(Acc::ANY),
+    Some(Acc::TWODOTS),
     None,
     None,
     None,
@@ -454,7 +465,7 @@ fn parse_term_nonterm<'a>(
     }
 }
 
-// term: CHARSET | LITERAL | ANY
+// term: CHARSET | LITERAL [TWODOTS LITERAL] | ANY
 fn parse_term_term<'a>(
     buffer: &'a [u8],
     position: &mut usize,
@@ -472,7 +483,13 @@ fn parse_term_term<'a>(
             let set = lookahead.val[1..lookahead.val.len() - 1]
                 .chars()
                 .collect::<BTreeSet<_>>();
-            Ok(Tree::new_leaf(LexerRuleElement::CharSet(set)))
+            if set.is_empty() {
+                Err(ParseError::SyntaxError {
+                    message: "Charset cannot be empty".to_string(),
+                })
+            } else {
+                Ok(Tree::new_leaf(LexerRuleElement::CharSet(set)))
+            }
         }
         Acc::ANY => {
             consume_lookahead(lookahead_cache);
@@ -481,31 +498,50 @@ fn parse_term_term<'a>(
         Acc::LITERAL => {
             consume_lookahead(lookahead_cache);
             let literal_len = lookahead.val.len() - 2;
-            let tree = if literal_len <= 1 {
-                let set = lookahead.val[1..]
-                    .chars()
-                    .next()
-                    .map(|c| btreeset! {c})
-                    .unwrap_or_default();
-                Tree::new_leaf(LexerRuleElement::CharSet(set))
-            } else {
-                let mut iter = lookahead.val[1..lookahead.val.len() - 1].chars();
-                let left_set = iter.next().map(|c| btreeset! {c}).unwrap_or_default();
-                let right_set = iter.next().map(|c| btreeset! {c}).unwrap_or_default();
-                let left = Tree::new_leaf(LexerRuleElement::CharSet(left_set));
-                let right = Tree::new_leaf(LexerRuleElement::CharSet(right_set));
-                let mut root =
-                    Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![left, right]);
-                for c in iter {
-                    let right = Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {c}));
-                    root = Tree::new_node(
-                        LexerRuleElement::Operation(LexerOp::And),
-                        vec![root, right],
-                    );
+            if literal_len == 1 || lookahead.val[1..].starts_with("U+") {
+                let single = literal_single(lookahead)?;
+                if let Ok(twodots) = get_lookahead(buffer, position, lookahead_cache, "") {
+                    if twodots.tp == Acc::TWODOTS {
+                        consume_lookahead(lookahead_cache);
+                        let literal2 = get_lookahead(buffer, position, lookahead_cache, "LITERAL")?;
+                        if literal2.tp == Acc::LITERAL {
+                            consume_lookahead(lookahead_cache);
+                            let literal2_len = literal2.val.len() - 2;
+                            if literal2_len == 1 || literal2.val[1..].starts_with("U+") {
+                                let single2 = literal_single(literal2)?;
+                                let mut set = BTreeSet::new();
+                                for glyph in single..=single2 {
+                                    set.insert(glyph);
+                                }
+                                Ok(Tree::new_leaf(LexerRuleElement::CharSet(set)))
+                            } else {
+                                Err(ParseError::SyntaxError {
+                                    message: "The second literal in a range must be a single value"
+                                        .to_string(),
+                                })
+                            }
+                        } else {
+                            Err(ParseError::SyntaxError {
+                                message: format!("Unexpected {:?}, expecting LITERAL", lookahead),
+                            })
+                        }
+                    } else {
+                        Ok(Tree::new_leaf(LexerRuleElement::CharSet(
+                            btreeset! {single},
+                        )))
+                    }
+                } else {
+                    Ok(Tree::new_leaf(LexerRuleElement::CharSet(
+                        btreeset! {single},
+                    )))
                 }
-                root
-            };
-            Ok(tree)
+            } else if literal_len > 0 {
+                Ok(literal_concat(lookahead))
+            } else {
+                Err(ParseError::SyntaxError {
+                    message: "Literal cannot be empty".to_string(),
+                })
+            }
         }
         _ => Err(ParseError::SyntaxError {
             message: format!(
@@ -514,6 +550,49 @@ fn parse_term_term<'a>(
             ),
         }),
     }
+}
+
+/// Parse a literal in the form 'a' or 'U+0061'.
+/// Assuming input validation is done elsewhere.
+fn literal_single(token: Token) -> Result<char, ParseError> {
+    if token.val.len() == 3 {
+        Ok(token.val[1..token.val.len() - 1].chars().next().unwrap())
+    } else {
+        let code = &token.val[3..token.val.len() - 1];
+        if let Ok(codepoint) = u32::from_str_radix(code, 16) {
+            match char::from_u32(codepoint) {
+                Some(ch) => Ok(ch),
+                None => Err(ParseError::SyntaxError {
+                    message: format!(
+                        "literal {} can not be converted to a valid unicode codepoint",
+                        &token.val[1..token.val.len() - 1]
+                    ),
+                }),
+            }
+        } else {
+            Err(ParseError::SyntaxError {
+                message: format!(
+                    "literal {} can not be converted to a valid codepoint",
+                    &token.val[1..token.val.len() - 1]
+                ),
+            })
+        }
+    }
+}
+
+/// Parse a literal composed of multiple ASCII characters concatenated.
+fn literal_concat(token: Token) -> Tree<LexerRuleElement> {
+    let mut iter = token.val[1..token.val.len() - 1].chars();
+    let left_set = iter.next().map(|c| btreeset! {c}).unwrap_or_default();
+    let right_set = iter.next().map(|c| btreeset! {c}).unwrap_or_default();
+    let left = Tree::new_leaf(LexerRuleElement::CharSet(left_set));
+    let right = Tree::new_leaf(LexerRuleElement::CharSet(right_set));
+    let mut root = Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![left, right]);
+    for c in iter {
+        let right = Tree::new_leaf(LexerRuleElement::CharSet(btreeset! {c}));
+        root = Tree::new_node(LexerRuleElement::Operation(LexerOp::And), vec![root, right]);
+    }
+    root
 }
 
 /// Returns the current lookahead. If None, pull a new one from the lexer. If EOF, return error.
@@ -549,12 +628,12 @@ fn consume_lookahead(lookahead_cache: &mut Option<Token>) {
 ///
 /// Skips Whitespaces.
 fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
-    let mut state = 15;
+    let mut state = DFA_START;
     let mut acc = None;
     let mut start_position = *position;
     let mut last_accepted_position = *position;
     loop {
-        while state != 19 && *position < buffer.len() {
+        while state != DFA_SINK && *position < buffer.len() {
             // exits when in sink
             let byte = buffer[*position];
             *position += 1;
@@ -571,7 +650,7 @@ fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
             acc = None;
             *position = last_accepted_position;
             start_position = *position;
-            state = 15;
+            state = DFA_START;
         } else {
             break;
         }
@@ -652,8 +731,8 @@ mod tests {
         let mut pos;
         let mut token;
         let test = [
-            ("rule0", Acc::NAME_NONTERM),
-            ("Rule_0", Acc::NAME_TERM),
+            ("rUlE_0", Acc::NAME_NONTERM),
+            ("RulE_0", Acc::NAME_TERM),
             (":", Acc::ASSIGN),
             (";", Acc::SEMI),
             ("|", Acc::BAR),
@@ -664,7 +743,9 @@ mod tests {
             ("?", Acc::QM),
             ("~", Acc::NOT),
             (".", Acc::ANY),
+            ("..", Acc::TWODOTS),
             ("\"I'm a literal\"", Acc::LITERAL),
+            ("'U+00D8'", Acc::LITERAL),
             ("'Double quote (\") allowed!'", Acc::LITERAL),
             ("[abc0123$_.~]", Acc::CHARSET),
         ];
@@ -713,7 +794,43 @@ mod tests {
     }
 
     #[test]
-    fn term_literal_ok() {
+    fn term_literal_ascii() {
+        let grammar = "U: 'U';";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_term().next().unwrap().body;
+        let expected = "[U]";
+        assert_eq!(as_str(tree), expected);
+    }
+
+    #[test]
+    fn term_literal_unicode() {
+        let grammar = "O_stroke: 'U+00d8';";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_term().next().unwrap().body;
+        let expected = "[Ø]";
+        assert_eq!(as_str(tree), expected);
+    }
+
+    #[test]
+    fn term_range_ascii() {
+        let grammar = "AF: 'A'..'F';";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_term().next().unwrap().body;
+        let expected = "[ABCDEF]";
+        assert_eq!(as_str(tree), expected);
+    }
+
+    #[test]
+    fn term_range_unicode() {
+        let grammar = "AF: 'U+20078'..'U+2007B';";
+        let parsed = bootstrap_grammar(grammar).unwrap();
+        let tree = &parsed.iter_term().next().unwrap().body;
+        let expected = "[𠁸𠁹𠁺𠁻]";
+        assert_eq!(as_str(tree), expected);
+    }
+
+    #[test]
+    fn term_literal_multiple() {
         let grammar = "Rule0: 'ab';";
         let parsed = bootstrap_grammar(grammar).unwrap();
         let tree = &parsed.iter_term().next().unwrap().body;
@@ -728,6 +845,13 @@ mod tests {
         let tree = &parsed.iter_term().next().unwrap().body;
         let expected = "[abcde]";
         assert_eq!(as_str(tree), expected);
+    }
+
+    #[test]
+    fn term_charset_empty() {
+        let grammar = "Epsilon: [];";
+        let parsed = bootstrap_grammar(grammar);
+        assert!(parsed.is_err());
     }
 
     #[test]

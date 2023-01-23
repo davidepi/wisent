@@ -10,6 +10,6 @@ grouped_term: NOT? LPAR expression_term RPAR (KLEENE | QM | PL)?
             | NOT? term_term (KLEENE | QM | PL)?
             ;
 term_term: CHARSET
-         | LITERAL
+         | LITERAL [TWODOTS LITERAL]
          | ANY
          ;
