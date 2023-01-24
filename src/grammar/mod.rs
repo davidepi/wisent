@@ -295,21 +295,17 @@ impl Grammar {
     /// let grammar = Grammar::parse_grammar("Rust.g4").unwrap();
     /// ```
     pub fn parse_grammar<P: AsRef<std::path::Path>>(path: P) -> Result<Grammar, ParseError> {
-        if let Some(ext) = path.as_ref().extension() {
-            let grammar_content = std::fs::read_to_string(path.as_ref())?;
-            let extension = ext.to_str().unwrap();
-            match extension {
-                "g4" => Self::parse_antlr(&grammar_content),
-                _ => Err(ParseError::IOError(std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("unsupported file type {}", extension),
-                ))),
-            }
-        } else {
-            Err(ParseError::IOError(std::io::Error::new(
+        let grammar_content = std::fs::read_to_string(path.as_ref())?;
+        match path.as_ref().extension().and_then(|ext| ext.to_str()) {
+            Some("g4") | Some("g") => Self::parse_antlr(&grammar_content),
+            Some("bootstrap") => Self::parse_bootstrap(&grammar_content),
+            _ => Err(ParseError::IOError(std::io::Error::new(
                 ErrorKind::InvalidInput,
-                "filename is missing the extension",
-            )))
+                format!(
+                    "unsupported grammar or missing extension: {:?}",
+                    path.as_ref()
+                ),
+            ))),
         }
     }
 
@@ -613,7 +609,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Tree<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut stack = vec![(0, self)];
         while let Some((indent, node)) = stack.pop() {
-            write!(f, "{}{:?}", " ".repeat(indent), node)?;
+            write!(f, "{}{:?}", " ".repeat(indent * 4), node.value())?;
             stack.extend(node.children().rev().map(|x| (indent + 1, x)));
             if !stack.is_empty() {
                 writeln!(f)?;

@@ -4,6 +4,7 @@ use crate::grammar::{
 };
 use maplit::btreeset;
 use std::collections::BTreeSet;
+use std::fmt::Display;
 
 /// Manually written DFA and recursive descent parser, so it
 /// can be used to parse simple BNF grammars without depending on the crate itself.
@@ -48,11 +49,38 @@ enum Acc {
     TWODOTS,
 }
 
+impl Display for Acc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Acc::LITERAL => write!(f, "LITERAL"),
+            Acc::CHARSET => write!(f, "CHARSET"),
+            Acc::WS => write!(f, "WHITESPACE"),
+            Acc::NAME_TERM => write!(f, "uppercase identifier"),
+            Acc::NAME_NONTERM => write!(f, "lowercase identifier"),
+            Acc::ASSIGN => write!(f, ":"),
+            Acc::SEMI => write!(f, ";"),
+            Acc::BAR => write!(f, "|"),
+            Acc::LPAR => write!(f, "("),
+            Acc::RPAR => write!(f, ")"),
+            Acc::KLEENE => write!(f, "*"),
+            Acc::QM => write!(f, "?"),
+            Acc::PL => write!(f, "+"),
+            Acc::NOT => write!(f, "~"),
+            Acc::ANY => write!(f, "ANY"),
+            Acc::TWODOTS => write!(f, ".."),
+        }
+    }
+}
+
 /// Token accepted by the lexer.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 struct Token<'a> {
     /// Accepted production.
     tp: Acc,
+    /// Line/Col where the accepted token starts.
+    start_pos: Position,
+    /// Line/Col where the accepted token ends.
+    end_pos: Position,
     /// Accepted text.
     val: &'a str,
 }
@@ -147,13 +175,31 @@ const ACCEPT: [Option<Acc>; 21] = [
     None,
 ];
 
+/// Tracks the position in the input buffer
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct Position {
+    byte: usize,
+    line: u32,
+    col: u32,
+}
+
+impl Default for Position {
+    fn default() -> Self {
+        Self {
+            byte: 0,
+            line: 1,
+            col: 1,
+        }
+    }
+}
+
 /// Recursive descent implementation used to parse a simil-ANTLR grammar for bootstrapping other
 /// grammars.
 /// Grammar starts with [`parse_rulelist`]
 pub(crate) fn bootstrap_grammar(content: &str) -> Result<Grammar, ParseError> {
-    let mut position = 0;
     let buf = content.as_bytes();
     let mut lookahead = None;
+    let mut position = Position::default();
     let (terminals, non_terminals) = parse_rulelist(buf, &mut position, &mut lookahead)?;
     Ok(Grammar {
         terminals: vec![terminals],
@@ -165,7 +211,7 @@ pub(crate) fn bootstrap_grammar(content: &str) -> Result<Grammar, ParseError> {
 // rulelist: [rule_nonterm | rule_term]*
 fn parse_rulelist<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead: &mut Option<Token<'a>>,
 ) -> Result<(Vec<LexerProduction>, Vec<ParserProduction>), ParseError> {
     let mut term = Vec::new();
@@ -181,9 +227,7 @@ fn parse_rulelist<'a>(
                 term.push(rule);
             }
             _ => {
-                return Err(ParseError::SyntaxError {
-                    message: format!("Unexpected {:?}, expecting `;` ", la.tp),
-                });
+                return Err(expected_token_error(la, ";"));
             }
         }
     }
@@ -193,10 +237,10 @@ fn parse_rulelist<'a>(
 // rule_nonterm: NAME_NONTERM ASSIGN expression_nonterm SEMI
 fn parse_rule_nonterm<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<ParserProduction, ParseError> {
-    let lookahead = get_lookahead(buffer, position, lookahead_cache, "NAME_NONTERM")?;
+    let lookahead = get_lookahead(buffer, position, lookahead_cache, "lowercase identifier")?;
     if lookahead.tp == Acc::NAME_NONTERM {
         consume_lookahead(lookahead_cache);
         let assign = get_lookahead(buffer, position, lookahead_cache, "`=`")?;
@@ -211,29 +255,23 @@ fn parse_rule_nonterm<'a>(
                     body: expression,
                 })
             } else {
-                Err(ParseError::SyntaxError {
-                    message: format!("Unexpected {:?}, expecting `;` ", semi.tp),
-                })
+                Err(expected_token_error(semi, ";"))
             }
         } else {
-            Err(ParseError::SyntaxError {
-                message: format!("Unexpected {:?}, expecting `:` ", assign.tp),
-            })
+            Err(expected_token_error(assign, ":"))
         }
     } else {
-        Err(ParseError::SyntaxError {
-            message: format!("Unexpected {:?}, expecting identifier", lookahead),
-        })
+        Err(expected_token_error(lookahead, "identifier"))
     }
 }
 
 // rule_term: NAME_TERM ASSIGN expression_term SEMI
 fn parse_rule_term<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<LexerProduction, ParseError> {
-    let lookahead = get_lookahead(buffer, position, lookahead_cache, "NAME_TERM")?;
+    let lookahead = get_lookahead(buffer, position, lookahead_cache, "uppercase identifier")?;
     if lookahead.tp == Acc::NAME_TERM {
         consume_lookahead(lookahead_cache);
         let assign = get_lookahead(buffer, position, lookahead_cache, "`:`")?;
@@ -249,26 +287,20 @@ fn parse_rule_term<'a>(
                     actions: BTreeSet::new(),
                 })
             } else {
-                Err(ParseError::SyntaxError {
-                    message: format!("Unexpected {:?}, expecting `;` ", semi.tp),
-                })
+                Err(expected_token_error(semi, ";"))
             }
         } else {
-            Err(ParseError::SyntaxError {
-                message: format!("Unexpected {:?}, expecting `:` ", assign.tp),
-            })
+            Err(expected_token_error(assign, ":"))
         }
     } else {
-        Err(ParseError::SyntaxError {
-            message: format!("Unexpected {:?}, expecting identifier", lookahead),
-        })
+        Err(expected_token_error(lookahead, "identifier"))
     }
 }
 
 // expression_nonterm: list_nonterm [BAR list_nonterm]*
 fn parse_expression_nonterm<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<ParserRuleElement>, ParseError> {
     let mut lists = vec![parse_list_nonterm(buffer, position, lookahead_cache)?];
@@ -293,7 +325,7 @@ fn parse_expression_nonterm<'a>(
 // expression_term: list_term [BAR list_term]*
 fn parse_expression_term<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<LexerRuleElement>, ParseError> {
     let mut lists = vec![parse_list_term(buffer, position, lookahead_cache)?];
@@ -318,7 +350,7 @@ fn parse_expression_term<'a>(
 //list_nonterm: term_nonterm*
 fn parse_list_nonterm<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<ParserRuleElement>, ParseError> {
     let mut terms = Vec::new();
@@ -338,7 +370,7 @@ fn parse_list_nonterm<'a>(
 //list_term: grouped_term+
 fn parse_list_term<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<LexerRuleElement>, ParseError> {
     let mut terms = vec![parse_grouped_term(buffer, position, lookahead_cache)?];
@@ -363,14 +395,14 @@ fn parse_list_term<'a>(
 //grouped_term: (NOT? LPAR expression_term RPAR ((KLEENE|QM|PL) QM?)?) | (NOT? term_term ((KLEENE|QM|PL) QM?)?)
 fn parse_grouped_term<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<LexerRuleElement>, ParseError> {
     let lookahead = get_lookahead(
         buffer,
         position,
         lookahead_cache,
-        "NOT or LPAR or CHARSET or LITERAL or ANY",
+        "~ or ( or CHARSET or LITERAL or RANGE or ANY",
     )?;
     let negated = if lookahead.tp == Acc::NOT {
         consume_lookahead(lookahead_cache);
@@ -382,15 +414,13 @@ fn parse_grouped_term<'a>(
         buffer,
         position,
         lookahead_cache,
-        "LPAR or CHARSET or LITERAL or ANY",
+        "( or CHARSET or LITERAL or RANGE or ANY",
     )?;
     let mut main = if lookahead.tp == Acc::LPAR {
         consume_lookahead(lookahead_cache);
         let tree = parse_expression_term(buffer, position, lookahead_cache)?;
-        if get_lookahead(buffer, position, lookahead_cache, "RPAR")?.tp != Acc::RPAR {
-            return Err(ParseError::SyntaxError {
-                message: format!("Unexpected {:?}, expecting RPAR", lookahead),
-            });
+        if get_lookahead(buffer, position, lookahead_cache, ")")?.tp != Acc::RPAR {
+            return Err(expected_token_error(lookahead, ")"));
         } else {
             consume_lookahead(lookahead_cache);
         }
@@ -402,7 +432,7 @@ fn parse_grouped_term<'a>(
         main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Not), vec![main]);
     }
     // at least a semicolon is expected after this production, hence why the hint for SEMI
-    let lookahead = get_lookahead(buffer, position, lookahead_cache, "SEMI")?;
+    let lookahead = get_lookahead(buffer, position, lookahead_cache, ";")?;
     let search_nongreedy = match lookahead.tp {
         Acc::KLEENE => {
             consume_lookahead(lookahead_cache);
@@ -422,7 +452,7 @@ fn parse_grouped_term<'a>(
         _ => false,
     };
     if search_nongreedy {
-        let ng = get_lookahead(buffer, position, lookahead_cache, "SEMI")?;
+        let ng = get_lookahead(buffer, position, lookahead_cache, ";")?;
         if ng.tp == Acc::QM {
             consume_lookahead(lookahead_cache);
             main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Qm), vec![main]);
@@ -434,14 +464,14 @@ fn parse_grouped_term<'a>(
 // term: NAME_TERM | NAME_NONTERM
 fn parse_term_nonterm<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<ParserRuleElement>, ParseError> {
     let lookahead = get_lookahead(
         buffer,
         position,
         lookahead_cache,
-        "NAME_TERM or NAME_NONTERM",
+        "uppercase or lowercase identifier",
     )?;
     match lookahead.tp {
         Acc::NAME_TERM => {
@@ -456,26 +486,24 @@ fn parse_term_nonterm<'a>(
                 lookahead.val[..lookahead.val.len()].to_string(),
             )))
         }
-        _ => Err(ParseError::SyntaxError {
-            message: format!(
-                "Unexpected {:?}, expecting NAME_TERM or NAME_NONTERM",
-                lookahead
-            ),
-        }),
+        _ => Err(expected_token_error(
+            lookahead,
+            "uppercase or lowercase identifier",
+        )),
     }
 }
 
 // term: CHARSET | LITERAL [TWODOTS LITERAL] | ANY
 fn parse_term_term<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
 ) -> Result<Tree<LexerRuleElement>, ParseError> {
     let lookahead = get_lookahead(
         buffer,
         position,
         lookahead_cache,
-        "CHARSET or LITERAL or ANY",
+        "CHARSET or LITERAL or RANGE or ANY",
     )?;
     match lookahead.tp {
         Acc::CHARSET => {
@@ -484,9 +512,10 @@ fn parse_term_term<'a>(
                 .chars()
                 .collect::<BTreeSet<_>>();
             if set.is_empty() {
-                Err(ParseError::SyntaxError {
-                    message: "Charset cannot be empty".to_string(),
-                })
+                Err(single_message_error(
+                    "Charset cannot be empty",
+                    lookahead.start_pos,
+                ))
             } else {
                 Ok(Tree::new_leaf(LexerRuleElement::CharSet(set)))
             }
@@ -515,15 +544,13 @@ fn parse_term_term<'a>(
                                 }
                                 Ok(Tree::new_leaf(LexerRuleElement::CharSet(set)))
                             } else {
-                                Err(ParseError::SyntaxError {
-                                    message: "The second literal in a range must be a single value"
-                                        .to_string(),
-                                })
+                                Err(single_message_error(
+                                    "The second literal in a range must be a single value",
+                                    literal2.start_pos,
+                                ))
                             }
                         } else {
-                            Err(ParseError::SyntaxError {
-                                message: format!("Unexpected {:?}, expecting LITERAL", lookahead),
-                            })
+                            Err(expected_token_error(literal2, "LITERAL"))
                         }
                     } else {
                         Ok(Tree::new_leaf(LexerRuleElement::CharSet(
@@ -538,17 +565,13 @@ fn parse_term_term<'a>(
             } else if literal_len > 0 {
                 Ok(literal_concat(lookahead))
             } else {
-                Err(ParseError::SyntaxError {
-                    message: "Literal cannot be empty".to_string(),
-                })
+                Err(single_message_error(
+                    "Literal cannot be empty",
+                    lookahead.start_pos,
+                ))
             }
         }
-        _ => Err(ParseError::SyntaxError {
-            message: format!(
-                "Unexpected {:?}, expecting CHARSET or LITERAL or ANY",
-                lookahead
-            ),
-        }),
+        _ => Err(expected_token_error(lookahead, "CHARSET or LITERAL or ANY")),
     }
 }
 
@@ -562,20 +585,22 @@ fn literal_single(token: Token) -> Result<char, ParseError> {
         if let Ok(codepoint) = u32::from_str_radix(code, 16) {
             match char::from_u32(codepoint) {
                 Some(ch) => Ok(ch),
-                None => Err(ParseError::SyntaxError {
-                    message: format!(
+                None => Err(single_message_error(
+                    &format!(
                         "literal {} can not be converted to a valid unicode codepoint",
                         &token.val[1..token.val.len() - 1]
                     ),
-                }),
+                    token.start_pos,
+                )),
             }
         } else {
-            Err(ParseError::SyntaxError {
-                message: format!(
-                    "literal {} can not be converted to a valid codepoint",
+            Err(single_message_error(
+                &format!(
+                    "literal {} can not be converted to a valid unicode codepoint",
                     &token.val[1..token.val.len() - 1]
                 ),
-            })
+                token.start_pos,
+            ))
         }
     }
 }
@@ -598,7 +623,7 @@ fn literal_concat(token: Token) -> Tree<LexerRuleElement> {
 /// Returns the current lookahead. If None, pull a new one from the lexer. If EOF, return error.
 fn get_lookahead<'a>(
     buffer: &'a [u8],
-    position: &mut usize,
+    position: &mut Position,
     lookahead_cache: &mut Option<Token<'a>>,
     expected: &str,
 ) -> Result<Token<'a>, ParseError> {
@@ -627,16 +652,17 @@ fn consume_lookahead(lookahead_cache: &mut Option<Token>) {
 /// position of the next character to be read (that will be updated accordingly).
 ///
 /// Skips Whitespaces.
-fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
+fn next_token<'a>(buffer: &'a [u8], position: &mut Position) -> Option<Token<'a>> {
     let mut state = DFA_START;
     let mut acc = None;
     let mut start_position = *position;
     let mut last_accepted_position = *position;
     loop {
-        while state != DFA_SINK && *position < buffer.len() {
+        while state != DFA_SINK && position.byte < buffer.len() {
             // exits when in sink
-            let byte = buffer[*position];
-            *position += 1;
+            let byte = buffer[position.byte];
+            position.byte += 1;
+            position.col += 1;
             let class = CHAR_CLASS[byte as usize];
             state = TRANSITION[state as usize][class as usize];
             let this_acc = ACCEPT[state as usize];
@@ -649,6 +675,13 @@ fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
             // skip whitespaces
             acc = None;
             *position = last_accepted_position;
+            if std::str::from_utf8(&buffer[start_position.byte..last_accepted_position.byte])
+                .expect("UTF-8 is not supported in the bootstrapping grammar")
+                .contains('\n')
+            {
+                position.line += 1;
+                position.col = 1;
+            }
             start_position = *position;
             state = DFA_START;
         } else {
@@ -657,17 +690,34 @@ fn next_token<'a>(buffer: &'a [u8], position: &mut usize) -> Option<Token<'a>> {
     }
     let token = acc.map(|acc| Token {
         tp: acc,
-        val: std::str::from_utf8(&buffer[start_position..last_accepted_position])
+        start_pos: start_position,
+        end_pos: last_accepted_position,
+        val: std::str::from_utf8(&buffer[start_position.byte..last_accepted_position.byte])
             .expect("UTF-8 is not supported in the bootstrapping grammars"),
     });
     *position = last_accepted_position;
     token
 }
 
+fn single_message_error(msg: &str, pos: Position) -> ParseError {
+    ParseError::SyntaxError {
+        message: format!("[{}:{}] {}", pos.line, pos.col, msg),
+    }
+}
+
+fn expected_token_error(token: Token, expected: &str) -> ParseError {
+    ParseError::SyntaxError {
+        message: format!(
+            "[{}:{}] Unexpected {}, expecting {}",
+            token.start_pos.line, token.start_pos.col, token.tp, expected
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{next_token, Acc, Token, CHAR_CLASS};
-    use crate::grammar::bootstrap::bootstrap_grammar;
+    use crate::grammar::bootstrap::{bootstrap_grammar, Position};
     use crate::grammar::Tree;
     use std::fmt::Write;
 
@@ -728,7 +778,8 @@ mod tests {
     #[test]
     fn transition() {
         let mut buf;
-        let mut pos;
+        let mut start_pos;
+        let mut end_pos;
         let mut token;
         let test = [
             ("rUlE_0", Acc::NAME_NONTERM),
@@ -751,21 +802,40 @@ mod tests {
         ];
         for (text, expected) in test {
             buf = text;
-            pos = 0;
+            start_pos = Position::default();
+            end_pos = Position {
+                byte: buf.len(),
+                line: 1,
+                col: (buf.len() + 1) as u32,
+            };
             token = Token {
+                start_pos,
+                end_pos,
                 tp: expected,
                 val: buf,
             };
-            assert_eq!(next_token(buf.as_bytes(), &mut pos), Some(token));
+            assert_eq!(next_token(buf.as_bytes(), &mut start_pos), Some(token));
         }
         // skip spaces
         buf = " rule0";
-        pos = 0;
+        start_pos = Position {
+            byte: 1,
+            line: 1,
+            col: 2,
+        };
+        end_pos = Position {
+            byte: buf.len(),
+            line: 1,
+            col: (buf.len() + 1) as u32,
+        };
         token = Token {
+            start_pos,
+            end_pos,
             tp: Acc::NAME_NONTERM,
             val: &buf[1..],
         };
-        assert_eq!(next_token(buf.as_bytes(), &mut pos), Some(token));
+        start_pos = Position::default();
+        assert_eq!(next_token(buf.as_bytes(), &mut start_pos), Some(token));
     }
 
     #[test]
