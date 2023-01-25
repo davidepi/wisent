@@ -308,7 +308,7 @@ fn parse_expression_nonterm<'a>(
         match lookahead.tp {
             Acc::BAR => {
                 consume_lookahead(lookahead_cache);
-                lists.push(parse_expression_nonterm(buffer, position, lookahead_cache)?);
+                lists.push(parse_list_nonterm(buffer, position, lookahead_cache)?);
             }
             _ => break,
         }
@@ -942,10 +942,10 @@ mod tests {
 
     #[test]
     fn nonterm_or() {
-        let grammar = "rule0: rule1 | rule2 Rule3;";
+        let grammar = "rule0: rule1 rule2 | rule3 rule4 | rule5 rule6;";
         let parsed = bootstrap_grammar(grammar).unwrap();
         let tree = &parsed.iter_nonterm().next().unwrap().body;
-        let expected = "|(NT[rule1],&(NT[rule2],T[Rule3]))";
+        let expected = "|(&(NT[rule1],NT[rule2]),&(NT[rule3],NT[rule4]),&(NT[rule5],NT[rule6]))";
         assert_eq!(as_str(tree), expected);
     }
 
