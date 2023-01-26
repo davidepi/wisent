@@ -5,7 +5,7 @@ mod conversion;
 mod ll;
 mod simulator;
 
-pub use self::ll::{first_follow, LL1ParsingTable};
+pub use self::ll::{LL1Grammar, LL1ParsingTable};
 pub use self::simulator::{LLParser, PullParser, PushParser};
 
 /// Represents the empty value `ε` when appearing in the first set or follow set.

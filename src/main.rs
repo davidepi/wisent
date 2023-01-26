@@ -4,7 +4,7 @@ use std::process::exit;
 use wisent::error::ParseError;
 use wisent::grammar::Grammar;
 use wisent::lexer::MultiDfa;
-use wisent::parser::{first_follow, LL1ParsingTable, ENDLINE_VAL, EPSILON_VAL};
+use wisent::parser::{LL1Grammar, LL1ParsingTable, ENDLINE_VAL, EPSILON_VAL};
 
 /// Actions to be performed by the executable
 #[derive(Subcommand)]
@@ -131,7 +131,7 @@ fn parser_task(args: ParserSC) -> Result<(), ParseError> {
     } else {
         0
     };
-    let table = LL1ParsingTable::new(&grammar, start_index as u32)?;
+    let table = grammar.ll1_table(start_index as u32)?;
     if args.json {
         let json = serde_json::to_string(&table).expect("Could not serialize the generated parser");
         println!("{}", json);
@@ -193,7 +193,7 @@ fn first_follow_task(args: FirstFollowSC) -> Result<(), ParseError> {
     } else {
         0
     };
-    let (firsts, follows) = first_follow(&grammar, start_index as u32)?;
+    let (firsts, follows) = grammar.first_follow(start_index as u32)?;
     for (index, nonterminal) in grammar.iter_nonterm().enumerate() {
         print!("FIRST({}) = {{", nonterminal.head);
         let mut first_set = Vec::with_capacity(firsts[index].len());

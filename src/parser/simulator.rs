@@ -241,14 +241,14 @@ mod tests {
     use super::{LLParser, PullParser};
     use crate::lexer::MultiDfa;
     use crate::parser::tests::grammar_428;
-    use crate::parser::LL1ParsingTable;
+    use crate::parser::LL1Grammar;
     use std::io::{BufReader, Read};
 
     #[test]
     fn accepting_ll1() {
         let g = grammar_428();
         let dfa = MultiDfa::new(&g);
-        let ll1_table = LL1ParsingTable::new(&g, 0).unwrap();
+        let ll1_table = g.ll1_table(0).unwrap();
         let input = "3+1*2";
         let reader = BufReader::new(input.as_bytes());
         let simulator = LLParser::new(ll1_table);
@@ -259,7 +259,7 @@ mod tests {
     fn rejecting_ll1() {
         let g = grammar_428();
         let dfa = MultiDfa::new(&g);
-        let ll1_table = LL1ParsingTable::new(&g, 0).unwrap();
+        let ll1_table = g.ll1_table(0).unwrap();
         let input = "(3*(1+2)";
         let reader = BufReader::new(input.as_bytes());
         let simulator = LLParser::new(ll1_table);
