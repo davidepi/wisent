@@ -1,0 +1,113 @@
+file: filename rule_list mode_rulelist;
+filename: filename_type GRAMMAR NAME SEMI;
+filename_type: PARSER
+             | LEXER
+             |
+             ;
+mode_rulelist: modeset rule_list mode_rulelist
+             |
+             ;
+modeset: MODE NAME SEMI;
+rule_list: lexer_rule rule_list
+         | fragment_rule rule_list
+         |
+         ;
+fragment_rule: FRAGMENT NAME COLON lexer_rhs SEMI;
+lexer_rule: NAME COLON lexer_rhs actions SEMI;
+actions: ARROW action action_list;
+action_list: COMMA action
+           |
+           ;
+action: SKIP
+      | MORE
+      | TYPE LPAR NAME RPAR
+      | CHANNEL LPAR NAME RPAR
+      | PUSH_MODE LPAR NAME RPAR
+      | MODE LPAR NAME RPAR
+      | POP_MODE
+      ;
+lexer_rhs: lexer_list
+         | lexer_list PIPE lexer_rhs
+         ;
+lexer_list: negation LPAR lexer_rhs RPAR set_suffix
+          | negation lexer_element set_suffix
+          ;
+negation: NOT
+        |
+        ;
+set_suffix: KLEENE
+          | PLUS
+          | QM
+          |
+          ;
+lexer_element: LITERAL
+             | LITERAL TWODOTS LITERAL
+             | CHARSET
+             | NAME
+             ;
+parser_rule: NAME COLON parser_rhs SEMI;
+
+COLON: ':';
+TWODOTS: '..';
+COMMA: ',';
+SEMI: ';';
+NOT: '~';
+PIPE: '|';
+QM: '?';
+KLEENE: '*';
+PLUS: '+';
+LPAR: '(';
+RPAR: ')';
+LSQ: '[';
+RSQ: ']';
+MINUS: '-';
+ANY: '.';
+TWODOTS: '..';
+ARROW: '->';
+LCUR: '{';
+RCUR: '}';
+LEXER: 'lexer';
+PARSER: 'parser';
+GRAMMAR: 'grammar';
+MODE: 'mode';
+SKIP: 'skip';
+MORE: 'more';
+TYPE: 'type';
+CHANNEL: 'channel';
+PUSH_MODE: 'pushMode';
+POP_MODE: 'popMode';
+FRAGMENT: 'fragment';
+LITERAL: "'" (~"'"| "\'")* "'";
+CHARSET: '[' (~']'| '\]')* ']';
+NAME: ('A' .. 'Z'
+    | 'a' .. 'z'
+    | 'U+00C0' .. 'U+00D6'
+    | 'U+00D8' .. 'U+00F6'
+    | 'U+00F8' .. 'U+02FF'
+    | 'U+0370' .. 'U+037D'
+    | 'U+037F' .. 'U+1FFF'
+    | 'U+200C' .. 'U+200D'
+    | 'U+2070' .. 'U+218F'
+    | 'U+2C00' .. 'U+2FEF'
+    | 'U+3001' .. 'U+D7FF'
+    | 'U+F900' .. 'U+FDCF'
+    | 'U+FDF0' .. 'U+FFFD')
+    ('A' .. 'Z'
+    | 'a' .. 'z'
+    | '_'
+    | 'U+00C0' .. 'U+00D6'
+    | 'U+00D8' .. 'U+00F6'
+    | 'U+00F8' .. 'U+02FF'
+    | 'U+0370' .. 'U+037D'
+    | 'U+037F' .. 'U+1FFF'
+    | 'U+200C' .. 'U+200D'
+    | 'U+2070' .. 'U+218F'
+    | 'U+2C00' .. 'U+2FEF'
+    | 'U+3001' .. 'U+D7FF'
+    | 'U+F900' .. 'U+FDCF'
+    | 'U+FDF0' .. 'U+FFFD'
+    | '0' .. '9'
+    | 'U+00B7'
+    | 'U+0300' .. 'U+036F'
+    | 'U+203F' .. 'U+2040')*
+    ;
