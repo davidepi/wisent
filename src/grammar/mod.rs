@@ -48,6 +48,8 @@ pub struct Grammar {
     non_terminals: Vec<ParserProduction>,
     // map a mode name to a specific index, used in the first dimension of this struct lexer rules
     modes_index: HashMap<String, u32>,
+    // the starting rule for the parser
+    start_rule: u32,
 }
 
 impl Default for Grammar {
@@ -56,6 +58,7 @@ impl Default for Grammar {
             modes_index: hashmap! {"DEFAULT_MODE".to_owned() => 0},
             terminals: Default::default(),
             non_terminals: Default::default(),
+            start_rule: 0,
         }
     }
 }
@@ -72,6 +75,11 @@ impl Grammar {
     /// ```
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Returns the index of the starting rule for the parser.
+    pub fn starting_rule(&self) -> u32 {
+        self.start_rule
     }
 
     /// Returns the total number of productions.

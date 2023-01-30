@@ -1,10 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use std::io::Write;
-use std::process::exit;
 use wisent::error::ParseError;
 use wisent::grammar::Grammar;
 use wisent::lexer::MultiDfa;
-use wisent::parser::{LL1Grammar, LL1ParsingTable, ENDLINE_VAL, EPSILON_VAL};
+use wisent::parser::{LLGrammar, ENDLINE_VAL, EPSILON_VAL};
 
 /// Actions to be performed by the executable
 #[derive(Subcommand)]
@@ -71,10 +70,10 @@ struct ParserSC {
     /// When printing the table, use JSON insted of binary.
     #[arg(short, long, default_value_t = false)]
     json: bool,
-    /// Index of the start production in the grammar file. If not provided, the first
-    /// production in the file will be used.
-    #[arg(short, long)]
-    start_production: Option<String>,
+    // Index of the start production in the grammar file. If not provided, the first
+    // production in the file will be used.
+    //#[arg(short, long)]
+    //start_production: Option<String>,
 }
 
 /// Prints first set and follow set for a grammar. This can be useful to write a recursive descent
@@ -83,10 +82,10 @@ struct ParserSC {
 struct FirstFollowSC {
     /// Path to the input grammar.
     grammar: String,
-    /// Index of the start production in the grammar file. If not provided, the first
-    /// production in the file will be used.
-    #[arg(short, long)]
-    start_production: Option<String>,
+    // Index of the start production in the grammar file. If not provided, the first
+    // production in the file will be used.
+    //#[arg(short, long)]
+    //start_production: Option<String>,
 }
 
 fn main() {
@@ -120,18 +119,8 @@ fn scanner_task(args: ScannerSC) -> Result<(), ParseError> {
 
 fn parser_task(args: ParserSC) -> Result<(), ParseError> {
     let grammar = Grammar::parse_grammar(&args.grammar)?;
-    let start_index = if let Some(prod) = &args.start_production {
-        let index = grammar.iter_nonterm().position(|x| &x.head == prod);
-        if let Some(index) = index {
-            index
-        } else {
-            eprintln!("The given production does not exist in the grammar file. Aborting");
-            exit(1);
-        }
-    } else {
-        0
-    };
-    let table = grammar.ll1_table(start_index as u32)?;
+    let llgrammar = LLGrammar::try_from(&grammar)?;
+    let table = llgrammar.parsing_table()?;
     if args.json {
         let json = serde_json::to_string(&table).expect("Could not serialize the generated parser");
         println!("{}", json);
@@ -182,18 +171,8 @@ fn bridge_task(args: BridgeSC) -> Result<(), ParseError> {
 
 fn first_follow_task(args: FirstFollowSC) -> Result<(), ParseError> {
     let grammar = Grammar::parse_grammar(&args.grammar)?;
-    let start_index = if let Some(prod) = &args.start_production {
-        let index = grammar.iter_nonterm().position(|x| &x.head == prod);
-        if let Some(index) = index {
-            index
-        } else {
-            eprintln!("The given production does not exist in the grammar file. Aborting");
-            exit(1);
-        }
-    } else {
-        0
-    };
-    let (firsts, follows) = grammar.first_follow(start_index as u32)?;
+    let llgrammar = LLGrammar::try_from(&grammar)?;
+    let (firsts, follows) = llgrammar.first_follow();
     for (index, nonterminal) in grammar.iter_nonterm().enumerate() {
         print!("FIRST({}) = {{", nonterminal.head);
         let mut first_set = Vec::with_capacity(firsts[index].len());

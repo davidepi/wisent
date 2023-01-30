@@ -5,6 +5,9 @@
 /// when opening the grammar on disks fail.
 /// * `SyntaxError` - An error containing a `message` String that can arise when
 /// parsing fails due to syntax errors in the input grammar.
+/// * `LLError` - An error arising when the original grammar can not be converted into a LL
+/// grammar. This can happen if the grammar is left-recursive or if there are FIRST or FOLLOW
+/// conflicts.
 /// * `DeserializeError` - An error arising during deserialization.
 /// * `InternalError` - TODO
 #[derive(Debug)]

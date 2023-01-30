@@ -2,7 +2,7 @@ use super::ParseNode;
 use crate::error::ParseError;
 use crate::grammar::{Grammar, Tree};
 use crate::lexer::{DfaSimulator, MultiDfa, Token};
-use crate::parser::{LL1ParsingTable, ParserSymbol};
+use crate::parser::{LLParsingTable, ParserSymbol};
 #[cfg(trace_parser)]
 use std::fmt::Write;
 use std::io::{Bytes, Read};
@@ -40,7 +40,7 @@ pub struct LLParser {
     /// contains ID of the parent (in the parse tree) and current symbol being processed
     stack: Vec<(u32, ParserSymbol)>,
     /// table for the table-driven parser
-    table: LL1ParsingTable,
+    table: LLParsingTable,
     /// indexed nodes of the tree being built. Childless, children will be assigned at the end.
     /// First value is the parent_id, second value is the actual tree.
     built_nodes: Vec<(u32, Tree<ParseNode>)>,
@@ -64,7 +64,7 @@ impl LLParser {
     /// let table = LL1ParsingTable::new(&grammar, 0).unwrap();
     /// let parser = LLParser::new(table);
     /// ```
-    pub fn new(table: LL1ParsingTable) -> Self {
+    pub fn new(table: LLParsingTable) -> Self {
         let stack = vec![
             (u32::MAX, ParserSymbol::Terminal(table.eof_val())),
             (u32::MAX, ParserSymbol::NonTerminal(table.start())),
@@ -241,14 +241,14 @@ mod tests {
     use super::{LLParser, PullParser};
     use crate::lexer::MultiDfa;
     use crate::parser::tests::grammar_428;
-    use crate::parser::LL1Grammar;
+    use crate::parser::LLGrammar;
     use std::io::{BufReader, Read};
 
     #[test]
     fn accepting_ll1() {
         let g = grammar_428();
         let dfa = MultiDfa::new(&g);
-        let ll1_table = g.ll1_table(0).unwrap();
+        let ll1_table = LLGrammar::try_from(&g).unwrap().parsing_table().unwrap();
         let input = "3+1*2";
         let reader = BufReader::new(input.as_bytes());
         let simulator = LLParser::new(ll1_table);
@@ -259,7 +259,7 @@ mod tests {
     fn rejecting_ll1() {
         let g = grammar_428();
         let dfa = MultiDfa::new(&g);
-        let ll1_table = g.ll1_table(0).unwrap();
+        let ll1_table = LLGrammar::try_from(&g).unwrap().parsing_table().unwrap();
         let input = "(3*(1+2)";
         let reader = BufReader::new(input.as_bytes());
         let simulator = LLParser::new(ll1_table);

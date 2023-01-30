@@ -6,6 +6,150 @@ use crate::parser::{ParserSymbol, ENDLINE_VAL, EPSILON_VAL};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 
+/// A grammar without left-recursion for LL parsers.
+///
+/// The struct `LLGrammar` can be used to construct LL-based parsers. This struct can be built from
+/// an original [`Grammar`] with the method [`LLGrammar::try_from`] only if the original grammar
+/// is not left-recursive.
+///
+/// This does not mean the grammar is LL(k), as there may be FIRST/FIRST or FIRST/FOLLOW conflicts
+/// that prevents building a parsing table.
+#[derive(Clone)]
+pub struct LLGrammar {
+    token_names: Vec<String>,
+    nonterminal_names: Vec<String>,
+    nonterminals: Vec<Vec<Vec<ParserSymbol>>>,
+    starting_rule: u32,
+    first: Vec<FxHashSet<u32>>,
+    follow: Vec<FxHashSet<u32>>,
+}
+
+impl TryFrom<&Grammar> for LLGrammar {
+    type Error = ParseError;
+
+    /// Converts a [`Grammar`] into a [`LLGrammar`].
+    ///
+    /// Returns [`ParseError::LLError`] if the grammar is left-recursive.
+    fn try_from(value: &Grammar) -> Result<Self, Self::Error> {
+        let nonterminals = flatten(value)?;
+        let starting_rule = value.starting_rule();
+        let nonterminal_names = value
+            .iter_nonterm()
+            .map(|x| &x.head)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Err(e) = check_left_recursion(&nonterminals) {
+            let cycle = e
+                .into_iter()
+                .map(|x| nonterminal_names[x as usize].clone())
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            Err(ParseError::LLError {
+                message: format!("grammar is left recursive.\nLeft recursive productions: {cycle}"),
+            })
+        } else {
+            let token_names = value
+                .iter_term()
+                .map(|x| &x.head)
+                .cloned()
+                .collect::<Vec<_>>();
+            let first = first(&nonterminals);
+            let follow = follow(&nonterminals, &first, starting_rule);
+            Ok(LLGrammar {
+                token_names,
+                nonterminal_names,
+                nonterminals,
+                starting_rule,
+                first,
+                follow,
+            })
+        }
+    }
+}
+
+impl LLGrammar {
+    /// Returns the first sets and the follow sets of the grammar.
+    ///
+    /// These sets represent the set of terminals appearing respectively at the start and to the
+    /// right (following) of a production. The terminals contained in each set are represented by
+    /// their index in the grammar. Two special symbols can appear in these sets:
+    /// [`EPSILON_VAL`] and [`ENDLINE_VAL`].
+    ///
+    /// The returned vectors are indexed by the nonterminal production. This means that `first[0]`
+    /// contains the first set of the first nonterminal production appearing in the grammar using
+    /// [`Grammar::iter_nonterm`].
+    /// The first set of each terminal production is trivial, being equal to the terminal itself.
+    /// For this reason, these are not contained in the returned vector.
+    ///
+    /// **Note:** this method does not raise errors if there are conflicts.
+    ///
+    /// # Example
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::{LLGrammar, ENDLINE_VAL};
+    /// let grammar_text = "LetterA: 'a';
+    ///                     LetterB: 'b';
+    ///                     LetterC: 'c';
+    ///                     s: LetterA s | LetterB s | LetterC;";
+    /// let grammar = Grammar::parse_bootstrap(grammar_text).unwrap();
+    /// let grammar_ll = LLGrammar::try_from(&grammar).unwrap();
+    /// let (first, follow) = grammar_ll.first_follow();
+    ///
+    /// assert!(first[0].contains(&2));
+    /// assert!(follow[0].contains(&ENDLINE_VAL));
+    /// ```
+    pub fn first_follow(&self) -> (&[FxHashSet<u32>], &[FxHashSet<u32>]) {
+        (&self.first, &self.follow)
+    }
+
+    /// Computes the LL parsing table for the given grammar.
+    ///
+    /// This table can be used in a [Table Driven Parser](super::LLParser).
+    ///
+    /// Expects the grammar and the index of the starting non-terminal as input.
+    ///
+    /// Returns [`ParseError::LLError`] if there are FIRST/FIRST or FIRST/FOLLOW conflicts.
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::LLGrammar;
+    /// let g = "sum: num PLUS num;
+    ///          num: INT | REAL;
+    ///          INT: [0-9]+;
+    ///          REAL: [0-9]+ '.' [0-9]+;
+    ///          PLUS: '+';";
+    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
+    /// let grammar_ll = LLGrammar::try_from(&grammar).unwrap();
+    /// let ll1_table = grammar_ll.parsing_table().unwrap();
+    /// ```
+    pub fn parsing_table(&self) -> Result<LLParsingTable, ParseError> {
+        if let Err(e) = check_first_first(&self.nonterminals, &self.first) {
+            let name = &self.nonterminal_names[e as usize];
+            Err(ParseError::LLError {
+                message: format!("FIRST/FIRST conflict in production {name}"),
+            })
+        } else if let Err(e) = check_first_follow(&self.first, &self.follow) {
+            let name = &self.nonterminal_names[e as usize];
+            Err(ParseError::LLError {
+                message: format!("FIRST/FOLLOW conflict in production {name}"),
+            })
+        } else {
+            let table = ll1_parsing_table(
+                &self.nonterminals,
+                self.token_names.len() as u32,
+                &self.first,
+                &self.follow,
+            );
+            Ok(LLParsingTable {
+                terminals: self.token_names.len() as u32,
+                start_index: self.starting_rule,
+                nonterminals: self.nonterminals.clone(),
+                table,
+            })
+        }
+    }
+}
+
 /// Calculates the first of a series of production.
 /// This method invokes [first_single_alternative] until saturation.
 fn first(prods: &[Vec<Vec<ParserSymbol>>]) -> Vec<FxHashSet<u32>> {
@@ -149,172 +293,6 @@ fn ll1_parsing_table(
     table
 }
 
-/// Trait implementing LL(1) parsing over a grammar.
-///
-/// This trais is used to check if a grammar is LL(1) and generate the LL(1) parsing table required
-/// by the [`LL(1) runtime`](super::LLParser).
-pub trait LL1Grammar {
-    /// Returns the first sets and the follow sets of a given grammar.
-    ///
-    /// These sets represent the set of terminals appearing respectively at the start and to the
-    /// right (following) of a production. The terminals contained in each set are represented by
-    /// their index in the grammar. Two special symbols can appear in these sets:
-    /// [`EPSILON_VAL`] and [`ENDLINE_VAL`].
-    ///
-    /// The returned vectors are indexed by the nonterminal production. This means that `first[0]`
-    /// contains the first set of the first nonterminal production appearing in the grammar using
-    /// [`Grammar::iter_nonterm`].
-    /// The first set of each terminal production is trivial, being equal to the terminal itself.
-    /// For this reason, these are not contained in the returned vector.
-    ///
-    /// This function requires also the index of the starting production.
-    /// # Error
-    /// Returns a [Syntax Error] if the grammar contains referenced but undeclared terminals or
-    /// nonterminals.
-    /// **Note:** this method does not raise errors if the grammar is not LL(1).
-    /// # Example
-    /// Basic usage:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// # use wisent::parser::{LL1Grammar, ENDLINE_VAL};
-    /// let grammar_text = "LetterA: 'a';
-    ///                     LetterB: 'b';
-    ///                     LetterC: 'c';
-    ///                     s: s LetterA | s LetterB | LetterC;";
-    /// let grammar = Grammar::parse_bootstrap(grammar_text).unwrap();
-    /// let (first, follow) = first_follow(&grammar, 0).unwrap();
-    ///
-    /// assert!(first[0].contains(&2));
-    /// assert!(follow[0].contains(&0));
-    /// assert!(follow[0].contains(&1));
-    /// assert!(follow[0].contains(&ENDLINE_VAL));
-    /// ```
-    fn first_follow(
-        &self,
-        start_index: u32,
-    ) -> Result<(Vec<FxHashSet<u32>>, Vec<FxHashSet<u32>>), ParseError>;
-
-    /// Checks whether a grammar is left recursive or not.
-    ///
-    /// If the grammar is left recursive, a [`ParseError::LLError`] will contain the cycle.
-    ///
-    /// Note that left recursive grammars are **NOT** LL(1) and can not be used to generate the
-    /// parsing table.
-    ///
-    /// # Example
-    /// Basic usage:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// # use wisent::parser::LL1Grammar;
-    /// let grammar_text = "list: list ITEM;
-    ///                     ITEM: 'a'..'z'+;";
-    /// let grammar = Grammar::parse_bootstrap(grammar_text).unwrap();
-    /// assert!(grammar.check_left_recursion().is_err());
-    /// ```
-    fn check_left_recursion(&self) -> Result<(), ParseError>;
-
-    /// Checks if a grammar has FIRST/FIRST or  FIRST/FOLLOW conflicts.
-    ///
-    /// A FIRST/FIRST conflict arises when a nonterminal rule has at least one token in common in
-    /// the FIRSTs of different productions.
-    ///
-    /// A FIRST/FOLLOW conflight arises when a nonterminal rule has the same token in common in
-    /// both its FIRST set and FOLLOW set.
-    /// # Example
-    /// Basic usage:
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// # use wisent::parser::{LL1Grammar, LL1ParsingTable};
-    /// let text = "s: a b;
-    ///             a: F | ;
-    ///             b: F;
-    ///             F: 'f';";
-    /// let grammar = Grammar::parse_bootstrap(text).unwrap();
-    /// assert!(grammar.check_conflicts().is_err());
-    /// ```
-    fn check_conflicts(&self, start_index: u32) -> Result<(), ParseError>;
-
-    /// Computes the LL(1) parsing table from the given grammar.
-    ///
-    /// This table can be used in a [Table Driven Parser](super::LLParser).
-    ///
-    /// Expects the grammar and the index of the starting non-terminal as input.
-    /// ```
-    /// # use wisent::grammar::Grammar;
-    /// # use wisent::parser::{LL1Grammar, LL1ParsingTable};
-    /// let g = "sum: num PLUS num;
-    ///          num: INT | REAL;
-    ///          INT: [0-9]+;
-    ///          REAL: [0-9]+ '.' [0-9]+;
-    ///          PLUS: '+';";
-    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
-    /// let ll1_table = grammar.ll1_table(0).unwrap();
-    /// ```
-    fn ll1_table(&self, start_index: u32) -> Result<LL1ParsingTable, ParseError>;
-}
-
-impl LL1Grammar for Grammar {
-    fn first_follow(
-        &self,
-        start_index: u32,
-    ) -> Result<(Vec<FxHashSet<u32>>, Vec<FxHashSet<u32>>), ParseError> {
-        let nonterminals = flatten(self)?;
-        let first = first(&nonterminals);
-        let follow = follow(&nonterminals, &first, start_index);
-        Ok((first, follow))
-    }
-
-    fn check_left_recursion(&self) -> Result<(), ParseError> {
-        let nonterminals = flatten(self)?;
-        if let Err(e) = check_left_recursion(&nonterminals) {
-            let nonterms = self.iter_nonterm().collect::<Vec<_>>();
-            let cycle = e
-                .into_iter()
-                .map(|x| nonterms[x as usize].head.clone())
-                .collect::<Vec<_>>()
-                .join(" -> ");
-            Err(ParseError::LLError {
-                message: format!("grammar is left recursive.\nLeft recursive productions: {cycle}"),
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_conflicts(&self, start_index: u32) -> Result<(), ParseError> {
-        let nonterminals = flatten(self)?;
-        let (first, follow) = self.first_follow(start_index)?;
-        if let Err(e) = check_first_first(&nonterminals, &first) {
-            let name = self.iter_nonterm().nth(e as usize).unwrap().head.as_str();
-            Err(ParseError::LLError {
-                message: format!("FIRST/FIRST conflict in production {name}"),
-            })
-        } else if let Err(e) = check_first_follow(&first, &follow) {
-            let name = self.iter_nonterm().nth(e as usize).unwrap().head.as_str();
-            Err(ParseError::LLError {
-                message: format!("FIRST/FOLLOW conflict in production {name}"),
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    fn ll1_table(&self, start_index: u32) -> Result<LL1ParsingTable, ParseError> {
-        let nonterminals = flatten(self)?;
-        self.check_left_recursion()?;
-        let first = first(&nonterminals);
-        let follow = follow(&nonterminals, &first, start_index);
-        let terminals = self.len_term() as u32;
-        let table = ll1_parsing_table(&nonterminals, terminals, &first, &follow);
-        Ok(LL1ParsingTable {
-            terminals,
-            start_index,
-            nonterminals,
-            table,
-        })
-    }
-}
-
 /// Checks if the list of nonterminals is left recursive.
 /// Returns an error containing the first recursion example
 fn check_left_recursion(nonterminals: &[Vec<Vec<ParserSymbol>>]) -> Result<(), Vec<u32>> {
@@ -386,7 +364,7 @@ fn check_first_follow(first: &[FxHashSet<u32>], follow: &[FxHashSet<u32>]) -> Re
 ///
 /// This struct can be constructed using the [LL1Grammar::ll1_table] method.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LL1ParsingTable {
+pub struct LLParsingTable {
     /// The amount of terminal productions in the grammar.
     terminals: u32,
     /// The starting symbol of the grammar represented by this table.
@@ -401,7 +379,7 @@ pub struct LL1ParsingTable {
     table: Vec<Vec<Option<(u32, u32)>>>,
 }
 
-impl LL1ParsingTable {
+impl LLParsingTable {
     /// The value assigned to the EOF character($) in the current table.
     pub(super) fn eof_val(&self) -> u32 {
         self.terminals
