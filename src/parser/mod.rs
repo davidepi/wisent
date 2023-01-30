@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 mod conversion;
 mod ll;
+mod lr;
 mod simulator;
 
 pub use self::ll::{LLGrammar, LLParsingTable};
@@ -50,16 +51,32 @@ impl std::fmt::Debug for ParseNode {
     }
 }
 
-/// Grammar 4.28 of the dragon book. Page 217 on the second edition.
-/// Used in parser tests.
 #[cfg(test)]
 mod tests {
     use crate::grammar::Grammar;
+
+    /// Grammar 4.28 of the dragon book. Page 217 on the second edition.
+    /// Used in parser tests.
     pub(super) fn grammar_428() -> Grammar {
         let g = "e : t e1;
              e1: Plus t e1 | ;
              t: f t1;
              t1: Star f t1 | ;
+             f: Lpar e Rpar | Id;
+             Plus: '+';
+             Star: '*';
+             Lpar: '(';
+             Rpar: ')';
+             Id: [0123456789]+;";
+        Grammar::parse_bootstrap(g).unwrap()
+    }
+
+    /// Grammar 4.34 of the dragon book. Page 217 on the second edition.
+    /// Used in parser tests.
+    pub(super) fn grammar_434() -> Grammar {
+        let g = "e1 : e;
+             e: e Plus t | t;
+             t: t Star f | f;
              f: Lpar e Rpar | Id;
              Plus: '+';
              Star: '*';
