@@ -13,7 +13,8 @@ pub enum CanonicalParserRuleElement {
     Or,
 }
 
-/// Flattens the nonterminals of a grammar by converting them from a tree to a 3D vector.
+/// Flattens the nonterminals of a grammar by converting them from a tree to a
+/// 3D vector.
 ///
 /// The first dimension represents each non terminal production
 /// The second dimension represents the various alternative for a production
@@ -39,10 +40,11 @@ pub(super) fn flatten(grammar: &Grammar) -> Result<Vec<Vec<Vec<ParserSymbol>>>, 
     Ok(canonical.into_iter().map(|prod| flatten1(&prod)).collect())
 }
 
-/// Removes nested productions and converts different grammars to a common representation.
+/// Removes nested productions and converts different grammars to a common
+/// representation.
 ///
-/// This common representation allows a single top-level Or, followed by sub-productions containing
-/// only concatenations.
+/// This common representation allows a single top-level Or, followed by
+/// sub-productions containing only concatenations.
 ///
 /// TODO: Missing nested productions and */+/?
 fn canonicalise_rec(
@@ -111,7 +113,8 @@ fn flatten2(node: &Tree<CanonicalParserRuleElement>) -> Vec<ParserSymbol> {
     }
 }
 
-/// calculates the first fimension of a canonical parser tree (terminal/nonterminal/epsilon)
+/// calculates the first fimension of a canonical parser tree
+/// (terminal/nonterminal/epsilon)
 ///
 /// panics if the input tree contains AND or OR
 fn flatten3(node: &Tree<CanonicalParserRuleElement>) -> ParserSymbol {

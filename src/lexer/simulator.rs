@@ -8,10 +8,11 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 /// How many characters are read when populating the buffer of the simulator.
-/// In any case the simulator uses buffered reads, but each read requires some allocations, so it's
-/// better to cache them anyway.
-/// This size is expressed in bytes, but doe to how UTF8 works there may be up to 3 additional
-/// bytes read.
+///
+/// In any case the simulator uses buffered reads, but each read requires some
+/// allocations, so it's better to cache them anyway.
+/// This size is expressed in bytes, but doe to how UTF8 works there may be up
+/// to 3 additional bytes read.
 const READ_SIZE: usize = 1024;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -19,44 +20,51 @@ const READ_SIZE: usize = 1024;
 pub struct Token {
     /// The mode ID of the associated production.
     pub mode: u32,
-    /// The production ID (in the grammar used to build the DFA) associated with this token.
+    /// The production ID (in the grammar used to build the DFA) associated with
+    /// this token.
     pub production: u32,
-    /// Beginning of the token in number of bytes since the beginning of the stream.
+    /// Beginning of the token in number of bytes since the beginning of the
+    /// stream.
     pub start: usize,
     /// End of the token in number of bytes since the beginning of the stream.
-    /// If the last character of the token is a multi-byte character this value correspond to the
-    /// last byte of the character.
+    /// If the last character of the token is a multi-byte character this value
+    /// correspond to the last byte of the character.
     pub end: usize,
 }
 
-/// Lexical analyzer for a DFA
+/// Lexical analyzer for a DFA.
 ///
-/// Simulates a Dfa with a given input and groups the input characters in tokens according to the
-/// rules of the grammar passed to the [`Dfa`].
+/// Simulates a Dfa with a given input and groups the input characters in tokens
+/// according to the rules of the grammar passed to the [`Dfa`].
 pub struct DfaSimulator<'a, I: Iterator<Item = Result<u8, std::io::Error>>> {
-    /// Buffer storing the read characters converted using their symbol table id.
+    /// Buffer storing the read characters converted using their symbol table
+    /// id.
     buffer: VecDeque<u32>,
-    /// Position of the next character to read from the internal buffer in amount of characters
-    /// from buf start. Note that internal buffer is NOT equal to the input.
+    /// Position of the next character to read from the internal buffer in
+    /// amount of characters from buf start. Note that internal buffer is
+    /// NOT equal to the input.
     forward_pos: usize,
     /// Current token position, in bytes from the beginning of the input.
     cur_pos: usize,
-    /// Starting token position, in bytes, from the beginning of the input. This is almost always
-    /// identical to cur_pos, unless the previous token had [Action::More].
+    /// Starting token position, in bytes, from the beginning of the input. This
+    /// is almost always identical to cur_pos, unless the previous token had
+    /// [Action::More].
     start_pos: usize,
     /// DFA containing the moves and alphabet
     mdfa: &'a MultiDfa,
-    /// Current mode being simulated. Represented as stack to allow PUSHMODE and POPMODE
+    /// Current mode being simulated. Represented as stack to allow PUSHMODE and
+    /// POPMODE
     current_mode: Vec<u32>,
     /// Current input being processed
     input: UnicodeReader<I>,
 }
 
 impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
-    /// Creates a new Lexical Analyzer with the given DFA and the given byte iterator.
+    /// Creates a new Lexical Analyzer with the given DFA and the given byte
+    /// iterator.
     ///
-    /// Consider using the methods [`tokenize_string`] and [`tokenize_file`] if fine grained
-    /// control over each token is not needed.
+    /// Consider using the methods [`tokenize_string`] and [`tokenize_file`] if
+    /// fine grained control over each token is not needed.
     /// # Examples
     /// ```
     /// # use wisent::grammar::Grammar;
@@ -86,8 +94,8 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
     ///
     /// Returns None if EOF was reached.
     ///
-    /// Raises a ParseError if I/O problems were encountered, or the simulator performs tries to
-    /// call PopMode on the bottom of the stack.
+    /// Raises a ParseError if I/O problems were encountered, or the simulator
+    /// performs tries to call PopMode on the bottom of the stack.
     ///
     /// # Examples
     /// Basic usage:
@@ -200,8 +208,9 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
     ///
     /// DO NOT change the `input` until EOF is returned!
     ///
-    /// Returns the ID and the number of bytes used to represent it and None if EOF was reached.
-    /// Return io::Error if some problems were encountered while reading the input.
+    /// Returns the ID and the number of bytes used to represent it and None if
+    /// EOF was reached. Return io::Error if some problems were encountered
+    /// while reading the input.
     fn next_char(&mut self) -> Result<Option<(u32, u8)>, std::io::Error> {
         // checks if the buf needs refilling
         if self.forward_pos == self.buffer.len() {
@@ -224,16 +233,16 @@ impl<'a, I: Iterator<Item = Result<u8, std::io::Error>>> DfaSimulator<'a, I> {
     }
 }
 
-/// In order to save space, the length of a char in bytes is written in the same value as the
-/// symtable ID (only 2 bits are used)
+/// In order to save space, the length of a char in bytes is written in the same
+/// value as the symtable ID (only 2 bits are used)
 fn encode_char_len(c: char, symtab: &SymbolTable) -> u32 {
     // 0x3EFFFFFF: symbol id
     // 0xC0000000: number of bytes to represent the char -1
     (symtab.symbol_id(c) & 0x3EFFFFFF) | ((c.len_utf8() - 1) as u32) << 30
 }
 
-/// Inverse of the encode_char_len: retrieves the original symtable ID and the character len in
-/// bytes
+/// Inverse of the encode_char_len: retrieves the original symtable ID and the
+/// character len in bytes
 fn decode_char_len(v: u32) -> (u32, u8) {
     (v & 0x3EFFFFFF, ((v & 0xC0000000) >> 30) as u8 + 1)
 }
@@ -241,7 +250,8 @@ fn decode_char_len(v: u32) -> (u32, u8) {
 /// Tokenize a string with a given DFA.
 ///
 /// This utility function is a wrapper that creates a [DfaSimulator], calls its
-/// [next_token](DfaSimulator::next_token) method and returns all the tokens at once.
+/// [next_token](DfaSimulator::next_token) method and returns all the tokens at
+/// once.
 ///
 /// # Examples
 /// Tokenize string:
@@ -271,10 +281,12 @@ pub fn tokenize_string(dfa: &MultiDfa, input: &str) -> Result<Vec<Token>, ParseE
 
 /// Tokenize the content of a file with a given DFA.
 ///
-/// This utility function is a wrapper that opens a File, creates a [DfaSimulator], calls its
-/// [next_token](DfaSimulator::next_token) method and returns all the tokens at once.
+/// This utility function is a wrapper that opens a File, creates a
+/// [DfaSimulator], calls its [next_token](DfaSimulator::next_token) method and
+/// returns all the tokens at once.
 ///
-/// Reads from the file are buffered, so the file content is never in memory all at once.
+/// Reads from the file are buffered, so the file content is never in memory all
+/// at once.
 pub fn tokenize_file<P: AsRef<Path>>(dfa: &MultiDfa, path: P) -> Result<Vec<Token>, ParseError> {
     let mut tokens = Vec::new();
     let file = File::open(path)?;
@@ -300,8 +312,8 @@ mod tests {
 
     #[test]
     fn simulator_next_char() -> Result<(), ParseError> {
-        // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the tokenize
-        // function
+        // input smaller than BUFFER_SIZE, extra logic for the buffer swap is in the
+        // tokenize function
         let grammar = Grammar::parse_bootstrap(
             "NOT_SPACE: (~[ ])+;
              SPACE: ' '+;",

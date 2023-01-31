@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use std::fmt::Display;
 
 /// Manually written DFA and recursive descent parser, so it
-/// can be used to parse simple BNF grammars without depending on the crate itself.
-
+/// can be used to parse simple BNF grammars without depending on the crate
+/// itself.
 /// Possible accepted production of the lexer.
 #[allow(clippy::upper_case_acronyms, non_camel_case_types)]
 #[repr(u8)]
@@ -185,16 +185,12 @@ struct Position {
 
 impl Default for Position {
     fn default() -> Self {
-        Self {
-            byte: 0,
-            line: 1,
-            col: 1,
-        }
+        Self { byte: 0, line: 1, col: 1 }
     }
 }
 
-/// Recursive descent implementation used to parse a simil-ANTLR grammar for bootstrapping other
-/// grammars.
+/// Recursive descent implementation used to parse a simil-ANTLR grammar for
+/// bootstrapping other grammars.
 /// Grammar starts with [`parse_rulelist`]
 pub(crate) fn bootstrap_grammar(content: &str) -> Result<Grammar, ParseError> {
     let buf = content.as_bytes();
@@ -392,7 +388,8 @@ fn parse_list_term<'a>(
     Ok(tree)
 }
 
-//grouped_term: (NOT? LPAR expression_term RPAR ((KLEENE|QM|PL) QM?)?) | (NOT? term_term ((KLEENE|QM|PL) QM?)?)
+//grouped_term: (NOT? LPAR expression_term RPAR ((KLEENE|QM|PL) QM?)?) | (NOT?
+// term_term ((KLEENE|QM|PL) QM?)?)
 fn parse_grouped_term<'a>(
     buffer: &'a [u8],
     position: &mut Position,
@@ -431,7 +428,8 @@ fn parse_grouped_term<'a>(
     if negated {
         main = Tree::new_node(LexerRuleElement::Operation(LexerOp::Not), vec![main]);
     }
-    // at least a semicolon is expected after this production, hence why the hint for SEMI
+    // at least a semicolon is expected after this production, hence why the hint
+    // for SEMI
     let lookahead = get_lookahead(buffer, position, lookahead_cache, ";")?;
     let search_nongreedy = match lookahead.tp {
         Acc::KLEENE => {
@@ -620,7 +618,8 @@ fn literal_concat(token: Token) -> Tree<LexerRuleElement> {
     root
 }
 
-/// Returns the current lookahead. If None, pull a new one from the lexer. If EOF, return error.
+/// Returns the current lookahead. If None, pull a new one from the lexer. If
+/// EOF, return error.
 fn get_lookahead<'a>(
     buffer: &'a [u8],
     position: &mut Position,
@@ -648,8 +647,9 @@ fn consume_lookahead(lookahead_cache: &mut Option<Token>) {
     *lookahead_cache = None;
 }
 
-/// Retrieves the next token from the lexer. Requires the entire input string (in ASCII) and the
-/// position of the next character to be read (that will be updated accordingly).
+/// Retrieves the next token from the lexer. Requires the entire input string
+/// (in ASCII) and the position of the next character to be read (that will be
+/// updated accordingly).
 ///
 /// Skips Whitespaces.
 fn next_token<'a>(buffer: &'a [u8], position: &mut Position) -> Option<Token<'a>> {
@@ -722,7 +722,8 @@ mod tests {
     use std::fmt::Write;
 
     /// encoded representation of a tree in form of string
-    /// otherwise the formatted version takes a lot of space (macros too, given the tree generics)
+    /// otherwise the formatted version takes a lot of space (macros too, given
+    /// the tree generics)
     fn as_str<T: std::fmt::Display>(node: &Tree<T>) -> String {
         let mut string = String::new();
         let children = node.children().map(as_str).collect::<Vec<_>>();
@@ -818,11 +819,7 @@ mod tests {
         }
         // skip spaces
         buf = " rule0";
-        start_pos = Position {
-            byte: 1,
-            line: 1,
-            col: 2,
-        };
+        start_pos = Position { byte: 1, line: 1, col: 2 };
         end_pos = Position {
             byte: buf.len(),
             line: 1,

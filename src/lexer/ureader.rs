@@ -1,8 +1,11 @@
-/// The `UnicodeReader<R>` struct transforms a byte iterator into and UTF-8 char iterator.
+/// The `UnicodeReader<R>` struct transforms a byte iterator into and UTF-8 char
+/// iterator.
 ///
-/// Each call of `UnicodeIterator::next` will repeatedly pull bytes from the underlying byte
-/// iterator until an UTF-8 character can be constructed or an `io::Error` is raised.
-/// # Example
+/// Each call of `UnicodeIterator::next` will repeatedly pull bytes from the
+/// underlying byte iterator until an UTF-8 character can be constructed or an
+/// `io::Error` is raised.
+///
+/// # Examples
 /// ```
 /// # use std::io::{BufReader, Read};
 /// # use wisent::lexer::UnicodeReader;
@@ -23,6 +26,7 @@ pub struct UnicodeReader<R: Iterator<Item = Result<u8, std::io::Error>>> {
 
 impl<R: Iterator<Item = Result<u8, std::io::Error>>> UnicodeReader<R> {
     /// Creates the `UnicodeReader<R>` consuming the given iterator
+    ///
     /// # Examples
     /// ```
     /// # use std::io::{BufReader, Read};
@@ -35,7 +39,9 @@ impl<R: Iterator<Item = Result<u8, std::io::Error>>> UnicodeReader<R> {
         Self { reader }
     }
 
-    /// Consumes the `UnicodeReader<R>` returning the remaining original iterator.
+    /// Consumes the `UnicodeReader<R>` returning the remaining original
+    /// iterator.
+    ///
     /// # Examples
     /// ```
     /// # use std::io::{BufReader, Read};

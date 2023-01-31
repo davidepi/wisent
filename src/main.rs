@@ -8,7 +8,8 @@ use wisent::parser::{LLGrammar, ENDLINE_VAL, EPSILON_VAL};
 /// Actions to be performed by the executable
 #[derive(Subcommand)]
 enum Command {
-    /// Generates the transition table and equivalence classes for the scanner/tokenizer.
+    /// Generates the transition table and equivalence classes for the
+    /// scanner/tokenizer.
     Scanner(ScannerSC),
     /// Generates the parsing table for the parser.
     Parser(ParserSC),
@@ -28,11 +29,11 @@ struct Cli {
     action: Command,
 }
 
-/// Generates a representation of a DFA. The DFA can be later used with the runtime
-/// provided in the same crate.
+/// Generates a representation of a DFA. The DFA can be later used with the
+/// runtime provided in the same crate.
 ///
-/// By default the table is printed in binary format using bincode, but JSON output can be used
-/// as well.
+/// By default the table is printed in binary format using bincode, but JSON
+/// output can be used as well.
 #[derive(Args)]
 struct ScannerSC {
     /// Path to the input grammar.
@@ -44,8 +45,8 @@ struct ScannerSC {
 
 /// Prints the bridge code, assigning each token to its numeric representation.
 ///
-/// The bridge code is not necessary for the parser to work correctly, but makes the code easier to
-/// understand.
+/// The bridge code is not necessary for the parser to work correctly, but makes
+/// the code easier to understand.
 #[derive(Args)]
 struct BridgeSC {
     /// Path to the input grammar.
@@ -58,11 +59,11 @@ struct BridgeSC {
     prod_name: String,
 }
 
-/// Generates the table for a table-driven parser. The parser can be later used with the runtime
-/// provided in the same crate.
+/// Generates the table for a table-driven parser. The parser can be later used
+/// with the runtime provided in the same crate.
 ///
-/// By default the table is printed in binary format using bincode, but JSON output can be used
-/// as well.
+/// By default the table is printed in binary format using bincode, but JSON
+/// output can be used as well.
 #[derive(Args)]
 struct ParserSC {
     /// Path to the input grammar.
@@ -76,8 +77,8 @@ struct ParserSC {
     //start_production: Option<String>,
 }
 
-/// Prints first set and follow set for a grammar. This can be useful to write a recursive descent
-/// parser or to check for conflicts.
+/// Prints first set and follow set for a grammar. This can be useful to write a
+/// recursive descent parser or to check for conflicts.
 #[derive(Args)]
 struct FirstFollowSC {
     /// Path to the input grammar.
@@ -133,7 +134,8 @@ fn parser_task(args: ParserSC) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Print a string with the first letter uppercase and all the other ones lowercase
+/// Print a string with the first letter uppercase and all the other ones
+/// lowercase
 fn to_camel_case(val: &str) -> String {
     let mut iter = val.chars();
     let mut retval = String::new();

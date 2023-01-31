@@ -15,19 +15,20 @@ const NG_FLAG: u32 = 0x80000000;
 
 ///
 /// # Modes
-/// This struct support a multiple modes (context), by wrapping together multiple transtion tables.
-/// For this reason, every move in the DFA requires specifying the current mode. The default mode
-/// has always index 0.
+/// This struct support a multiple modes (context), by wrapping together
+/// multiple transtion tables. For this reason, every move in the DFA requires
+/// specifying the current mode. The default mode has always index 0.
 ///
-/// If the mode does not exist in the current DFA, the function will panic. This is expected
-/// behaviour by design: the DFA is supposed to be used by a simulator, and invocations with wrong
-/// modes should *NOT* happen.
+/// If the mode does not exist in the current DFA, the function will panic. This
+/// is expected behaviour by design: the DFA is supposed to be used by a
+/// simulator, and invocations with wrong modes should *NOT* happen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MultiDfa {
     /// Contains the various transition tables, one for each mode.
     /// At least one with index 0 is guaranteed to exist.
     tts: Vec<Dfa>,
-    /// Associates an unique ID to each read lexeme. Every ID is then associated with a transition.
+    /// Associates an unique ID to each read lexeme. Every ID is then associated
+    /// with a transition.
     symtable: SymbolTable,
 }
 
@@ -51,11 +52,11 @@ impl Index<usize> for MultiDfa {
 impl MultiDfa {
     /// Constructs the DFAs for a given Grammar.
     ///
-    /// The DFAs are constructed directly from the regex parse tree without using an
-    /// intermediate NFA.
+    /// The DFAs are constructed directly from the regex parse tree without
+    /// using an intermediate NFA.
     ///
-    /// The generated DFAs have the minimum number of states required to recognized the requested
-    /// language.
+    /// The generated DFAs have the minimum number of states required to
+    /// recognized the requested language.
     ///
     /// # Examples
     /// Basic usage:
@@ -96,10 +97,7 @@ impl MultiDfa {
             let tt = Dfa::new(canonical_trees, &joined_symtable, nongreedy, actions);
             tts.push(tt);
         }
-        Self {
-            tts,
-            symtable: joined_symtable,
-        }
+        Self { tts, symtable: joined_symtable }
     }
 
     /// Returns the amount of nodes in this DFA.
@@ -120,11 +118,12 @@ impl MultiDfa {
 
 /// A Deterministic Finite Automaton for lexical analysis.
 ///
-/// A DFA is an automaton where each state has a single transaction for a given input symbol, and
-/// no transactions on empty symbols (ϵ-moves).
+/// A DFA is an automaton where each state has a single transaction for a given
+/// input symbol, and no transactions on empty symbols (ϵ-moves).
 ///
-/// In this crate, a DFA can not be constructed directly, but must be interfaced by a [`MultiDfa`]
-/// to properly support multi-modes lexers (e.g. ANTLR modes or flex contextes).
+/// In this crate, a DFA can not be constructed directly, but must be interfaced
+/// by a [`MultiDfa`] to properly support multi-modes lexers (e.g. ANTLR modes
+/// or flex contextes).
 ///
 /// An example of DFA recognizing the language `a|b+` is the following:
 ///
@@ -139,13 +138,16 @@ pub struct Dfa {
     start: u32,
     /// Sink node.
     sink: u32,
-    /// Accepted production for each node. u32::MAX if the node is not accepting.
+    /// Accepted production for each node. u32::MAX if the node is not
+    /// accepting.
     accept: Vec<u32>,
-    /// Actions for the current DFA. This is the index of the `action` vector of a given state.
+    /// Actions for the current DFA. This is the index of the `action` vector of
+    /// a given state.
     action_index: Vec<u32>,
-    /// Vector containing every possible action. Most actions would be an empty set, so this vector
-    /// contains every possibility, while the `action_index` variable contains the index of the
-    /// action for that particular state.
+    /// Vector containing every possible action. Most actions would be an empty
+    /// set, so this vector contains every possibility, while the
+    /// `action_index` variable contains the index of the action for that
+    /// particular state.
     actions: Vec<BTreeSet<Action>>,
 }
 
@@ -164,9 +166,10 @@ impl Default for Dfa {
 }
 
 impl Dfa {
-    /// Creates a new transition table from the given canonical trees (one per production) and
-    /// symbol table. The vector index correspond to the accepted production index.
-    /// The nongreedy array specifies if each production is nongreedy.
+    /// Creates a new transition table from the given canonical trees (one per
+    /// production) and symbol table. The vector index correspond to the
+    /// accepted production index. The nongreedy array specifies if each
+    /// production is nongreedy.
     fn new(
         canonical_trees: Vec<Tree<CanonicalLexerRuleElement>>,
         symtable: &SymbolTable,
@@ -213,8 +216,8 @@ impl Dfa {
 
     /// Returns true if the DFA is empty.
     ///
-    /// A DFA is empty if there are no transitions, and, as such, it halts in the starting
-    /// state.
+    /// A DFA is empty if there are no transitions, and, as such, it halts in
+    /// the starting state.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -231,7 +234,8 @@ impl Dfa {
         self.transition.len() <= 1
     }
 
-    /// Returns the number of states in the DFA, excluding the eventual sink state.
+    /// Returns the number of states in the DFA, excluding the eventual sink
+    /// state.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -256,13 +260,14 @@ impl Dfa {
         self.start
     }
 
-    /// Perform a move in the transition table of this DFA and returns the next state.
+    /// Perform a move in the transition table of this DFA and returns the next
+    /// state.
     ///
     /// Returns None if such a move is not possible
     ///
     /// # Panics
-    /// Panics if the symbol is not contained in [`Dfa::symbol_table`] or the given state does not
-    /// exist in the DFA.
+    /// Panics if the symbol is not contained in [`Dfa::symbol_table`] or the
+    /// given state does not exist in the DFA.
     /// # Examples
     /// ```
     /// # use wisent::grammar::Grammar;
@@ -317,7 +322,8 @@ impl Dfa {
         }
     }
 
-    /// Returns true if the current state is a non-greedy production or not-accepting.
+    /// Returns true if the current state is a non-greedy production or
+    /// not-accepting.
     ///
     /// Returns false if the current state is a greedy production.
     ///
@@ -401,8 +407,9 @@ impl GraphvizDot for MultiDfa {
     }
 }
 
-/// Merges different canonical trees into a single canonical tree with multiple accepting nodes.
-/// Accepting states are labeled with a new node in the canonical tree.
+/// Merges different canonical trees into a single canonical tree with multiple
+/// accepting nodes. Accepting states are labeled with a new node in the
+/// canonical tree.
 fn merge_regex_trees(
     nodes: Vec<Tree<CanonicalLexerRuleElement>>,
 ) -> Tree<CanonicalLexerRuleElement> {
@@ -426,38 +433,42 @@ fn merge_regex_trees(
 
 /// Helper for the direct construction of the DFA.
 struct DCHelper {
-    /// Literal type (need to know if kleenee or AND in the followpos computation)
-    /// and the followpos is deferred from the firstpos, nullable, lastpos.
+    /// Literal type (need to know if kleenee or AND in the followpos
+    /// computation) and the followpos is deferred from the firstpos,
+    /// nullable, lastpos.
     ttype: CanonicalLexerRuleElement,
     ///
     index: u32,
     /// true if the current node is nullable.
     nullable: bool,
-    /// firstpos for the current set (has an average size of 22 on the C grammar so BTreeSet is
-    /// faster than HashSet).
+    /// firstpos for the current set (has an average size of 22 on the C grammar
+    /// so BTreeSet is faster than HashSet).
     firstpos: BTreeSet<u32>,
-    /// lastpos for the current set (has an average size of 22 on the C grammar so BTreeSet is
-    /// faster than HashSet).
+    /// lastpos for the current set (has an average size of 22 on the C grammar
+    /// so BTreeSet is faster than HashSet).
     lastpos: BTreeSet<u32>,
 }
 
-/// Performs a direct DFA construction from the canonical tree without using an intermediate NFA.
-/// Refers to "Compilers, principle techniques and tools" of A.Aho et al. (p.179 on 2nd edition).
+/// Performs a direct DFA construction from the canonical tree without using an
+/// intermediate NFA. Refers to "Compilers, principle techniques and tools" of
+/// A.Aho et al. (p.179 on 2nd edition).
 ///
 /// Guaranteed to have a move on every symbol for every node.
 fn direct_construction(node: Tree<CanonicalLexerRuleElement>, symtable: &SymbolTable) -> Dfa {
     let helper = build_dc_helper(&node, 0, symtable.epsilon_id());
     let mut indices = vec![symtable.epsilon_id(); (helper.value().index + 1) as usize];
     let mut followpos = vec![BTreeSet::new(); (helper.value().index + 1) as usize];
-    //retrieve accepting nodes (they are embedded in the helper tree, we don't have NFA here)
+    //retrieve accepting nodes (they are embedded in the helper tree, we don't have
+    // NFA here)
     let mut accepting_nodes = FxHashMap::default();
     dc_assign_index_to_literal(&helper, &mut indices, &mut accepting_nodes);
     dc_compute_followpos(&helper, &mut followpos);
     let mut accept_map = FxHashMap::default();
     let mut done = HashMap::new();
     done.insert(helper.value().firstpos.clone(), 0);
-    // check the first node if it can be accepting, this is done in the loop at creation time.
-    // pick the production with the lowest index in the same group.
+    // check the first node if it can be accepting, this is done in the loop at
+    // creation time. pick the production with the lowest index in the same
+    // group.
     if let Some(acc_prod) = helper
         .value()
         .firstpos
@@ -470,8 +481,8 @@ fn direct_construction(node: Tree<CanonicalLexerRuleElement>, symtable: &SymbolT
     let mut index = 1;
     let mut unmarked = vec![helper.value().firstpos.clone()];
     let mut tran = FxHashMap::default();
-    // loop, conceptually similar to subset construction, but uses followpos instead of NFA
-    // (followpos is essentially an NFA without epsilon moves)
+    // loop, conceptually similar to subset construction, but uses followpos instead
+    // of NFA (followpos is essentially an NFA without epsilon moves)
     while let Some(node_set) = unmarked.pop() {
         for symbol in 0..symtable.ids() {
             let u = node_set
@@ -538,7 +549,8 @@ fn direct_construction(node: Tree<CanonicalLexerRuleElement>, symtable: &SymbolT
 /// Computes `firstpos`, `lastpos` and `nullpos` for the parse tree.
 ///
 /// - `node`: the root of the tree (it's a recursive function)
-/// - `start_index`: starting index of the output DFA (0 for the first invocation)
+/// - `start_index`: starting index of the output DFA (0 for the first
+///   invocation)
 fn build_dc_helper(
     node: &Tree<CanonicalLexerRuleElement>,
     start_index: u32,
@@ -580,7 +592,8 @@ fn build_dc_helper(
             firstpos = Default::default();
             lastpos = Default::default();
             // the firstpos computation is valid only for children == 2
-            // otherwise followpos needs to recalculate them (for children c2, c3..) and it is ugly
+            // otherwise followpos needs to recalculate them (for children c2, c3..) and it
+            // is ugly
             debug_assert!(children.len() == 2, "AND node can have up to 2 children");
             for child in &children {
                 firstpos.extend(child.value().firstpos.iter().cloned());
@@ -622,8 +635,8 @@ fn build_dc_helper(
 
 /// Part of the direct DFA construction:
 ///
-/// Computes `followpos` set. Each index of the `graph` vector is the index of the DFA node, and the
-/// content of that cell is the followpos set.
+/// Computes `followpos` set. Each index of the `graph` vector is the index of
+/// the DFA node, and the content of that cell is the followpos set.
 fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
     node.children().for_each(|c| dc_compute_followpos(c, graph));
     match &node.value().ttype {
@@ -648,8 +661,8 @@ fn dc_compute_followpos(node: &Tree<DCHelper>, graph: &mut Vec<BTreeSet<u32>>) {
 }
 /// Part of the direct DFA construction:
 ///
-/// Assigns an unique index to each node of the parse tree (required by the algorithm) and records
-/// the production number for each accepting node.
+/// Assigns an unique index to each node of the parse tree (required by the
+/// algorithm) and records the production number for each accepting node.
 fn dc_assign_index_to_literal(
     node: &Tree<DCHelper>,
     indices: &mut Vec<u32>,
@@ -670,8 +683,8 @@ fn dc_assign_index_to_literal(
 ///
 /// **REQUIRED** to have a move on every symbol for every node.
 ///
-/// Again the source of this algorithm is "Compilers, principle techniques and tools" of
-/// A.Aho et al. (p.180 on 2nd edition).
+/// Again the source of this algorithm is "Compilers, principle techniques and
+/// tools" of A.Aho et al. (p.180 on 2nd edition).
 fn min_dfa(symtable: &SymbolTable, dfa: Dfa) -> Dfa {
     let mut partitions = init_partitions(&dfa);
     let mut positions = FxHashMap::default();
@@ -710,8 +723,8 @@ fn min_dfa(symtable: &SymbolTable, dfa: Dfa) -> Dfa {
 
 /// Part of the min DFA algorithm:
 ///
-/// Creates the initial partitions: non accepting nodes, and a partition for each group of accepting
-/// nodes announcing the same rule.
+/// Creates the initial partitions: non accepting nodes, and a partition for
+/// each group of accepting nodes announcing the same rule.
 fn init_partitions(dfa: &Dfa) -> Vec<FxHashSet<u32>> {
     // find how many announcing_rules exists
     let announced_max = dfa
@@ -735,7 +748,8 @@ fn init_partitions(dfa: &Dfa) -> Vec<FxHashSet<u32>> {
 
 /// Part of the min DFA algorithm:
 ///
-/// Splits a partition if two nodes goes to different partitions on the same symbol.
+/// Splits a partition if two nodes goes to different partitions on the same
+/// symbol.
 fn split_partition(
     partition: FxHashSet<u32>,
     position: &FxHashMap<u32, u32>,
@@ -768,8 +782,8 @@ fn split_partition(
     }
 }
 
-/// Given the final set of partitions rewrites the transition table in order to get the efficient
-/// one.
+/// Given the final set of partitions rewrites the transition table in order to
+/// get the efficient one.
 fn remap(
     partitions: Vec<FxHashSet<u32>>,
     positions: FxHashMap<u32, u32>,
@@ -802,8 +816,8 @@ fn remap(
     }
     let mut start = *positions.get(&dfa.start).unwrap();
     // remove unreachable states (and non-accepting sinks)
-    // broken: no in-edges and no start OR no out-edges and not accepting, excluding self-loops
-    // this removes also the sink but that will be readded later
+    // broken: no in-edges and no start OR no out-edges and not accepting, excluding
+    // self-loops this removes also the sink but that will be readded later
     let broken_partitions = (0_u32..)
         .take(partitions.len())
         .filter(|x| {
@@ -865,7 +879,8 @@ mod tests {
 
     #[test]
     fn dfa_conflicts_resolution() {
-        //they should be different: the second accept abb as a*b+ (appearing first in the productions)
+        //they should be different: the second accept abb as a*b+ (appearing first in
+        // the productions)
         let g1 = "A: 'a';
                   ABB: 'abb';
                   ASTARBPLUS: 'a'* 'b'+;";

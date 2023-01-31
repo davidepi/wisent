@@ -42,8 +42,8 @@ fn closure(
     set
 }
 
-/// Advances a list of LR0 kernel items (considering also its closure) and returns only the kernel
-/// items composing the new list.
+/// Advances a list of LR0 kernel items (considering also its closure) and
+/// returns only the kernel items composing the new list.
 fn goto(
     items: &FxHashSet<LR0Item>,
     symbol: ParserSymbol,
@@ -77,48 +77,16 @@ mod tests {
     fn closure_set() {
         let grammar = grammar_434();
         let nonterminals = flatten(&grammar).unwrap();
-        let items = fxhashset!(LR0Item {
-            rule: 0,
-            production: 0,
-            position: 0
-        });
+        let items = fxhashset!(LR0Item { rule: 0, production: 0, position: 0 });
         let closure = closure(&items, nonterminals.as_slice());
         let expected = fxhashset!(
-            LR0Item {
-                rule: 0,
-                production: 0,
-                position: 0,
-            },
-            LR0Item {
-                rule: 1,
-                production: 0,
-                position: 0,
-            },
-            LR0Item {
-                rule: 1,
-                production: 1,
-                position: 0,
-            },
-            LR0Item {
-                rule: 2,
-                production: 0,
-                position: 0,
-            },
-            LR0Item {
-                rule: 2,
-                production: 1,
-                position: 0,
-            },
-            LR0Item {
-                rule: 3,
-                production: 0,
-                position: 0,
-            },
-            LR0Item {
-                rule: 3,
-                production: 1,
-                position: 0,
-            },
+            LR0Item { rule: 0, production: 0, position: 0 },
+            LR0Item { rule: 1, production: 0, position: 0 },
+            LR0Item { rule: 1, production: 1, position: 0 },
+            LR0Item { rule: 2, production: 0, position: 0 },
+            LR0Item { rule: 2, production: 1, position: 0 },
+            LR0Item { rule: 3, production: 0, position: 0 },
+            LR0Item { rule: 3, production: 1, position: 0 },
         );
         assert_eq!(closure, expected);
     }
@@ -128,23 +96,11 @@ mod tests {
         let grammar = grammar_434();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(
-            LR0Item {
-                rule: 0,
-                production: 0,
-                position: 1
-            },
-            LR0Item {
-                rule: 1,
-                production: 0,
-                position: 1
-            }
+            LR0Item { rule: 0, production: 0, position: 1 },
+            LR0Item { rule: 1, production: 0, position: 1 }
         );
         let advanced = goto(&items, ParserSymbol::Terminal(0), &nonterminals);
-        let expected = fxhashset!(LR0Item {
-            rule: 1,
-            production: 0,
-            position: 2,
-        },);
+        let expected = fxhashset!(LR0Item { rule: 1, production: 0, position: 2 },);
         assert_eq!(advanced, expected);
     }
 
@@ -153,16 +109,8 @@ mod tests {
         let grammar = grammar_434();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(
-            LR0Item {
-                rule: 0,
-                production: 0,
-                position: 1
-            },
-            LR0Item {
-                rule: 1,
-                production: 0,
-                position: 1
-            }
+            LR0Item { rule: 0, production: 0, position: 1 },
+            LR0Item { rule: 1, production: 0, position: 1 }
         );
         let advanced = goto(&items, ParserSymbol::Terminal(5), &nonterminals);
         assert!(advanced.is_empty());

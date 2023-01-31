@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 
 /// A grammar without left-recursion for LL parsers.
 ///
-/// The struct `LLGrammar` can be used to construct LL-based parsers. This struct can be built from
-/// an original [`Grammar`] with the method [`LLGrammar::try_from`] only if the original grammar
-/// is not left-recursive.
+/// The struct `LLGrammar` can be used to construct LL-based parsers. This
+/// struct can be built from an original [`Grammar`] with the method
+/// [`LLGrammar::try_from`] only if the original grammar is not left-recursive.
 ///
-/// This does not mean the grammar is LL(k), as there may be FIRST/FIRST or FIRST/FOLLOW conflicts
-/// that prevents building a parsing table.
+/// This does not mean the grammar is LL(k), as there may be FIRST/FIRST or
+/// FIRST/FOLLOW conflicts that prevents building a parsing table.
 #[derive(Clone)]
 pub struct LLGrammar {
     token_names: Vec<String>,
@@ -70,20 +70,23 @@ impl TryFrom<&Grammar> for LLGrammar {
 impl LLGrammar {
     /// Returns the first sets and the follow sets of the grammar.
     ///
-    /// These sets represent the set of terminals appearing respectively at the start and to the
-    /// right (following) of a production. The terminals contained in each set are represented by
-    /// their index in the grammar. Two special symbols can appear in these sets:
-    /// [`EPSILON_VAL`] and [`ENDLINE_VAL`].
+    /// These sets represent the set of terminals appearing respectively at the
+    /// start and to the right (following) of a production. The terminals
+    /// contained in each set are represented by their index in the grammar.
+    /// Two special symbols can appear in these sets: [`EPSILON_VAL`] and
+    /// [`ENDLINE_VAL`].
     ///
-    /// The returned vectors are indexed by the nonterminal production. This means that `first[0]`
-    /// contains the first set of the first nonterminal production appearing in the grammar using
+    /// The returned vectors are indexed by the nonterminal production. This
+    /// means that `first[0]` contains the first set of the first
+    /// nonterminal production appearing in the grammar using
     /// [`Grammar::iter_nonterm`].
-    /// The first set of each terminal production is trivial, being equal to the terminal itself.
-    /// For this reason, these are not contained in the returned vector.
+    /// The first set of each terminal production is trivial, being equal to the
+    /// terminal itself. For this reason, these are not contained in the
+    /// returned vector.
     ///
     /// **Note:** this method does not raise errors if there are conflicts.
     ///
-    /// # Example
+    /// # Examples
     /// Basic usage:
     /// ```
     /// # use wisent::grammar::Grammar;
@@ -109,8 +112,8 @@ impl LLGrammar {
     ///
     /// Expects the grammar and the index of the starting non-terminal as input.
     ///
-    /// Returns [`ParseError::LLError`] if there are FIRST/FIRST or FIRST/FOLLOW conflicts.
-    /// ```
+    /// Returns [`ParseError::LLError`] if there are FIRST/FIRST or FIRST/FOLLOW
+    /// conflicts. ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::parser::LLGrammar;
     /// let g = "sum: num PLUS num;
@@ -174,8 +177,9 @@ fn first(prods: &[Vec<Vec<ParserSymbol>>]) -> Vec<FxHashSet<u32>> {
 }
 
 /// Calculates the firsts of a single alternative.
-/// For example in the grammar S: A | T; it can be run to calculate the firsts of S: A; or S: T;
-/// It takes as input the first of all the productions, calculated using the [first()] function.
+/// For example in the grammar S: A | T; it can be run to calculate the firsts
+/// of S: A; or S: T; It takes as input the first of all the productions,
+/// calculated using the [first()] function.
 fn first_single_alternative(prod: &[ParserSymbol], first: &[FxHashSet<u32>]) -> FxHashSet<u32> {
     let mut retval = FxHashSet::default();
     for concat in prod {
@@ -216,8 +220,9 @@ fn follow(
     old
 }
 
-/// Calculates the follow of a single production. However takes as input the modifiable set of
-/// all the productions. Part of the [follow()] functions, should not be called by itself.
+/// Calculates the follow of a single production. However takes as input the
+/// modifiable set of all the productions. Part of the [follow()] functions,
+/// should not be called by itself.
 fn follow_single(
     prod_id: usize,
     prod: &[Vec<ParserSymbol>],
@@ -349,7 +354,8 @@ fn check_first_first(
 }
 
 // Check FIRST/FOLLOW conflicts:
-// if a production is nullable (has ε in the first set) FOLLOW(x) should be different from FIRST(x)
+// if a production is nullable (has ε in the first set) FOLLOW(x) should be
+// different from FIRST(x)
 fn check_first_follow(first: &[FxHashSet<u32>], follow: &[FxHashSet<u32>]) -> Result<(), u32> {
     for prod in 0..first.len() {
         if first[prod].contains(&EPSILON_VAL) && first[prod].intersection(&follow[prod]).count() > 0
@@ -385,16 +391,17 @@ impl LLParsingTable {
         self.terminals
     }
 
-    /// Returns the index of the starting nonterminal production in the original grammar
-    /// represented by this table.
+    /// Returns the index of the starting nonterminal production in the original
+    /// grammar represented by this table.
     pub(super) fn start(&self) -> u32 {
         self.start_index
     }
 
-    /// Given the current nonterminal production and the next token value, retireves the next set
-    /// of symbols.
+    /// Given the current nonterminal production and the next token value,
+    /// retireves the next set of symbols.
     ///
-    /// Returns None if the corresponding entry does not exist in the parsing table.
+    /// Returns None if the corresponding entry does not exist in the parsing
+    /// table.
     pub(super) fn entry(&self, nonterminal: u32, terminal: u32) -> Option<&[ParserSymbol]> {
         let (prod, alternate) = self
             .table

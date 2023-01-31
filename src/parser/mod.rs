@@ -9,7 +9,8 @@ mod simulator;
 pub use self::ll::{LLGrammar, LLParsingTable};
 pub use self::simulator::{LLParser, PullParser, PushParser};
 
-/// Represents the empty value `ε` when appearing in the first set or follow set.
+/// Represents the empty value `ε` when appearing in the first set or follow
+/// set.
 pub const EPSILON_VAL: u32 = 0xFFFFFFFE;
 /// Represents the end of line value `$` when appearing in the follow set.
 pub const ENDLINE_VAL: u32 = 0xFFFFFFFD;
@@ -17,10 +18,12 @@ pub const ENDLINE_VAL: u32 = 0xFFFFFFFD;
 /// Symbols used internally by the parser generator.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 enum ParserSymbol {
-    /// A terminal production. Indexed using the original grammar terminal order.
+    /// A terminal production. Indexed using the original grammar terminal
+    /// order.
     Terminal(u32),
     /// A non-terminal production.
-    /// TODO: explain indexing when LR complete. This probably uses parsing table indexes.
+    /// TODO: explain indexing when LR complete. This probably uses parsing
+    /// table indexes.
     NonTerminal(u32),
     /// The empty production `ε`.
     Empty,

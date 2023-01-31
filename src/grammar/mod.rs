@@ -16,7 +16,8 @@ pub struct LexerProduction {
     pub head: String,
     /// Body of the production.
     pub body: Tree<LexerRuleElement>,
-    /// If this production belongs to a lexer, this field contains the lexer actions.
+    /// If this production belongs to a lexer, this field contains the lexer
+    /// actions.
     pub actions: BTreeSet<Action>,
 }
 
@@ -32,12 +33,12 @@ pub struct ParserProduction {
 /// Struct representing a parsed grammar.
 ///
 /// This struct stores terminal and non-terminal productions.
-/// This struct also record the lexer actions for each terminal production, but drops any embedded
-/// action as they are language dependent.
+/// This struct also record the lexer actions for each terminal production, but
+/// drops any embedded action as they are language dependent.
 ///
-/// Additionally, multiple lexer modes can be used in this grammar: each mode has different set of
-/// rules, and switching from one modes to the other ones can be done with lexer actions. More info
-/// can be found on the [ANTLR
+/// Additionally, multiple lexer modes can be used in this grammar: each mode
+/// has different set of rules, and switching from one modes to the other ones
+/// can be done with lexer actions. More info can be found on the [ANTLR
 /// specification](https://github.com/antlr/antlr4/blob/master/doc/lexer-rules.md#lexical-modes)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grammar {
@@ -103,8 +104,8 @@ impl Grammar {
 
     /// Returns the total number of terminal productions, in all modes.
     ///
-    /// Note that fragments are excluded from the count, as they are merged within the terminals and
-    /// non-terminals.
+    /// Note that fragments are excluded from the count, as they are merged
+    /// within the terminals and non-terminals.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -123,8 +124,8 @@ impl Grammar {
 
     /// Returns the total number of terminal production in the given mode.
     ///
-    /// Note that fragments are excluded from the count, as they are merged within the terminals and
-    /// non-terminals.
+    /// Note that fragments are excluded from the count, as they are merged
+    /// within the terminals and non-terminals.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -167,8 +168,8 @@ impl Grammar {
 
     /// Checks if the grammar has no productions.
     ///
-    /// Returns true if the grammar has exactly 0 productions, false otherwise. This comprises both
-    /// terminals and non terminals, in all modes.
+    /// Returns true if the grammar has exactly 0 productions, false otherwise.
+    /// This comprises both terminals and non terminals, in all modes.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -288,13 +289,13 @@ impl Grammar {
 
     /// Builds a grammar by reading a given file.
     ///
-    /// This method constructs and initializes a Grammar class by parsing an external specification
-    /// written in a `.g4` file.
+    /// This method constructs and initializes a Grammar class by parsing an
+    /// external specification written in a `.g4` file.
     ///
     /// A path pointing to the `.g4` file is expected as input.
     ///
-    /// In case the file cannot be found or contains syntax errors a ParseError is returned.
-    /// # Errors
+    /// In case the file cannot be found or contains syntax errors a ParseError
+    /// is returned. # Errors
     /// Returns error if the given path is missing the extension.
     /// # Examples
     /// Basic usage:
@@ -319,11 +320,12 @@ impl Grammar {
 
     /// Builds a grammar using a simil-ANTLR syntax.
     ///
-    /// The main purpose of this method is to read a grammar without depending on this crate
-    /// itself. This is done by manually implementing a recursive descent parser.
+    /// The main purpose of this method is to read a grammar without depending
+    /// on this crate itself. This is done by manually implementing a
+    /// recursive descent parser.
     ///
-    /// The recognized grammar is similar to ANTLR in syntax, with a few key difference to
-    /// simplify the manual implementation of the parser:
+    /// The recognized grammar is similar to ANTLR in syntax, with a few key
+    /// difference to simplify the manual implementation of the parser:
     /// - `=` instead of `:` (originally this was an EBNF grammar)
     /// - no modes or lexer actions are supported.
     /// - no escaping is possible.
@@ -337,8 +339,8 @@ impl Grammar {
 
     /// Builds a grammar from a String with the content in ANTLR syntax.
     ///
-    /// This method constructs and initializes a Grammar class by parsing a String following the
-    /// ANTLR4 specification.
+    /// This method constructs and initializes a Grammar class by parsing a
+    /// String following the ANTLR4 specification.
     ///
     /// A ParseError is returned in case the String contains syntax errors.
     /// # Examples
@@ -356,34 +358,35 @@ impl Grammar {
 
 /// Enum representing the possible lexer actions supported by the ANTLR lexer.
 ///
-/// These actions are default operations that aims to give language-independent instruction to the
-/// lexer.
+/// These actions are default operations that aims to give language-independent
+/// instruction to the lexer.
 ///
-/// These action are expressed after a production in the form `head: body -> action;` where action
-/// can assume only specific values.
+/// These action are expressed after a production in the form `head: body ->
+/// action;` where action can assume only specific values.
 ///
-/// A brief documentation is provided for each action, but the user should refer to the ANTLR
-/// reference.
+/// A brief documentation is provided for each action, but the user should refer
+/// to the ANTLR reference.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Action {
     /// Action telling the lexer to not return the matched token.
     Skip,
-    /// Action telling the lexer to match the current rule but continue collecting tokens.
+    /// Action telling the lexer to match the current rule but continue
+    /// collecting tokens.
     More,
     /// Action assigning a specific type for the matched token.
     /// **Not supported in this implementation**
     Type,
-    /// Action telling the lexer to switch to a specific channel after matching the token.
-    /// **Not supported in this implementation**
+    /// Action telling the lexer to switch to a specific channel after matching
+    /// the token. **Not supported in this implementation**
     Channel,
-    /// After matching the token, the lexer will switch to the mode passed as String. Only rules
-    /// matching the newly passed mode will be matched.
+    /// After matching the token, the lexer will switch to the mode passed as
+    /// String. Only rules matching the newly passed mode will be matched.
     Mode(u32),
-    /// Same behaviour of `Action::MODE` but the mode is pushed on a stack, to be later popped by
-    /// `Action::POPMODE`.
+    /// Same behaviour of `Action::MODE` but the mode is pushed on a stack, to
+    /// be later popped by `Action::POPMODE`.
     PushMode(u32),
-    /// After matching the token, pop a mode from the mode stack and continue matching tokens using
-    /// the mode on the top of the stack.
+    /// After matching the token, pop a mode from the mode stack and continue
+    /// matching tokens using the mode on the top of the stack.
     PopMode,
 }
 
@@ -433,10 +436,12 @@ impl std::fmt::Display for LexerOp {
 
 /// The elements that can be found in a lexer production.
 ///
-/// A literal should be represented as a concatenation of 1-element [`CharSet`]s.
+/// A literal should be represented as a concatenation of 1-element
+/// [`CharSet`]s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LexerRuleElement {
-    /// A set containing `T`. `T` is usually a character or its ID in the [`SymbolTable`].
+    /// A set containing `T`. `T` is usually a character or its ID in the
+    /// [`SymbolTable`].
     CharSet(BTreeSet<char>),
     /// The *any value* operator `.`.
     AnyValue,
@@ -515,10 +520,7 @@ pub struct Tree<T> {
 impl<T> Tree<T> {
     /// Creates a new leaf node with the given value.
     pub fn new_leaf(value: T) -> Self {
-        Self {
-            value,
-            children: Vec::new(),
-        }
+        Self { value, children: Vec::new() }
     }
     /// Creates a new node with the given value and children.
     pub fn new_node(value: T, children: Vec<Tree<T>>) -> Self {

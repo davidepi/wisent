@@ -9,8 +9,8 @@ use std::io::{Bytes, Read};
 
 /// Trait implementing a pull parser.
 ///
-/// In a pull parser the parser automatically pull tokens from the scanner, until parsing is
-/// finished.
+/// In a pull parser the parser automatically pull tokens from the scanner,
+/// until parsing is finished.
 pub trait PullParser {
     /// Generates a parsing tree using a pull parser.
     ///
@@ -21,14 +21,14 @@ pub trait PullParser {
 
 /// Trait implementing a push parser.
 ///
-/// In a push parser the parser stops whenever a new token from the scanner is required. Providing
-/// the next token resumes the parsing.
+/// In a push parser the parser stops whenever a new token from the scanner is
+/// required. Providing the next token resumes the parsing.
 pub trait PushParser {
     /// Generates a parsing tree using a push parser.
     ///
-    /// This method will return None until parse is complete. Each invocation expects the next
-    /// token retrieved from the lexer/scanner. If input reaches Eof, None should be passed as
-    /// token.
+    /// This method will return None until parse is complete. Each invocation
+    /// expects the next token retrieved from the lexer/scanner. If input
+    /// reaches Eof, None should be passed as token.
     fn parse(&mut self, token: Option<Token>) -> Option<Result<Tree<ParseNode>, ParseError>>;
 }
 
@@ -37,12 +37,14 @@ pub trait PushParser {
 /// Stores intermediate data required by a LL(1) parser.
 pub struct LLParser {
     /// stck for the table-driven parser
-    /// contains ID of the parent (in the parse tree) and current symbol being processed
+    /// contains ID of the parent (in the parse tree) and current symbol being
+    /// processed
     stack: Vec<(u32, ParserSymbol)>,
     /// table for the table-driven parser
     table: LLParsingTable,
-    /// indexed nodes of the tree being built. Childless, children will be assigned at the end.
-    /// First value is the parent_id, second value is the actual tree.
+    /// indexed nodes of the tree being built. Childless, children will be
+    /// assigned at the end. First value is the parent_id, second value is
+    /// the actual tree.
     built_nodes: Vec<(u32, Tree<ParseNode>)>,
     /// Stores a grammar, to provide better debug informations.
     #[cfg(trace_parser)]
@@ -51,6 +53,7 @@ pub struct LLParser {
 
 impl LLParser {
     /// Creates a new LL(1) parser with the given parsing table.
+    ///
     /// # Examples
     /// ```
     /// # use wisent::grammar::Grammar;
@@ -80,9 +83,9 @@ impl LLParser {
 
     /// Supplies the production names to provide better debugging.
     ///
-    /// Normally, when logging, the production index would be used. If this method is called (in
-    /// debug mode), the parser stores the grammar in order to provide the production name when
-    /// logging.
+    /// Normally, when logging, the production index would be used. If this
+    /// method is called (in debug mode), the parser stores the grammar in
+    /// order to provide the production name when logging.
     ///
     /// This method requires the feature **trace-parser** to be active.
     pub fn verbose_debug(&mut self, _grammar: Grammar) {
@@ -145,7 +148,8 @@ fn parse_ll1(
     panic!("Unreachable")
 }
 
-/// Print the token received by the parser. prints nothing without trace_parser feature.
+/// Print the token received by the parser. prints nothing without trace_parser
+/// feature.
 fn debug_print_token(_parser: &LLParser, _tok: Option<Token>) {
     #[cfg(trace_parser)]
     {
@@ -167,7 +171,8 @@ fn debug_print_token(_parser: &LLParser, _tok: Option<Token>) {
     }
 }
 
-/// prints the production accepted by the parser. Prints nothing without trace_parser feature.
+/// prints the production accepted by the parser. Prints nothing without
+/// trace_parser feature.
 fn debug_print_accept(_parser: &LLParser, _lhs: u32, _rhs: &[ParserSymbol]) {
     #[cfg(trace_parser)]
     {

@@ -3,8 +3,8 @@ use crate::lexer::SymbolTable;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 
-/// Two operands (Symbol and Accepting state) and a limited set of operators (*, AND, OR).
-/// Used to build the canonical parse tree.
+/// Two operands (Symbol and Accepting state) and a limited set of operators (*,
+/// AND, OR). Used to build the canonical parse tree.
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum CanonicalLexerRuleElement {
@@ -50,10 +50,10 @@ pub fn is_nongreedy(node: &Tree<LexerRuleElement>) -> bool {
     false
 }
 
-/// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree with only symbols,
-/// the *any symbol* placeholder, concatenation, alternation, kleene star).
-/// **note** that non-greediness of a rule is removed by this function, so it must be recorded
-/// somewhere else beforehand.
+/// Transform a regex extended parse tree to a canonical parse tree (i.e. a tree
+/// with only symbols, the *any symbol* placeholder, concatenation, alternation,
+/// kleene star). **note** that non-greediness of a rule is removed by this
+/// function, so it must be recorded somewhere else beforehand.
 pub fn canonicalise(
     node: &Tree<LexerRuleElement>,
     symtable: &SymbolTable,
@@ -121,8 +121,8 @@ pub fn canonicalise(
     }
 }
 
-/// converts a set of IDs into a several nodes concatenated with the | operators.
-/// (e.g. from `[a,b,c]` to `'a'|'b'|'c'`.
+/// converts a set of IDs into a several nodes concatenated with the |
+/// operators. (e.g. from `[a,b,c]` to `'a'|'b'|'c'`.
 /// Returns epsilon if the set is empty.
 fn create_literal_node(set: BTreeSet<u32>, epsilon_id: u32) -> Tree<CanonicalLexerRuleElement> {
     if set.is_empty() {
@@ -196,7 +196,8 @@ mod tests {
     use std::fmt::Write;
 
     /// encoded representation of a tree in form of string
-    /// otherwise the formatted version takes a lot of space (macros too, given the tree generics)
+    /// otherwise the formatted version takes a lot of space (macros too, given
+    /// the tree generics)
     fn as_str<T: std::fmt::Display>(node: &Tree<T>) -> String {
         let mut string = String::new();
         let children = node.children().map(as_str).collect::<Vec<_>>();
