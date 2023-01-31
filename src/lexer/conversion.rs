@@ -23,8 +23,8 @@ pub enum CanonicalLexerRuleElement {
 impl std::fmt::Display for CanonicalLexerRuleElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CanonicalLexerRuleElement::Symbol(i) => write!(f, "{}", i),
-            CanonicalLexerRuleElement::Acc(i) => write!(f, "ACC({})", i),
+            CanonicalLexerRuleElement::Symbol(i) => write!(f, "{i}"),
+            CanonicalLexerRuleElement::Acc(i) => write!(f, "ACC({i})"),
             CanonicalLexerRuleElement::KLEENE => write!(f, "*"),
             CanonicalLexerRuleElement::AND => write!(f, "&"),
             CanonicalLexerRuleElement::OR => write!(f, "|"),

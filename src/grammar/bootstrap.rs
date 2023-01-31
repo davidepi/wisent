@@ -635,7 +635,7 @@ fn get_lookahead<'a>(
                 Ok(token)
             }
             None => Err(ParseError::SyntaxError {
-                message: format!("Unexpected EOF, expecting {}", expected),
+                message: format!("Unexpected EOF, expecting {expected}"),
             }),
         }
     }

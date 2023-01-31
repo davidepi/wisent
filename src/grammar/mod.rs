@@ -397,8 +397,8 @@ impl std::fmt::Display for Action {
             Action::More => write!(f, "MORE"),
             Action::Type => write!(f, "TYPE"),
             Action::Channel => write!(f, "CHANNEL"),
-            Action::Mode(m) => write!(f, "MODE({})", m),
-            Action::PushMode(p) => write!(f, "PUSHMODE({})", p),
+            Action::Mode(m) => write!(f, "MODE({m})"),
+            Action::PushMode(p) => write!(f, "PUSHMODE({p})"),
             Action::PopMode => write!(f, "POPMODE"),
         }
     }
@@ -455,12 +455,12 @@ impl std::fmt::Display for LexerRuleElement {
             LexerRuleElement::CharSet(i) => {
                 write!(f, "[")?;
                 for charz in i {
-                    write!(f, "{}", charz)?;
+                    write!(f, "{charz}")?;
                 }
                 write!(f, "]")
             }
             LexerRuleElement::AnyValue => write!(f, "."),
-            LexerRuleElement::Operation(tp) => write!(f, "{}", tp),
+            LexerRuleElement::Operation(tp) => write!(f, "{tp}"),
         }
     }
 }
@@ -477,10 +477,10 @@ pub enum ParserRuleElement {
 impl std::fmt::Display for ParserRuleElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParserRuleElement::NonTerminal(name) => write!(f, "NT[{}]", name),
-            ParserRuleElement::Terminal(name) => write!(f, "T[{}]", name),
+            ParserRuleElement::NonTerminal(name) => write!(f, "NT[{name}]"),
+            ParserRuleElement::Terminal(name) => write!(f, "T[{name}]"),
             ParserRuleElement::Empty => write!(f, "ε"),
-            ParserRuleElement::Operation(tp) => write!(f, "{}", tp),
+            ParserRuleElement::Operation(tp) => write!(f, "{tp}"),
         }
     }
 }
@@ -606,7 +606,7 @@ impl<T: std::fmt::Display> GraphvizDot for Tree<T> {
             writeln!(retval, "    {}[label=\"{}\"];", id, node.value).unwrap();
             for child in node.children() {
                 nodes.push((child, next_id));
-                writeln!(retval, "    {}->{}", id, next_id).unwrap();
+                writeln!(retval, "    {id}->{next_id}").unwrap();
                 next_id += 1;
             }
         }

@@ -57,7 +57,7 @@ fn canonicalise_rec(
                 Ok(Tree::new_leaf(CanonicalParserRuleElement::NonTerminal(id)))
             } else {
                 Err(ParseError::SyntaxError {
-                    message: format!("Unreferenced non-terminal {}", name),
+                    message: format!("Unreferenced non-terminal {name}"),
                 })
             }
         }
@@ -66,7 +66,7 @@ fn canonicalise_rec(
                 Ok(Tree::new_leaf(CanonicalParserRuleElement::Terminal(id)))
             } else {
                 Err(ParseError::SyntaxError {
-                    message: format!("Unreferenced terminal {}", name),
+                    message: format!("Unreferenced terminal {name}"),
                 })
             }
         }

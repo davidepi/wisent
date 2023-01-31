@@ -38,7 +38,7 @@ pub enum ParseNode {
 impl std::fmt::Debug for ParseNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ParserRule(arg0) => write!(f, "Rule({})", arg0),
+            Self::ParserRule(arg0) => write!(f, "Rule({arg0})"),
             Self::Terminal(arg0) => {
                 if arg0.mode == 0 {
                     write!(f, "Token({})@{}..{}", arg0.production, arg0.start, arg0.end)

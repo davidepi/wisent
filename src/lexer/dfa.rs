@@ -348,7 +348,7 @@ impl GraphvizDot for MultiDfa {
     fn to_dot(&self) -> String {
         let mut f = String::new();
         for (i, dfa) in self.tts.iter().enumerate() {
-            writeln!(f, "digraph DFA{} {{\n    start[shape=point];", i).unwrap();
+            writeln!(f, "digraph DFA{i} {{\n    start[shape=point];").unwrap();
             for state in 0..dfa.states_no {
                 if let Some(accepted_rule) = dfa.accepting(state) {
                     let shape = if dfa.non_greedy(state) {
@@ -361,13 +361,12 @@ impl GraphvizDot for MultiDfa {
                     if !actions.is_empty() {
                         write!(actions_str, " ->").unwrap();
                         for action in actions {
-                            write!(actions_str, " {}", action).unwrap();
+                            write!(actions_str, " {action}").unwrap();
                         }
                     }
                     writeln!(
                         f,
-                        "    {}[shape={};xlabel=\"ACC({}){}\"];",
-                        state, shape, accepted_rule, actions_str
+                        "    {state}[shape={shape};xlabel=\"ACC({accepted_rule}){actions_str}\"];"
                     )
                     .unwrap();
                 }
@@ -396,7 +395,7 @@ impl GraphvizDot for MultiDfa {
                     let label = &transitions[dst as usize];
                     if !label.is_empty() {
                         // !empty = not sink
-                        writeln!(f, "    {}->{}[label=\"{}\"];", state, dst, label).unwrap();
+                        writeln!(f, "    {state}->{dst}[label=\"{label}\"];").unwrap();
                     }
                 }
             }

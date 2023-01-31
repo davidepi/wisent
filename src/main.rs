@@ -98,7 +98,7 @@ fn main() {
         Command::FirstFollow(args) => first_follow_task(args),
     };
     if let Err(e) = res {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1)
     }
 }
@@ -108,7 +108,7 @@ fn scanner_task(args: ScannerSC) -> Result<(), ParseError> {
     let dfa = MultiDfa::new(&grammar);
     if args.json {
         let json = serde_json::to_string(&dfa).expect("Could not serialize the generated DFA");
-        println!("{}", json);
+        println!("{json}");
     } else {
         let data = bincode::serialize(&dfa).expect("Could not serialize the generated DFA");
         let mut stdout = std::io::stdout();
@@ -124,7 +124,7 @@ fn parser_task(args: ParserSC) -> Result<(), ParseError> {
     let table = llgrammar.parsing_table()?;
     if args.json {
         let json = serde_json::to_string(&table).expect("Could not serialize the generated parser");
-        println!("{}", json);
+        println!("{json}");
     } else {
         let data = bincode::serialize(&table).expect("Could not serialize the generated parser");
         let mut stdout = std::io::stdout();

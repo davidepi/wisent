@@ -31,14 +31,14 @@ impl std::error::Error for ParseError {}
 impl std::fmt::Display for ParseError {
     fn fmt(&self, buffer: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            ParseError::IOError(e) => write!(buffer, "IOError: {}", e),
-            ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {}", message),
-            ParseError::LLError { message } => write!(buffer, "Grammar is not LL: {}", message),
-            ParseError::ParsingError { message } => write!(buffer, "ParsingError: {}", message),
+            ParseError::IOError(e) => write!(buffer, "IOError: {e}"),
+            ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {message}"),
+            ParseError::LLError { message } => write!(buffer, "Grammar is not LL: {message}"),
+            ParseError::ParsingError { message } => write!(buffer, "ParsingError: {message}"),
             ParseError::DeserializeError { message } => {
-                write!(buffer, "DeserializeError: {}", message)
+                write!(buffer, "DeserializeError: {message}")
             }
-            ParseError::InternalError { message } => write!(buffer, "InternalError: {}", message),
+            ParseError::InternalError { message } => write!(buffer, "InternalError: {message}"),
         }
     }
 }
