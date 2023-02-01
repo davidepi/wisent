@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// The struct `LLGrammar` can be used to construct LL-based parsers. This
 /// struct can be built from an original [`Grammar`] with the method
-/// [`LLGrammar::try_from`] only if the original grammar is not left-recursive.
+/// [`LLGrammar::try_from`] only if the original grammar is not left-recursive
+/// and contains a rule for each nonterminal used.
 ///
 /// This does not mean the grammar is LL(k), as there may be FIRST/FIRST or
 /// FIRST/FOLLOW conflicts that prevents building a parsing table.
@@ -30,6 +31,8 @@ impl TryFrom<&Grammar> for LLGrammar {
     /// Converts a [`Grammar`] into a [`LLGrammar`].
     ///
     /// Returns [`ParseError::LLError`] if the grammar is left-recursive.
+    /// Returns [`ParseError::SyntaxError`] if any production references
+    /// undeclared rules.
     fn try_from(value: &Grammar) -> Result<Self, Self::Error> {
         let nonterminals = flatten(value)?;
         let starting_rule = value.starting_rule();
@@ -155,7 +158,7 @@ impl LLGrammar {
 
 /// Calculates the first of a series of production.
 /// This method invokes [first_single_alternative] until saturation.
-fn first(prods: &[Vec<Vec<ParserSymbol>>]) -> Vec<FxHashSet<u32>> {
+pub(super) fn first(prods: &[Vec<Vec<ParserSymbol>>]) -> Vec<FxHashSet<u32>> {
     let mut old = vec![FxHashSet::default(); prods.len()];
     let mut saturated = false;
     while !saturated {
@@ -198,7 +201,7 @@ fn first_single_alternative(prod: &[ParserSymbol], first: &[FxHashSet<u32>]) -> 
 }
 
 /// Calculates the follow of a series of productions.
-fn follow(
+pub(super) fn follow(
     prods: &[Vec<Vec<ParserSymbol>>],
     first: &[FxHashSet<u32>],
     start: u32,
