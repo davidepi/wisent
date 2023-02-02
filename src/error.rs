@@ -33,7 +33,7 @@ impl std::fmt::Display for ParseError {
         match self {
             ParseError::IOError(e) => write!(buffer, "IOError: {e}"),
             ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {message}"),
-            ParseError::LLError { message } => write!(buffer, "Grammar is not LL: {message}"),
+            ParseError::LLError { message } => write!(buffer, "LL Error: {message}"),
             ParseError::ParsingError { message } => write!(buffer, "ParsingError: {message}"),
             ParseError::DeserializeError { message } => {
                 write!(buffer, "DeserializeError: {message}")

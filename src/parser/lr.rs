@@ -1,8 +1,9 @@
 use super::conversion::flatten;
 use super::ll::{first, follow};
-use super::ParserSymbol;
 use crate::error::ParseError;
+use crate::fxhashset;
 use crate::grammar::Grammar;
+use crate::parser::ParserSymbol;
 use rustc_hash::FxHashSet;
 
 /// A grammar for LR Parsers
@@ -51,6 +52,7 @@ impl TryFrom<&Grammar> for LRGrammar {
             .collect::<Vec<_>>();
         let first = first(&nonterminals);
         let follow = follow(&nonterminals, &first, starting_rule);
+
         Ok(LRGrammar {
             token_names,
             nonterminal_names,
@@ -114,15 +116,39 @@ fn goto(
         .collect()
 }
 
-struct LRParsingTable {}
-
-fn slr_parsing_table(
-    nonterminals: &[Vec<Vec<ParserSymbol>>],
-    term_no: u32,
-    start: u32,
-    follow: &[FxHashSet<u32>],
-) -> Result<LRParsingTable, ParserSymbol> {
-    unimplemented!()
+/// Calculates the DFA representing the LR0 automaton.
+/// Sometimes called canonical lr0 collection.
+fn lr0_automaton(nonterminals: &[Vec<Vec<ParserSymbol>>], start: u32) -> LR0Automaton {
+    let start_kernel = fxhashset!(KernelLR0Item {
+        rule: start,
+        production: 0,
+        position: 0
+    });
+    let mut nodes = vec![start_kernel];
+    let mut edges = vec![vec![]];
+    let mut done = fxhashset!();
+    let mut todo = vec![0];
+    while let Some(set_id) = todo.pop() {
+        done.insert(set_id);
+        let kernel = &nodes[set_id];
+        let clos = closure(kernel, nonterminals);
+        for &item in &clos {
+            let peek = item.peek(nonterminals);
+            if peek != ParserSymbol::Empty {
+                let next = goto(&clos, peek, nonterminals);
+                let next_index = nodes.iter().position(|x| x == &next).unwrap_or_else(|| {
+                    nodes.push(next);
+                    edges.push(Vec::new());
+                    todo.push(nodes.len() - 1);
+                    nodes.len() - 1
+                }) as u32;
+                edges[set_id].push((peek, next_index));
+            }
+        }
+        edges[set_id].sort_unstable();
+        edges[set_id].dedup();
+    }
+    LR0Automaton { nodes, edges }
 }
 
 // Supporting structs to avoid unwanted mixing of kernel/nonkernel using goto on
@@ -205,18 +231,24 @@ impl From<KernelLR0Item> for LR0Item {
     }
 }
 
+type LR0Automaton = Graph<FxHashSet<KernelLR0Item>, ParserSymbol>;
+struct Graph<T, U> {
+    nodes: Vec<T>,
+    edges: Vec<Vec<(U, u32)>>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{closure, LR0Item};
+    use super::{closure, lr0_automaton, LR0Item};
     use crate::fxhashset;
     use crate::parser::conversion::flatten;
     use crate::parser::lr::{goto, KernelLR0Item};
-    use crate::parser::tests::grammar_434;
+    use crate::parser::tests::grammar_440;
     use crate::parser::ParserSymbol;
 
     #[test]
     fn closure_set() {
-        let grammar = grammar_434();
+        let grammar = grammar_440();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(KernelLR0Item { rule: 0, production: 0, position: 0 });
         let closure = closure(&items, nonterminals.as_slice());
@@ -234,7 +266,7 @@ mod tests {
 
     #[test]
     fn goto_function() {
-        let grammar = grammar_434();
+        let grammar = grammar_440();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(
             KernelLR0Item { rule: 0, production: 0, position: 1 },
@@ -248,7 +280,7 @@ mod tests {
 
     #[test]
     fn goto_empty() {
-        let grammar = grammar_434();
+        let grammar = grammar_440();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(
             KernelLR0Item { rule: 0, production: 0, position: 1 },
@@ -257,5 +289,76 @@ mod tests {
         let ic = closure(&items, &nonterminals);
         let advanced = goto(&ic, ParserSymbol::Terminal(5), &nonterminals);
         assert!(advanced.is_empty());
+    }
+
+    #[test]
+    fn canonical_lr0_automaton() {
+        let grammar = grammar_440();
+        let nonterminals = flatten(&grammar).unwrap();
+        let collection = lr0_automaton(&nonterminals, 0);
+        // IXX number refers to the Ids in the dragon book example.
+        let expected_nodes = vec![
+            fxhashset!(KernelLR0Item { rule: 0, production: 0, position: 0 }), // I0
+            fxhashset!(
+                KernelLR0Item { rule: 0, production: 0, position: 1 },
+                KernelLR0Item { rule: 1, production: 0, position: 1 }
+            ), // I1
+            fxhashset!(
+                KernelLR0Item { rule: 2, production: 0, position: 1 },
+                KernelLR0Item { rule: 1, production: 1, position: 1 }
+            ), // I2
+            fxhashset!(KernelLR0Item { rule: 3, production: 0, position: 1 }), // I4
+            fxhashset!(KernelLR0Item { rule: 2, production: 1, position: 1 }), // I3
+            fxhashset!(KernelLR0Item { rule: 3, production: 1, position: 1 }), // I5
+            fxhashset!(
+                KernelLR0Item { rule: 1, production: 0, position: 1 },
+                KernelLR0Item { rule: 3, production: 0, position: 2 }
+            ), // I8
+            fxhashset!(KernelLR0Item { rule: 1, production: 0, position: 2 }), // I6
+            fxhashset!(KernelLR0Item { rule: 3, production: 0, position: 3 }), // I11
+            fxhashset!(
+                KernelLR0Item { rule: 2, production: 0, position: 1 },
+                KernelLR0Item { rule: 1, production: 0, position: 3 }
+            ), // I9
+            fxhashset!(KernelLR0Item { rule: 2, production: 0, position: 2 }), // I7
+            fxhashset!(KernelLR0Item { rule: 2, production: 0, position: 3 }), // I10
+        ];
+        assert_eq!(expected_nodes, collection.nodes);
+        let expected_edges = vec![
+            vec![
+                (ParserSymbol::Terminal(2), 3),
+                (ParserSymbol::Terminal(4), 5),
+                (ParserSymbol::NonTerminal(1), 1),
+                (ParserSymbol::NonTerminal(2), 2),
+                (ParserSymbol::NonTerminal(3), 4),
+            ],
+            vec![(ParserSymbol::Terminal(0), 7)],
+            vec![(ParserSymbol::Terminal(1), 10)],
+            vec![
+                (ParserSymbol::Terminal(2), 3),
+                (ParserSymbol::Terminal(4), 5),
+                (ParserSymbol::NonTerminal(1), 6),
+                (ParserSymbol::NonTerminal(2), 2),
+                (ParserSymbol::NonTerminal(3), 4),
+            ],
+            vec![],
+            vec![],
+            vec![(ParserSymbol::Terminal(0), 7), (ParserSymbol::Terminal(3), 8)],
+            vec![
+                (ParserSymbol::Terminal(2), 3),
+                (ParserSymbol::Terminal(4), 5),
+                (ParserSymbol::NonTerminal(2), 9),
+                (ParserSymbol::NonTerminal(3), 4),
+            ],
+            vec![],
+            vec![(ParserSymbol::Terminal(1), 10)],
+            vec![
+                (ParserSymbol::Terminal(2), 3),
+                (ParserSymbol::Terminal(4), 5),
+                (ParserSymbol::NonTerminal(3), 11),
+            ],
+            vec![],
+        ];
+        assert_eq!(expected_edges, collection.edges);
     }
 }

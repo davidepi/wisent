@@ -16,7 +16,7 @@ pub const EPSILON_VAL: u32 = 0xFFFFFFFE;
 pub const ENDLINE_VAL: u32 = 0xFFFFFFFD;
 
 /// Symbols used internally by the parser generator.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 enum ParserSymbol {
     /// A terminal production. Indexed using the original grammar terminal
     /// order.
@@ -74,9 +74,12 @@ mod tests {
         Grammar::parse_bootstrap(g).unwrap()
     }
 
-    /// Grammar 4.34 of the dragon book. Page 217 on the second edition.
+    /// Grammar of exercise 4.40 of the dragon book. Page 244 on the second
+    /// edition.
+    ///
+    /// An augmented version of grammar 4.1.
     /// Used in parser tests.
-    pub(super) fn grammar_434() -> Grammar {
+    pub(super) fn grammar_440() -> Grammar {
         let g = "e1 : e;
              e: e Plus t | t;
              t: t Star f | f;
