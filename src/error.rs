@@ -15,6 +15,7 @@ pub enum ParseError {
     IOError(std::io::Error),
     SyntaxError { message: String },
     LLError { message: String },
+    LRError { message: String },
     ParsingError { message: String },
     DeserializeError { message: String },
     InternalError { message: String },
@@ -34,6 +35,7 @@ impl std::fmt::Display for ParseError {
             ParseError::IOError(e) => write!(buffer, "IOError: {e}"),
             ParseError::SyntaxError { message } => write!(buffer, "SyntaxError: {message}"),
             ParseError::LLError { message } => write!(buffer, "LL Error: {message}"),
+            ParseError::LRError { message } => write!(buffer, "LR Error: {message}"),
             ParseError::ParsingError { message } => write!(buffer, "ParsingError: {message}"),
             ParseError::DeserializeError { message } => {
                 write!(buffer, "DeserializeError: {message}")

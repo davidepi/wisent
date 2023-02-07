@@ -7,6 +7,7 @@ mod lr;
 mod simulator;
 
 pub use self::ll::{LLGrammar, LLParsingTable};
+pub use self::lr::{LRGrammar, LRParsingTable};
 pub use self::simulator::{LLParser, PullParser, PushParser};
 
 /// Represents the empty value `ε` when appearing in the first set or follow

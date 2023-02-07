@@ -116,7 +116,11 @@ impl LLGrammar {
     /// Expects the grammar and the index of the starting non-terminal as input.
     ///
     /// Returns [`ParseError::LLError`] if there are FIRST/FIRST or FIRST/FOLLOW
-    /// conflicts. ```
+    /// conflicts.
+    ///
+    /// #Examples
+    /// Basic usage:
+    /// ```
     /// # use wisent::grammar::Grammar;
     /// # use wisent::parser::LLGrammar;
     /// let g = "sum: num PLUS num;

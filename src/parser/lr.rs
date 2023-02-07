@@ -1,5 +1,6 @@
 use super::conversion::flatten;
 use super::ll::{first, follow};
+use super::ENDLINE_VAL;
 use crate::error::ParseError;
 use crate::fxhashset;
 use crate::grammar::Grammar;
@@ -60,6 +61,39 @@ impl TryFrom<&Grammar> for LRGrammar {
             starting_rule,
             follow,
         })
+    }
+}
+
+impl LRGrammar {
+    /// Computes the SLR(1) parsing table for the given grammar.
+    ///
+    /// This table can be used in a [Table Driven Parser](super::LRParser).
+    ///
+    /// Expects the grammar and the index of the starting non-terminal as input.
+    ///
+    /// Returns [`ParseError::LRError`] if there are SHIFT/REDUCE or
+    /// REDUCE/REDUCE conflicts.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::LRGrammar;
+    /// let g = "sum: num PLUS num;
+    ///          num: INT | REAL;
+    ///          INT: [0-9]+;
+    ///          REAL: [0-9]+ '.' [0-9]+;
+    ///          PLUS: '+';";
+    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
+    /// let grammar_lr = LRGrammar::try_from(&grammar).unwrap();
+    /// let slr_table = grammar_lr.slr_parsing_table().unwrap();
+    /// ```
+    pub fn slr_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
+        slr_parsing_table(
+            &self.nonterminals,
+            self.token_names.len() as u32,
+            self.starting_rule,
+            &self.follow,
+        )
     }
 }
 
@@ -151,6 +185,90 @@ fn lr0_automaton(nonterminals: &[Vec<Vec<ParserSymbol>>], start: u32) -> LR0Auto
     LR0Automaton { nodes, edges }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ShiftReduceAction {
+    Shift(u32),
+    Reduce((u32, u16)),
+    Error,
+    Accept,
+}
+
+/// Stores the parsing table for a LR parser.
+#[derive(Debug, Clone)]
+pub struct LRParsingTable {
+    action: Vec<Vec<ShiftReduceAction>>,
+    goto: Vec<Vec<Option<u32>>>,
+}
+
+/// builds an SLR(1) parsing table
+fn slr_parsing_table(
+    nonterminals: &[Vec<Vec<ParserSymbol>>],
+    term_no: u32,
+    start: u32,
+    follow: &[FxHashSet<u32>],
+) -> Result<LRParsingTable, ParseError> {
+    // replace ENDLINE_VAL with the actual table index
+    let mut follow_indexed = follow.to_vec();
+    for set in follow_indexed.iter_mut() {
+        if set.contains(&ENDLINE_VAL) {
+            set.remove(&ENDLINE_VAL);
+            set.insert(term_no);
+        }
+    }
+    let automaton = lr0_automaton(nonterminals, start);
+    let mut action = Vec::with_capacity(automaton.nodes.len());
+    let mut goto = Vec::with_capacity(automaton.nodes.len());
+    for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
+        let mut action_entry = vec![ShiftReduceAction::Error; (term_no + 1) as usize];
+        let mut goto_entry = vec![None; nonterminals.len()];
+        // fill shift
+        for (symbol, target) in edge {
+            match symbol {
+                ParserSymbol::Terminal(t) => {
+                    action_entry[*t as usize] = ShiftReduceAction::Shift(*target)
+                }
+                ParserSymbol::NonTerminal(nt) => goto_entry[*nt as usize] = Some(*target),
+                ParserSymbol::Empty => panic!(),
+            }
+        }
+        // fill reduce
+        for item in node {
+            if nonterminals[item.rule as usize][item.production as usize]
+                .get(item.position as usize)
+                .is_none()
+            {
+                if item.rule != start {
+                    let red = ShiftReduceAction::Reduce((item.rule, item.production));
+                    for &follow_term in &follow_indexed[item.rule as usize] {
+                        let current_action = &mut action_entry[follow_term as usize];
+                        match current_action {
+                            ShiftReduceAction::Shift(_) => {
+                                return Err(ParseError::LRError {
+                                    message: "SHIFT/REDUCE conflict in SLR(1) generation"
+                                        .to_string(),
+                                })
+                            }
+                            ShiftReduceAction::Reduce(_) => {
+                                return Err(ParseError::LRError {
+                                    message: "REDUCE/REDUCE conflict in SLR(1) generation"
+                                        .to_string(),
+                                })
+                            }
+                            ShiftReduceAction::Error => *current_action = red,
+                            ShiftReduceAction::Accept => panic!(),
+                        }
+                    }
+                } else {
+                    action_entry[term_no as usize] = ShiftReduceAction::Accept;
+                }
+            }
+        }
+        action.push(action_entry);
+        goto.push(goto_entry);
+    }
+    Ok(LRParsingTable { action, goto })
+}
+
 // Supporting structs to avoid unwanted mixing of kernel/nonkernel using goto on
 // a non-closure and stuffs like that
 
@@ -239,9 +357,11 @@ struct Graph<T, U> {
 
 #[cfg(test)]
 mod tests {
-    use super::{closure, lr0_automaton, LR0Item};
+    use super::ShiftReduceAction::{Accept, Error, Reduce, Shift};
+    use super::{closure, lr0_automaton, slr_parsing_table, LR0Item};
     use crate::fxhashset;
     use crate::parser::conversion::flatten;
+    use crate::parser::ll::{first, follow};
     use crate::parser::lr::{goto, KernelLR0Item};
     use crate::parser::tests::grammar_440;
     use crate::parser::ParserSymbol;
@@ -360,5 +480,44 @@ mod tests {
             vec![],
         ];
         assert_eq!(expected_edges, collection.edges);
+    }
+
+    #[test]
+    fn slr1() {
+        let grammar = grammar_440();
+        let nonterminals = flatten(&grammar).unwrap();
+        let first = first(&nonterminals);
+        let follow = follow(&nonterminals, &first, 0);
+        let table = slr_parsing_table(&nonterminals, 5, 0, &follow).unwrap();
+        let expected_action = vec![
+            vec![Error, Error, Shift(3), Error, Shift(5), Error],
+            vec![Shift(7), Error, Error, Error, Error, Accept],
+            vec![Reduce((1, 1)), Shift(10), Error, Reduce((1, 1)), Error, Reduce((1, 1))],
+            vec![Error, Error, Shift(3), Error, Shift(5), Error],
+            vec![Reduce((2, 1)), Reduce((2, 1)), Error, Reduce((2, 1)), Error, Reduce((2, 1))],
+            vec![Reduce((3, 1)), Reduce((3, 1)), Error, Reduce((3, 1)), Error, Reduce((3, 1))],
+            vec![Shift(7), Error, Error, Shift(8), Error, Error],
+            vec![Error, Error, Shift(3), Error, Shift(5), Error],
+            vec![Reduce((3, 0)), Reduce((3, 0)), Error, Reduce((3, 0)), Error, Reduce((3, 0))],
+            vec![Reduce((1, 0)), Shift(10), Error, Reduce((1, 0)), Error, Reduce((1, 0))],
+            vec![Error, Error, Shift(3), Error, Shift(5), Error],
+            vec![Reduce((2, 0)), Reduce((2, 0)), Error, Reduce((2, 0)), Error, Reduce((2, 0))],
+        ];
+        let expected_goto = vec![
+            vec![None, Some(1), Some(2), Some(4)],
+            vec![None, None, None, None],
+            vec![None, None, None, None],
+            vec![None, Some(6), Some(2), Some(4)],
+            vec![None, None, None, None],
+            vec![None, None, None, None],
+            vec![None, None, None, None],
+            vec![None, None, Some(9), Some(4)],
+            vec![None, None, None, None],
+            vec![None, None, None, None],
+            vec![None, None, None, Some(11)],
+            vec![None, None, None, None],
+        ];
+        assert_eq!(table.action, expected_action);
+        assert_eq!(table.goto, expected_goto);
     }
 }
