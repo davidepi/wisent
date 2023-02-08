@@ -393,7 +393,7 @@ pub struct LLParsingTable {
 }
 
 impl LLParsingTable {
-    /// The value assigned to the EOF character($) in the current table.
+    /// The value assigned to the EOF character (`$`) in the current table.
     pub(super) fn eof_val(&self) -> u32 {
         self.terminals
     }

@@ -196,8 +196,21 @@ pub enum ShiftReduceAction {
 /// Stores the parsing table for a LR parser.
 #[derive(Debug, Clone)]
 pub struct LRParsingTable {
-    action: Vec<Vec<ShiftReduceAction>>,
-    goto: Vec<Vec<Option<u32>>>,
+    pub(super) action: Vec<Vec<ShiftReduceAction>>,
+    pub(super) goto: Vec<Vec<Option<u32>>>,
+    /// Stores the flattened grammar.
+    /// Used to know how many nonterminals or tokens to pop when reducing.
+    pub(super) nonterminals: Vec<Vec<Vec<ParserSymbol>>>,
+}
+
+impl LRParsingTable {
+    /// The value assigned to the EOF character (`$`) in the current table.
+    pub(super) fn eof_val(&self) -> u32 {
+        self.action
+            .get(0)
+            .and_then(|x| Some(x.len() - 1))
+            .unwrap_or(0) as u32
+    }
 }
 
 /// builds an SLR(1) parsing table
@@ -266,7 +279,11 @@ fn slr_parsing_table(
         action.push(action_entry);
         goto.push(goto_entry);
     }
-    Ok(LRParsingTable { action, goto })
+    Ok(LRParsingTable {
+        action,
+        goto,
+        nonterminals: nonterminals.to_vec(),
+    })
 }
 
 // Supporting structs to avoid unwanted mixing of kernel/nonkernel using goto on

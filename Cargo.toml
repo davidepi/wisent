@@ -12,7 +12,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "wisent-generator"
 path = "src/main.rs"
-required-features = ["parser-generator"]
+required-features = ["parser_generator"]
 
 [profile.release]
 lto = "fat"
@@ -37,4 +37,4 @@ harness = false
 [features]
 default = []
 trace_parser = []
-parser-generator = ["serde_json", "clap", "bincode"]
+parser_generator = ["serde_json", "clap", "bincode"]
