@@ -92,4 +92,15 @@ mod tests {
              Id: [0123456789]+;";
         Grammar::parse_bootstrap(g).unwrap()
     }
+
+    /// Grammar of exercise 4.54 of the dragon book. Page 263 on the second
+    /// edition. Used in parser tests.
+    pub(super) fn grammar_454() -> Grammar {
+        let g = "s1: s;
+            s: c c;
+            c: C c | D;
+            C: 'c';
+            D: 'd';";
+        Grammar::parse_bootstrap(g).unwrap()
+    }
 }

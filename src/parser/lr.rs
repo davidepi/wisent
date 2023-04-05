@@ -65,6 +65,36 @@ impl TryFrom<&Grammar> for LRGrammar {
 }
 
 impl LRGrammar {
+    /// Computes the LR(0) parsing table for the given grammar.
+    ///
+    /// This table can be used in a [Table Driven Parser](super::LRParser).
+    ///
+    /// Expects the grammar and the index of the starting non-terminal as input.
+    ///
+    /// Returns [`ParseError::LRError`] if there are SHIFT/REDUCE or
+    /// REDUCE/REDUCE conflicts.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::LRGrammar;
+    /// let g = "sum: num PLUS num;
+    ///          num: INT | REAL;
+    ///          INT: [0-9]+;
+    ///          REAL: [0-9]+ '.' [0-9]+;
+    ///          PLUS: '+';";
+    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
+    /// let grammar_lr = LRGrammar::try_from(&grammar).unwrap();
+    /// let lr0_table = grammar_lr.lr0_parsing_table().unwrap();
+    /// ```
+    pub fn lr0_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
+        lr0_parsing_table(
+            &self.nonterminals,
+            self.token_names.len() as u32,
+            self.starting_rule,
+        )
+    }
+
     /// Computes the SLR(1) parsing table for the given grammar.
     ///
     /// This table can be used in a [Table Driven Parser](super::LRParser).
@@ -185,7 +215,7 @@ fn lr0_automaton(nonterminals: &[Vec<Vec<ParserSymbol>>], start: u32) -> LR0Auto
     LR0Automaton { nodes, edges }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ShiftReduceAction {
     Shift(u32),
     Reduce((u32, u16)),
@@ -211,6 +241,71 @@ impl LRParsingTable {
             .and_then(|x| Some(x.len() - 1))
             .unwrap_or(0) as u32
     }
+}
+
+/// builds an LR(0) parsing table
+fn lr0_parsing_table(
+    nonterminals: &[Vec<Vec<ParserSymbol>>],
+    term_no: u32,
+    start: u32,
+) -> Result<LRParsingTable, ParseError> {
+    let automaton = lr0_automaton(nonterminals, start);
+    let mut action = Vec::with_capacity(automaton.nodes.len());
+    let mut goto = Vec::with_capacity(automaton.nodes.len());
+    for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
+        let mut action_entry = vec![ShiftReduceAction::Error; (term_no + 1) as usize];
+        let mut goto_entry = vec![None; nonterminals.len()];
+        // fill shift
+        for (symbol, target) in edge {
+            match symbol {
+                ParserSymbol::Terminal(t) => {
+                    action_entry[*t as usize] = ShiftReduceAction::Shift(*target)
+                }
+                ParserSymbol::NonTerminal(nt) => goto_entry[*nt as usize] = Some(*target),
+                ParserSymbol::Empty => panic!(),
+            }
+        }
+        // fill reduce
+        for item in node {
+            if nonterminals[item.rule as usize][item.production as usize]
+                .get(item.position as usize)
+                .is_none()
+            {
+                if item.rule != start {
+                    let red = ShiftReduceAction::Reduce((item.rule, item.production));
+                    for term in 0..=term_no {
+                        // term_no is ENDLINE_VAL
+                        let current_action = &mut action_entry[term as usize];
+                        match current_action {
+                            ShiftReduceAction::Shift(_) => {
+                                return Err(ParseError::LRError {
+                                    message: "SHIFT/REDUCE conflict in LR(0) generation"
+                                        .to_string(),
+                                })
+                            }
+                            ShiftReduceAction::Reduce(_) => {
+                                return Err(ParseError::LRError {
+                                    message: "REDUCE/REDUCE conflict in LR(0) generation"
+                                        .to_string(),
+                                })
+                            }
+                            ShiftReduceAction::Error => *current_action = red,
+                            ShiftReduceAction::Accept => panic!(),
+                        }
+                    }
+                } else {
+                    action_entry[term_no as usize] = ShiftReduceAction::Accept;
+                }
+            }
+        }
+        action.push(action_entry);
+        goto.push(goto_entry);
+    }
+    Ok(LRParsingTable {
+        action,
+        goto,
+        nonterminals: nonterminals.to_vec(),
+    })
 }
 
 /// builds an SLR(1) parsing table
@@ -375,12 +470,12 @@ struct Graph<T, U> {
 #[cfg(test)]
 mod tests {
     use super::ShiftReduceAction::{Accept, Error, Reduce, Shift};
-    use super::{closure, lr0_automaton, slr_parsing_table, LR0Item};
+    use super::{closure, lr0_parsing_table, slr_parsing_table, LR0Item, LRParsingTable};
     use crate::fxhashset;
     use crate::parser::conversion::flatten;
     use crate::parser::ll::{first, follow};
     use crate::parser::lr::{goto, KernelLR0Item};
-    use crate::parser::tests::grammar_440;
+    use crate::parser::tests::{grammar_440, grammar_454};
     use crate::parser::ParserSymbol;
 
     #[test]
@@ -428,75 +523,78 @@ mod tests {
         assert!(advanced.is_empty());
     }
 
+    // parsing table state ID is non deterministic, so to keep a decently
+    // maintainable test the parsing tables are compared in the type of entries
+    // only (i.e. state number is dropped and it is checked that n row should
+    // have k number of shifts, etc.)
+    fn compare_tables(mut result: LRParsingTable, mut expected: LRParsingTable) {
+        assert_eq!(result.action.len(), expected.action.len());
+        assert_eq!(result.goto.len(), expected.goto.len());
+        for row in expected.action.iter_mut() {
+            for action in row.iter_mut() {
+                match action {
+                    Shift(_) => *action = Shift(0),
+                    Reduce(_) => *action = Reduce((0, 0)),
+                    Error => (),
+                    Accept => (),
+                }
+            }
+        }
+        for row in expected.goto.iter_mut() {
+            for action in row.iter_mut().flatten() {
+                *action = 0;
+            }
+        }
+        expected.goto.sort();
+        expected.action.sort();
+        for row in result.action.iter_mut() {
+            for action in row.iter_mut() {
+                match action {
+                    Shift(_) => *action = Shift(0),
+                    Reduce(_) => *action = Reduce((0, 0)),
+                    Error => (),
+                    Accept => (),
+                }
+            }
+        }
+        for row in result.goto.iter_mut() {
+            for action in row.iter_mut().flatten() {
+                *action = 0;
+            }
+        }
+        result.goto.sort();
+        result.action.sort();
+        assert_eq!(result.action, expected.action);
+        assert_eq!(result.goto, expected.goto);
+    }
+
     #[test]
-    fn canonical_lr0_automaton() {
-        let grammar = grammar_440();
+    fn lr0() {
+        let grammar = grammar_454();
         let nonterminals = flatten(&grammar).unwrap();
-        let collection = lr0_automaton(&nonterminals, 0);
-        // IXX number refers to the Ids in the dragon book example.
-        let expected_nodes = vec![
-            fxhashset!(KernelLR0Item { rule: 0, production: 0, position: 0 }), // I0
-            fxhashset!(
-                KernelLR0Item { rule: 0, production: 0, position: 1 },
-                KernelLR0Item { rule: 1, production: 0, position: 1 }
-            ), // I1
-            fxhashset!(
-                KernelLR0Item { rule: 2, production: 0, position: 1 },
-                KernelLR0Item { rule: 1, production: 1, position: 1 }
-            ), // I2
-            fxhashset!(KernelLR0Item { rule: 3, production: 0, position: 1 }), // I4
-            fxhashset!(KernelLR0Item { rule: 2, production: 1, position: 1 }), // I3
-            fxhashset!(KernelLR0Item { rule: 3, production: 1, position: 1 }), // I5
-            fxhashset!(
-                KernelLR0Item { rule: 1, production: 0, position: 1 },
-                KernelLR0Item { rule: 3, production: 0, position: 2 }
-            ), // I8
-            fxhashset!(KernelLR0Item { rule: 1, production: 0, position: 2 }), // I6
-            fxhashset!(KernelLR0Item { rule: 3, production: 0, position: 3 }), // I11
-            fxhashset!(
-                KernelLR0Item { rule: 2, production: 0, position: 1 },
-                KernelLR0Item { rule: 1, production: 0, position: 3 }
-            ), // I9
-            fxhashset!(KernelLR0Item { rule: 2, production: 0, position: 2 }), // I7
-            fxhashset!(KernelLR0Item { rule: 2, production: 0, position: 3 }), // I10
-        ];
-        assert_eq!(expected_nodes, collection.nodes);
-        let expected_edges = vec![
-            vec![
-                (ParserSymbol::Terminal(2), 3),
-                (ParserSymbol::Terminal(4), 5),
-                (ParserSymbol::NonTerminal(1), 1),
-                (ParserSymbol::NonTerminal(2), 2),
-                (ParserSymbol::NonTerminal(3), 4),
+        let table = lr0_parsing_table(&nonterminals, 2, 0).unwrap();
+        let expected = LRParsingTable {
+            action: vec![
+                vec![Shift(1), Shift(2), Error],
+                vec![Shift(1), Shift(2), Error],
+                vec![Reduce((2, 1)), Reduce((2, 1)), Reduce((2, 1))],
+                vec![Error, Error, Accept],
+                vec![Shift(1), Shift(2), Error],
+                vec![Reduce((1, 0)), Reduce((1, 0)), Reduce((1, 0))],
+                vec![Reduce((2, 0)), Reduce((2, 0)), Reduce((2, 0))],
             ],
-            vec![(ParserSymbol::Terminal(0), 7)],
-            vec![(ParserSymbol::Terminal(1), 10)],
-            vec![
-                (ParserSymbol::Terminal(2), 3),
-                (ParserSymbol::Terminal(4), 5),
-                (ParserSymbol::NonTerminal(1), 6),
-                (ParserSymbol::NonTerminal(2), 2),
-                (ParserSymbol::NonTerminal(3), 4),
+            goto: vec![
+                vec![None, Some(3), Some(4)],
+                vec![None, None, Some(6)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, Some(5)],
+                vec![None, None, None],
+                vec![None, None, None],
             ],
-            vec![],
-            vec![],
-            vec![(ParserSymbol::Terminal(0), 7), (ParserSymbol::Terminal(3), 8)],
-            vec![
-                (ParserSymbol::Terminal(2), 3),
-                (ParserSymbol::Terminal(4), 5),
-                (ParserSymbol::NonTerminal(2), 9),
-                (ParserSymbol::NonTerminal(3), 4),
-            ],
-            vec![],
-            vec![(ParserSymbol::Terminal(1), 10)],
-            vec![
-                (ParserSymbol::Terminal(2), 3),
-                (ParserSymbol::Terminal(4), 5),
-                (ParserSymbol::NonTerminal(3), 11),
-            ],
-            vec![],
-        ];
-        assert_eq!(expected_edges, collection.edges);
+            nonterminals,
+        };
+        compare_tables(table, expected);
     }
 
     #[test]
@@ -506,35 +604,37 @@ mod tests {
         let first = first(&nonterminals);
         let follow = follow(&nonterminals, &first, 0);
         let table = slr_parsing_table(&nonterminals, 5, 0, &follow).unwrap();
-        let expected_action = vec![
-            vec![Error, Error, Shift(3), Error, Shift(5), Error],
-            vec![Shift(7), Error, Error, Error, Error, Accept],
-            vec![Reduce((1, 1)), Shift(10), Error, Reduce((1, 1)), Error, Reduce((1, 1))],
-            vec![Error, Error, Shift(3), Error, Shift(5), Error],
-            vec![Reduce((2, 1)), Reduce((2, 1)), Error, Reduce((2, 1)), Error, Reduce((2, 1))],
-            vec![Reduce((3, 1)), Reduce((3, 1)), Error, Reduce((3, 1)), Error, Reduce((3, 1))],
-            vec![Shift(7), Error, Error, Shift(8), Error, Error],
-            vec![Error, Error, Shift(3), Error, Shift(5), Error],
-            vec![Reduce((3, 0)), Reduce((3, 0)), Error, Reduce((3, 0)), Error, Reduce((3, 0))],
-            vec![Reduce((1, 0)), Shift(10), Error, Reduce((1, 0)), Error, Reduce((1, 0))],
-            vec![Error, Error, Shift(3), Error, Shift(5), Error],
-            vec![Reduce((2, 0)), Reduce((2, 0)), Error, Reduce((2, 0)), Error, Reduce((2, 0))],
-        ];
-        let expected_goto = vec![
-            vec![None, Some(1), Some(2), Some(4)],
-            vec![None, None, None, None],
-            vec![None, None, None, None],
-            vec![None, Some(6), Some(2), Some(4)],
-            vec![None, None, None, None],
-            vec![None, None, None, None],
-            vec![None, None, None, None],
-            vec![None, None, Some(9), Some(4)],
-            vec![None, None, None, None],
-            vec![None, None, None, None],
-            vec![None, None, None, Some(11)],
-            vec![None, None, None, None],
-        ];
-        assert_eq!(table.action, expected_action);
-        assert_eq!(table.goto, expected_goto);
+        let expected = LRParsingTable {
+            action: vec![
+                vec![Error, Error, Shift(3), Error, Shift(5), Error],
+                vec![Shift(7), Error, Error, Error, Error, Accept],
+                vec![Reduce((1, 1)), Shift(10), Error, Reduce((1, 1)), Error, Reduce((1, 1))],
+                vec![Error, Error, Shift(3), Error, Shift(5), Error],
+                vec![Reduce((2, 1)), Reduce((2, 1)), Error, Reduce((2, 1)), Error, Reduce((2, 1))],
+                vec![Reduce((3, 1)), Reduce((3, 1)), Error, Reduce((3, 1)), Error, Reduce((3, 1))],
+                vec![Shift(7), Error, Error, Shift(8), Error, Error],
+                vec![Error, Error, Shift(3), Error, Shift(5), Error],
+                vec![Reduce((3, 0)), Reduce((3, 0)), Error, Reduce((3, 0)), Error, Reduce((3, 0))],
+                vec![Reduce((1, 0)), Shift(10), Error, Reduce((1, 0)), Error, Reduce((1, 0))],
+                vec![Error, Error, Shift(3), Error, Shift(5), Error],
+                vec![Reduce((2, 0)), Reduce((2, 0)), Error, Reduce((2, 0)), Error, Reduce((2, 0))],
+            ],
+            goto: vec![
+                vec![None, Some(1), Some(2), Some(4)],
+                vec![None, None, None, None],
+                vec![None, None, None, None],
+                vec![None, Some(6), Some(2), Some(4)],
+                vec![None, None, None, None],
+                vec![None, None, None, None],
+                vec![None, None, None, None],
+                vec![None, None, Some(9), Some(4)],
+                vec![None, None, None, None],
+                vec![None, None, None, None],
+                vec![None, None, None, Some(11)],
+                vec![None, None, None, None],
+            ],
+            nonterminals,
+        };
+        compare_tables(table, expected);
     }
 }
