@@ -1,6 +1,6 @@
 use super::conversion::flatten;
 use super::ll::{first, follow};
-use super::ENDLINE_VAL;
+use super::{ENDLINE_VAL, EPSILON_VAL};
 use crate::error::ParseError;
 use crate::fxhashset;
 use crate::grammar::Grammar;
@@ -127,14 +127,17 @@ impl LRGrammar {
     }
 }
 
-/// Expands a list of LR0 kernel items.
-fn closure(
-    items: &FxHashSet<KernelLR0Item>,
+/// Expands a list of LR<k> kernel items.
+/// `first` can be empty if K = 0
+fn closure<const K: usize>(
+    items: &FxHashSet<KernelLRItem<K>>,
     nonterminals: &[Vec<Vec<ParserSymbol>>],
-) -> FxHashSet<LR0Item> {
+    first: &[FxHashSet<u32>],
+) -> FxHashSet<LRItem<K>> {
+    assert!(K < 2);
     let mut set = items
         .iter()
-        .map(|x| LR0Item::from(*x))
+        .map(|x| LRItem::from(*x))
         .collect::<FxHashSet<_>>();
     let mut old_len = 0;
     let mut new_len = set.len();
@@ -146,8 +149,32 @@ fn closure(
                 let new_items = nonterminals[nt as usize]
                     .iter()
                     .enumerate()
-                    .map(|(prod_id, _)| LR0Item::nonkernel(nt, prod_id as u16));
-                to_add.extend(new_items);
+                    .map(|(prod_id, _)| LRItem::nonkernel(nt, prod_id as u16, [0; K]))
+                    .collect::<Vec<_>>();
+                if K == 1 {
+                    let lookaheads = match item.next().peek(nonterminals) {
+                        ParserSymbol::Terminal(t) => fxhashset!(t),
+                        ParserSymbol::NonTerminal(nt) => first[nt as usize].clone(),
+                        ParserSymbol::Empty => fxhashset!(EPSILON_VAL),
+                    }
+                    .into_iter()
+                    .map(|x| {
+                        if x == EPSILON_VAL {
+                            item.lookahead()[0]
+                        } else {
+                            x
+                        }
+                    });
+                    for lookahead in lookaheads {
+                        let new_items_with_lookaheads = new_items.iter().copied().map(|mut n| {
+                            n.lookahead_mut()[0] = lookahead;
+                            n
+                        });
+                        to_add.extend(new_items_with_lookaheads);
+                    }
+                } else {
+                    to_add.extend(new_items.into_iter());
+                }
             } else {
                 // do nothing for items like A -> · or terminals
             }
@@ -158,13 +185,13 @@ fn closure(
     set
 }
 
-/// Advances a closure of LR0 kernel items and returns only the kernel items
+/// Advances a closure of LR<k> kernel items and returns only the kernel items
 /// composing the new list.
-fn goto(
-    items: &FxHashSet<LR0Item>,
+fn goto<const K: usize>(
+    items: &FxHashSet<LRItem<K>>,
     symbol: ParserSymbol,
     nonterminals: &[Vec<Vec<ParserSymbol>>],
-) -> FxHashSet<KernelLR0Item> {
+) -> FxHashSet<KernelLRItem<K>> {
     let mut advanced = FxHashSet::default();
     for item in items {
         if item.peek(nonterminals) == symbol {
@@ -174,19 +201,25 @@ fn goto(
     advanced
         .into_iter()
         .filter_map(|x| match x {
-            LR0Item::Kernel(k) => Some(k),
-            LR0Item::NonKernel(_) => None,
+            LRItem::Kernel(k) => Some(k),
+            LRItem::NonKernel(_) => None,
         })
         .collect()
 }
 
 /// Calculates the DFA representing the LR0 automaton.
 /// Sometimes called canonical lr0 collection.
-fn lr0_automaton(nonterminals: &[Vec<Vec<ParserSymbol>>], start: u32) -> LR0Automaton {
-    let start_kernel = fxhashset!(KernelLR0Item {
+/// `first` can be empty if K = 0
+fn lr_automaton<const K: usize>(
+    nonterminals: &[Vec<Vec<ParserSymbol>>],
+    first: &[FxHashSet<u32>],
+    start: u32,
+) -> LRAutomaton<K> {
+    let start_kernel = fxhashset!(KernelLRItem::<K> {
         rule: start,
         production: 0,
-        position: 0
+        position: 0,
+        lookahead: [ENDLINE_VAL; K],
     });
     let mut nodes = vec![start_kernel];
     let mut edges = vec![vec![]];
@@ -195,7 +228,7 @@ fn lr0_automaton(nonterminals: &[Vec<Vec<ParserSymbol>>], start: u32) -> LR0Auto
     while let Some(set_id) = todo.pop() {
         done.insert(set_id);
         let kernel = &nodes[set_id];
-        let clos = closure(kernel, nonterminals);
+        let clos = closure(kernel, nonterminals, first);
         for &item in &clos {
             let peek = item.peek(nonterminals);
             if peek != ParserSymbol::Empty {
@@ -212,7 +245,7 @@ fn lr0_automaton(nonterminals: &[Vec<Vec<ParserSymbol>>], start: u32) -> LR0Auto
         edges[set_id].sort_unstable();
         edges[set_id].dedup();
     }
-    LR0Automaton { nodes, edges }
+    LRAutomaton { nodes, edges }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -236,10 +269,7 @@ pub struct LRParsingTable {
 impl LRParsingTable {
     /// The value assigned to the EOF character (`$`) in the current table.
     pub(super) fn eof_val(&self) -> u32 {
-        self.action
-            .get(0)
-            .and_then(|x| Some(x.len() - 1))
-            .unwrap_or(0) as u32
+        self.action.get(0).map(|x| x.len() - 1).unwrap_or(0) as u32
     }
 }
 
@@ -249,7 +279,7 @@ fn lr0_parsing_table(
     term_no: u32,
     start: u32,
 ) -> Result<LRParsingTable, ParseError> {
-    let automaton = lr0_automaton(nonterminals, start);
+    let automaton = lr_automaton::<0>(nonterminals, &[], start);
     let mut action = Vec::with_capacity(automaton.nodes.len());
     let mut goto = Vec::with_capacity(automaton.nodes.len());
     for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
@@ -327,7 +357,7 @@ fn slr_parsing_table(
             set.insert(term_no);
         }
     }
-    let automaton = lr0_automaton(nonterminals, start);
+    let automaton = lr_automaton::<0>(nonterminals, &[], start);
     let mut action = Vec::with_capacity(automaton.nodes.len());
     let mut goto = Vec::with_capacity(automaton.nodes.len());
     for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
@@ -394,47 +424,55 @@ fn slr_parsing_table(
 // a non-closure and stuffs like that
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-struct KernelLR0Item {
+struct KernelLRItem<const K: usize> {
     rule: u32,
     production: u16,
     position: u16,
+    lookahead: [u32; K],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-struct NonKernelLR0Item {
+struct NonKernelLRItem<const K: usize> {
     rule: u32,
     production: u16,
+    lookahead: [u32; K],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-enum LR0Item {
-    Kernel(KernelLR0Item),
-    NonKernel(NonKernelLR0Item),
+enum LRItem<const K: usize> {
+    Kernel(KernelLRItem<K>),
+    NonKernel(NonKernelLRItem<K>),
 }
 
-impl LR0Item {
-    fn kernel(rule: u32, production: u16, position: u16) -> Self {
-        Self::Kernel(KernelLR0Item { rule, production, position })
+impl<const K: usize> LRItem<K> {
+    fn kernel(rule: u32, production: u16, position: u16, lookahead: [u32; K]) -> Self {
+        Self::Kernel(KernelLRItem {
+            rule,
+            production,
+            position,
+            lookahead,
+        })
     }
 
-    fn nonkernel(rule: u32, production: u16) -> Self {
-        Self::NonKernel(NonKernelLR0Item { rule, production })
+    fn nonkernel(rule: u32, production: u16, lookahead: [u32; K]) -> Self {
+        Self::NonKernel(NonKernelLRItem { rule, production, lookahead })
     }
 
     #[must_use]
     fn next(&self) -> Self {
-        Self::Kernel(KernelLR0Item {
+        Self::Kernel(KernelLRItem {
             rule: self.rule(),
             production: self.production(),
             position: self.position() + 1,
+            lookahead: self.lookahead(),
         })
     }
 
     // returns the next symbol. ParserSymbol::Empty in case of A -> ·
     fn peek(&self, nonterminals: &[Vec<Vec<ParserSymbol>>]) -> ParserSymbol {
         let (r, p, i) = match self {
-            LR0Item::Kernel(k) => (k.rule as usize, k.production as usize, k.position as usize),
-            LR0Item::NonKernel(nk) => (nk.rule as usize, nk.production as usize, 0),
+            LRItem::Kernel(k) => (k.rule as usize, k.production as usize, k.position as usize),
+            LRItem::NonKernel(nk) => (nk.rule as usize, nk.production as usize, 0),
         };
         nonterminals[r][p]
             .get(i)
@@ -444,33 +482,47 @@ impl LR0Item {
 
     fn rule(&self) -> u32 {
         match self {
-            LR0Item::Kernel(k) => k.rule,
-            LR0Item::NonKernel(nk) => nk.rule,
+            LRItem::Kernel(k) => k.rule,
+            LRItem::NonKernel(nk) => nk.rule,
         }
     }
 
     fn production(&self) -> u16 {
         match self {
-            LR0Item::Kernel(k) => k.production,
-            LR0Item::NonKernel(nk) => nk.production,
+            LRItem::Kernel(k) => k.production,
+            LRItem::NonKernel(nk) => nk.production,
         }
     }
 
     fn position(&self) -> u16 {
         match self {
-            LR0Item::Kernel(k) => k.position,
-            LR0Item::NonKernel(_) => 0,
+            LRItem::Kernel(k) => k.position,
+            LRItem::NonKernel(_) => 0,
+        }
+    }
+
+    fn lookahead(&self) -> [u32; K] {
+        match self {
+            LRItem::Kernel(k) => k.lookahead,
+            LRItem::NonKernel(nk) => nk.lookahead,
+        }
+    }
+
+    fn lookahead_mut(&mut self) -> &mut [u32; K] {
+        match self {
+            LRItem::Kernel(k) => &mut k.lookahead,
+            LRItem::NonKernel(nk) => &mut nk.lookahead,
         }
     }
 }
 
-impl From<KernelLR0Item> for LR0Item {
-    fn from(value: KernelLR0Item) -> Self {
-        LR0Item::Kernel(value)
+impl<const K: usize> From<KernelLRItem<K>> for LRItem<K> {
+    fn from(value: KernelLRItem<K>) -> Self {
+        LRItem::Kernel(value)
     }
 }
 
-type LR0Automaton = Graph<FxHashSet<KernelLR0Item>, ParserSymbol>;
+type LRAutomaton<const K: usize> = Graph<FxHashSet<KernelLRItem<K>>, ParserSymbol>;
 struct Graph<T, U> {
     nodes: Vec<T>,
     edges: Vec<Vec<(U, u32)>>,
@@ -479,55 +531,110 @@ struct Graph<T, U> {
 #[cfg(test)]
 mod tests {
     use super::ShiftReduceAction::{Accept, Error, Reduce, Shift};
-    use super::{closure, lr0_parsing_table, slr_parsing_table, LR0Item, LRParsingTable};
+    use super::{
+        closure, lr0_parsing_table, slr_parsing_table, LRItem, LRParsingTable, ENDLINE_VAL,
+    };
     use crate::fxhashset;
     use crate::parser::conversion::flatten;
     use crate::parser::ll::{first, follow};
-    use crate::parser::lr::{goto, KernelLR0Item};
+    use crate::parser::lr::{goto, KernelLRItem};
     use crate::parser::tests::{grammar_440, grammar_454};
     use crate::parser::ParserSymbol;
 
     #[test]
-    fn closure_set() {
+    fn closure_set_lookahead0() {
         let grammar = grammar_440();
         let nonterminals = flatten(&grammar).unwrap();
-        let items = fxhashset!(KernelLR0Item { rule: 0, production: 0, position: 0 });
-        let closure = closure(&items, nonterminals.as_slice());
+        let items = fxhashset!(KernelLRItem::<0> {
+            rule: 0,
+            production: 0,
+            position: 0,
+            lookahead: []
+        });
+        let closure = closure(&items, nonterminals.as_slice(), &[]);
         let expected = fxhashset!(
-            LR0Item::kernel(0, 0, 0),
-            LR0Item::nonkernel(1, 0),
-            LR0Item::nonkernel(1, 1),
-            LR0Item::nonkernel(2, 0),
-            LR0Item::nonkernel(2, 1),
-            LR0Item::nonkernel(3, 0),
-            LR0Item::nonkernel(3, 1),
+            LRItem::<0>::kernel(0, 0, 0, []),
+            LRItem::<0>::nonkernel(1, 0, []),
+            LRItem::<0>::nonkernel(1, 1, []),
+            LRItem::<0>::nonkernel(2, 0, []),
+            LRItem::<0>::nonkernel(2, 1, []),
+            LRItem::<0>::nonkernel(3, 0, []),
+            LRItem::<0>::nonkernel(3, 1, []),
         );
         assert_eq!(closure, expected);
     }
 
     #[test]
-    fn goto_function() {
+    fn closure_set_lookahead1() {
+        let grammar = grammar_454();
+        let nonterminals = flatten(&grammar).unwrap();
+        let items = fxhashset!(KernelLRItem::<1> {
+            rule: 0,
+            production: 0,
+            position: 0,
+            lookahead: [ENDLINE_VAL]
+        });
+        let first = first(&nonterminals);
+        let closure = closure(&items, nonterminals.as_slice(), &first);
+        let expected = fxhashset!(
+            LRItem::<1>::kernel(0, 0, 0, [ENDLINE_VAL]),
+            LRItem::<1>::nonkernel(1, 0, [ENDLINE_VAL]),
+            LRItem::<1>::nonkernel(2, 0, [0]),
+            LRItem::<1>::nonkernel(2, 0, [1]),
+            LRItem::<1>::nonkernel(2, 1, [0]),
+            LRItem::<1>::nonkernel(2, 1, [1]),
+        );
+        assert_eq!(closure, expected);
+    }
+
+    #[test]
+    fn goto_function_lookahead0() {
         let grammar = grammar_440();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(
-            KernelLR0Item { rule: 0, production: 0, position: 1 },
-            KernelLR0Item { rule: 1, production: 0, position: 1 }
+            KernelLRItem::<0> {
+                rule: 0,
+                production: 0,
+                position: 1,
+                lookahead: []
+            },
+            KernelLRItem::<0> {
+                rule: 1,
+                production: 0,
+                position: 1,
+                lookahead: []
+            }
         );
-        let ic = closure(&items, &nonterminals);
+        let ic = closure(&items, &nonterminals, &[]);
         let advanced = goto(&ic, ParserSymbol::Terminal(0), &nonterminals);
-        let expected = fxhashset!(KernelLR0Item { rule: 1, production: 0, position: 2 },);
+        let expected = fxhashset!(KernelLRItem::<0> {
+            rule: 1,
+            production: 0,
+            position: 2,
+            lookahead: []
+        },);
         assert_eq!(advanced, expected);
     }
 
     #[test]
-    fn goto_empty() {
+    fn goto_empty_lookahead0() {
         let grammar = grammar_440();
         let nonterminals = flatten(&grammar).unwrap();
         let items = fxhashset!(
-            KernelLR0Item { rule: 0, production: 0, position: 1 },
-            KernelLR0Item { rule: 1, production: 0, position: 1 }
+            KernelLRItem::<0> {
+                rule: 0,
+                production: 0,
+                position: 1,
+                lookahead: []
+            },
+            KernelLRItem::<0> {
+                rule: 1,
+                production: 0,
+                position: 1,
+                lookahead: []
+            }
         );
-        let ic = closure(&items, &nonterminals);
+        let ic = closure(&items, &nonterminals, &[]);
         let advanced = goto(&ic, ParserSymbol::Terminal(5), &nonterminals);
         assert!(advanced.is_empty());
     }
