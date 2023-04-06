@@ -59,7 +59,8 @@ impl std::fmt::Debug for ParseNode {
 mod tests {
     use crate::grammar::Grammar;
 
-    /// Grammar 4.28 of the dragon book. Page 217 on the second edition.
+    /// Grammar 4.28 of the dragon book second edition.
+    /// Page 217.
     /// Used in parser tests.
     pub(super) fn grammar_428() -> Grammar {
         let g = "e : t e1;
@@ -75,10 +76,8 @@ mod tests {
         Grammar::parse_bootstrap(g).unwrap()
     }
 
-    /// Grammar of exercise 4.40 of the dragon book. Page 244 on the second
-    /// edition.
-    ///
-    /// An augmented version of grammar 4.1.
+    /// Grammar of exercise 4.40 of the dragon book second edition.
+    /// Page 244.
     /// Used in parser tests.
     pub(super) fn grammar_440() -> Grammar {
         let g = "e1 : e;
@@ -93,14 +92,31 @@ mod tests {
         Grammar::parse_bootstrap(g).unwrap()
     }
 
-    /// Grammar of exercise 4.54 of the dragon book. Page 263 on the second
-    /// edition. Used in parser tests.
+    /// Grammar of exercise 4.54 of the dragon book second edition.
+    /// Page 263.
+    /// Used in parser tests.
     pub(super) fn grammar_454() -> Grammar {
         let g = "s1: s;
             s: c c;
             c: C c | D;
             C: 'c';
             D: 'd';";
+        Grammar::parse_bootstrap(g).unwrap()
+    }
+
+    /// Grammar of exercise 4.58 of the dragon book second edition.
+    /// Page 267.
+    /// Used in parser tests.
+    pub(super) fn grammar_458() -> Grammar {
+        let g = "s1: s;
+            s: A a D | B b D | A b E | B a E;
+            a: C;
+            b: C;
+            A: 'a';
+            B: 'b';
+            C: 'c';
+            D: 'd';
+            E: 'e';";
         Grammar::parse_bootstrap(g).unwrap()
     }
 }

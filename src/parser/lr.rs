@@ -25,6 +25,7 @@ pub struct LRGrammar {
     nonterminal_names: Vec<String>,
     nonterminals: Vec<Vec<Vec<ParserSymbol>>>,
     starting_rule: u32,
+    first: Vec<FxHashSet<u32>>,
     follow: Vec<FxHashSet<u32>>,
 }
 
@@ -59,6 +60,7 @@ impl TryFrom<&Grammar> for LRGrammar {
             nonterminal_names,
             nonterminals,
             starting_rule,
+            first,
             follow,
         })
     }
@@ -88,10 +90,42 @@ impl LRGrammar {
     /// let lr0_table = grammar_lr.lr0_parsing_table().unwrap();
     /// ```
     pub fn lr0_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
-        lr0_parsing_table(
+        lr_parsing_table::<0>(
             &self.nonterminals,
             self.token_names.len() as u32,
             self.starting_rule,
+            &self.first,
+        )
+    }
+
+    /// Computes the LR(1) parsing table for the given grammar.
+    ///
+    /// This table can be used in a [Table Driven Parser](super::LRParser).
+    ///
+    /// Expects the grammar and the index of the starting non-terminal as input.
+    ///
+    /// Returns [`ParseError::LRError`] if there are SHIFT/REDUCE or
+    /// REDUCE/REDUCE conflicts.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::LRGrammar;
+    /// let g = "sum: num PLUS num;
+    ///          num: INT | REAL;
+    ///          INT: [0-9]+;
+    ///          REAL: [0-9]+ '.' [0-9]+;
+    ///          PLUS: '+';";
+    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
+    /// let grammar_lr = LRGrammar::try_from(&grammar).unwrap();
+    /// let lr1_table = grammar_lr.lr1_parsing_table().unwrap();
+    /// ```
+    pub fn lr1_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
+        lr_parsing_table::<1>(
+            &self.nonterminals,
+            self.token_names.len() as u32,
+            self.starting_rule,
+            &self.first,
         )
     }
 
@@ -273,13 +307,14 @@ impl LRParsingTable {
     }
 }
 
-/// builds an LR(0) parsing table
-fn lr0_parsing_table(
+/// builds an LR(K) parsing table
+fn lr_parsing_table<const K: usize>(
     nonterminals: &[Vec<Vec<ParserSymbol>>],
     term_no: u32,
     start: u32,
+    first: &[FxHashSet<u32>],
 ) -> Result<LRParsingTable, ParseError> {
-    let automaton = lr_automaton::<0>(nonterminals, &[], start);
+    let automaton = lr_automaton::<K>(nonterminals, first, start);
     let mut action = Vec::with_capacity(automaton.nodes.len());
     let mut goto = Vec::with_capacity(automaton.nodes.len());
     for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
@@ -307,20 +342,33 @@ fn lr0_parsing_table(
             {
                 if item.rule != start {
                     let red = ShiftReduceAction::Reduce((item.rule, item.production));
-                    for term in 0..=term_no {
+                    let reduce_condition = if K == 1 {
+                        // convert lookahead from ENDLINE_VAL to the table index for $
+                        item.lookahead
+                            .into_iter()
+                            .map(|x| if x == ENDLINE_VAL { term_no } else { x })
+                            .collect::<Vec<_>>()
+                    } else {
+                        (0..=term_no).collect()
+                    };
+                    for term in reduce_condition {
                         // term_no is ENDLINE_VAL
                         let current_action = &mut action_entry[term as usize];
                         match current_action {
                             ShiftReduceAction::Shift(_) => {
                                 return Err(ParseError::LRError {
-                                    message: "SHIFT/REDUCE conflict in LR(0) generation"
-                                        .to_string(),
+                                    message: format!(
+                                        "SHIFT/REDUCE conflict in LR({}) generation",
+                                        K
+                                    ),
                                 })
                             }
                             ShiftReduceAction::Reduce(_) => {
                                 return Err(ParseError::LRError {
-                                    message: "REDUCE/REDUCE conflict in LR(0) generation"
-                                        .to_string(),
+                                    message: format!(
+                                        "SHIFT/REDUCE conflict in LR({}) generation",
+                                        K
+                                    ),
                                 })
                             }
                             ShiftReduceAction::Error => *current_action = red,
@@ -532,13 +580,13 @@ struct Graph<T, U> {
 mod tests {
     use super::ShiftReduceAction::{Accept, Error, Reduce, Shift};
     use super::{
-        closure, lr0_parsing_table, slr_parsing_table, LRItem, LRParsingTable, ENDLINE_VAL,
+        closure, lr_parsing_table, slr_parsing_table, LRItem, LRParsingTable, ENDLINE_VAL,
     };
     use crate::fxhashset;
     use crate::parser::conversion::flatten;
     use crate::parser::ll::{first, follow};
     use crate::parser::lr::{goto, KernelLRItem};
-    use crate::parser::tests::{grammar_440, grammar_454};
+    use crate::parser::tests::{grammar_440, grammar_454, grammar_458};
     use crate::parser::ParserSymbol;
 
     #[test]
@@ -688,7 +736,7 @@ mod tests {
     fn lr0() {
         let grammar = grammar_454();
         let nonterminals = flatten(&grammar).unwrap();
-        let table = lr0_parsing_table(&nonterminals, 2, 0).unwrap();
+        let table = lr_parsing_table::<0>(&nonterminals, 2, 0, &[]).unwrap();
         let expected = LRParsingTable {
             action: vec![
                 vec![Shift(1), Shift(2), Error],
@@ -747,6 +795,50 @@ mod tests {
                 vec![None, None, None],
                 vec![None, None, None],
                 vec![None, None, Some(11)],
+                vec![None, None, None],
+            ],
+            nonterminals,
+        };
+        compare_tables(table, expected);
+    }
+
+    #[test]
+    fn lr1() {
+        let grammar = grammar_458();
+        let nonterminals = flatten(&grammar).unwrap();
+        let first = first(&nonterminals);
+        let table = lr_parsing_table::<1>(&nonterminals, 5, 0, &first).unwrap();
+        let expected = LRParsingTable {
+            action: vec![
+                vec![Shift(2), Shift(3), Error, Error, Error, Error],
+                vec![Error, Error, Error, Error, Error, Accept],
+                vec![Error, Error, Shift(6), Error, Error, Error],
+                vec![Error, Error, Shift(9), Error, Error, Error],
+                vec![Error, Error, Error, Shift(10), Error, Error],
+                vec![Error, Error, Error, Error, Shift(11), Error],
+                vec![Error, Error, Error, Reduce((2, 0)), Reduce((3, 0)), Error],
+                vec![Error, Error, Error, Shift(12), Error, Error],
+                vec![Error, Error, Error, Error, Shift(13), Error],
+                vec![Error, Error, Error, Reduce((3, 0)), Reduce((2, 0)), Error],
+                vec![Error, Error, Error, Error, Error, Reduce((1, 0))],
+                vec![Error, Error, Error, Error, Error, Reduce((1, 1))],
+                vec![Error, Error, Error, Error, Error, Reduce((1, 2))],
+                vec![Error, Error, Error, Error, Error, Reduce((1, 3))],
+            ],
+            goto: vec![
+                vec![Some(1), None, None],
+                vec![None, None, None],
+                vec![None, Some(4), Some(5)],
+                vec![None, Some(8), Some(9)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
                 vec![None, None, None],
             ],
             nonterminals,
