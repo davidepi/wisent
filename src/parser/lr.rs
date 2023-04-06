@@ -254,14 +254,18 @@ fn lr0_parsing_table(
     let mut goto = Vec::with_capacity(automaton.nodes.len());
     for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
         let mut action_entry = vec![ShiftReduceAction::Error; (term_no + 1) as usize];
-        let mut goto_entry = vec![None; nonterminals.len()];
+        let mut goto_entry = vec![None; nonterminals.len() - 1];
         // fill shift
         for (symbol, target) in edge {
             match symbol {
                 ParserSymbol::Terminal(t) => {
                     action_entry[*t as usize] = ShiftReduceAction::Shift(*target)
                 }
-                ParserSymbol::NonTerminal(nt) => goto_entry[*nt as usize] = Some(*target),
+                ParserSymbol::NonTerminal(nt) => {
+                    // reindex goto to avoid the start symbol
+                    let index = if *nt > start { *nt - 1 } else { *nt };
+                    goto_entry[index as usize] = Some(*target)
+                }
                 ParserSymbol::Empty => panic!(),
             }
         }
@@ -328,14 +332,19 @@ fn slr_parsing_table(
     let mut goto = Vec::with_capacity(automaton.nodes.len());
     for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
         let mut action_entry = vec![ShiftReduceAction::Error; (term_no + 1) as usize];
-        let mut goto_entry = vec![None; nonterminals.len()];
+        // -1 because augmented production is not in the goto table.
+        let mut goto_entry = vec![None; nonterminals.len() - 1];
         // fill shift
         for (symbol, target) in edge {
             match symbol {
                 ParserSymbol::Terminal(t) => {
                     action_entry[*t as usize] = ShiftReduceAction::Shift(*target)
                 }
-                ParserSymbol::NonTerminal(nt) => goto_entry[*nt as usize] = Some(*target),
+                ParserSymbol::NonTerminal(nt) => {
+                    // reindex goto to avoid the start symbol
+                    let index = if *nt > start { *nt - 1 } else { *nt };
+                    goto_entry[index as usize] = Some(*target)
+                }
                 ParserSymbol::Empty => panic!(),
             }
         }
@@ -584,13 +593,13 @@ mod tests {
                 vec![Reduce((2, 0)), Reduce((2, 0)), Reduce((2, 0))],
             ],
             goto: vec![
-                vec![None, Some(3), Some(4)],
-                vec![None, None, Some(6)],
-                vec![None, None, None],
-                vec![None, None, None],
-                vec![None, None, Some(5)],
-                vec![None, None, None],
-                vec![None, None, None],
+                vec![Some(3), Some(4)],
+                vec![None, Some(6)],
+                vec![None, None],
+                vec![None, None],
+                vec![None, Some(5)],
+                vec![None, None],
+                vec![None, None],
             ],
             nonterminals,
         };
@@ -620,18 +629,18 @@ mod tests {
                 vec![Reduce((2, 0)), Reduce((2, 0)), Error, Reduce((2, 0)), Error, Reduce((2, 0))],
             ],
             goto: vec![
-                vec![None, Some(1), Some(2), Some(4)],
-                vec![None, None, None, None],
-                vec![None, None, None, None],
-                vec![None, Some(6), Some(2), Some(4)],
-                vec![None, None, None, None],
-                vec![None, None, None, None],
-                vec![None, None, None, None],
-                vec![None, None, Some(9), Some(4)],
-                vec![None, None, None, None],
-                vec![None, None, None, None],
-                vec![None, None, None, Some(11)],
-                vec![None, None, None, None],
+                vec![Some(1), Some(2), Some(4)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![Some(6), Some(2), Some(4)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, Some(9), Some(4)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, Some(11)],
+                vec![None, None, None],
             ],
             nonterminals,
         };
