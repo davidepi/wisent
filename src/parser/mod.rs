@@ -119,4 +119,18 @@ mod tests {
             E: 'e';";
         Grammar::parse_bootstrap(g).unwrap()
     }
+
+    /// Grammar of exercise 4.61 of the dragon book second edition.
+    /// Page 271.
+    /// Used in parser tests.
+    pub(super) fn grammar_461() -> Grammar {
+        let g = "s1: s;
+            s: l EQ r | r;
+            l: STAR r | ID;
+            r: l;
+            EQ: '=';
+            STAR: '*';
+            ID: 'id';";
+        Grammar::parse_bootstrap(g).unwrap()
+    }
 }

@@ -5,7 +5,8 @@ use crate::error::ParseError;
 use crate::fxhashset;
 use crate::grammar::Grammar;
 use crate::parser::ParserSymbol;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::HashMap;
 
 /// A grammar for LR Parsers
 ///
@@ -90,11 +91,12 @@ impl LRGrammar {
     /// let lr0_table = grammar_lr.lr0_parsing_table().unwrap();
     /// ```
     pub fn lr0_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
-        lr_parsing_table::<0>(
+        let automaton = lr_automaton::<0>(&self.nonterminals, &self.first, self.starting_rule);
+        lr_parsing_table(
+            automaton,
             &self.nonterminals,
             self.token_names.len() as u32,
             self.starting_rule,
-            &self.first,
         )
     }
 
@@ -121,11 +123,49 @@ impl LRGrammar {
     /// let lr1_table = grammar_lr.lr1_parsing_table().unwrap();
     /// ```
     pub fn lr1_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
-        lr_parsing_table::<1>(
+        let automaton = lr_automaton::<1>(&self.nonterminals, &self.first, self.starting_rule);
+        lr_parsing_table(
+            automaton,
             &self.nonterminals,
             self.token_names.len() as u32,
             self.starting_rule,
+        )
+    }
+
+    /// Computes the LALR(1) parsing table for the given grammar.
+    ///
+    /// This table can be used in a [Table Driven Parser](super::LRParser).
+    ///
+    /// Expects the grammar and the index of the starting non-terminal as input.
+    ///
+    /// Returns [`ParseError::LRError`] if there are SHIFT/REDUCE or
+    /// REDUCE/REDUCE conflicts.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// # use wisent::grammar::Grammar;
+    /// # use wisent::parser::LRGrammar;
+    /// let g = "sum: num PLUS num;
+    ///          num: INT | REAL;
+    ///          INT: [0-9]+;
+    ///          REAL: [0-9]+ '.' [0-9]+;
+    ///          PLUS: '+';";
+    /// let grammar = Grammar::parse_bootstrap(g).unwrap();
+    /// let grammar_lr = LRGrammar::try_from(&grammar).unwrap();
+    /// let lr1_table = grammar_lr.lr1_parsing_table().unwrap();
+    /// ```
+    pub fn lalr1_parsing_table(&self) -> Result<LRParsingTable, ParseError> {
+        let automaton = lalr1_automaton(
+            &self.nonterminals,
             &self.first,
+            self.token_names.len() as u32,
+            self.starting_rule,
+        );
+        lr_parsing_table(
+            automaton,
+            &self.nonterminals,
+            self.token_names.len() as u32,
+            self.starting_rule,
         )
     }
 
@@ -183,7 +223,7 @@ fn closure<const K: usize>(
                 let new_items = nonterminals[nt as usize]
                     .iter()
                     .enumerate()
-                    .map(|(prod_id, _)| LRItem::nonkernel(nt, prod_id as u16, [0; K]))
+                    .map(|(prod_id, _)| LRItem::nonkernel(nt, prod_id as u16, [ENDLINE_VAL; K]))
                     .collect::<Vec<_>>();
                 if K == 1 {
                     let lookaheads = match item.next().peek(nonterminals) {
@@ -200,10 +240,8 @@ fn closure<const K: usize>(
                         }
                     });
                     for lookahead in lookaheads {
-                        let new_items_with_lookaheads = new_items.iter().copied().map(|mut n| {
-                            n.lookahead_mut()[0] = lookahead;
-                            n
-                        });
+                        let new_items_with_lookaheads =
+                            new_items.iter().copied().map(|n| n.to_lr([lookahead; K]));
                         to_add.extend(new_items_with_lookaheads);
                     }
                 } else {
@@ -256,7 +294,7 @@ fn lr_automaton<const K: usize>(
         lookahead: [ENDLINE_VAL; K],
     });
     let mut nodes = vec![start_kernel];
-    let mut edges = vec![vec![]];
+    let mut edges = vec![FxHashMap::default()];
     let mut done = fxhashset!();
     let mut todo = vec![0];
     while let Some(set_id) = todo.pop() {
@@ -269,17 +307,94 @@ fn lr_automaton<const K: usize>(
                 let next = goto(&clos, peek, nonterminals);
                 let next_index = nodes.iter().position(|x| x == &next).unwrap_or_else(|| {
                     nodes.push(next);
-                    edges.push(Vec::new());
+                    edges.push(FxHashMap::default());
                     todo.push(nodes.len() - 1);
                     nodes.len() - 1
                 }) as u32;
-                edges[set_id].push((peek, next_index));
+                edges[set_id].insert(peek, next_index);
             }
         }
-        edges[set_id].sort_unstable();
-        edges[set_id].dedup();
     }
     LRAutomaton { nodes, edges }
+}
+
+/// Returns the LALR(1) automaton using a space-efficient construction.
+/// This is done by generating a LR(0) automaton and then efficiently
+/// calculating lookaheads generation and propagation using the algorithm 4.62
+/// in the dragon book, second edition.
+fn lalr1_automaton(
+    nonterminals: &[Vec<Vec<ParserSymbol>>],
+    first: &[FxHashSet<u32>],
+    term_no: u32,
+    start: u32,
+) -> LRAutomaton<1> {
+    let lr0 = lr_automaton::<0>(nonterminals, first, start);
+    let mut lalr_kernels = vec![fxhashset!(); lr0.nodes.len()];
+    lalr_kernels[start as usize] = lr0.nodes[start as usize]
+        .iter()
+        .map(|x| x.to_lr([ENDLINE_VAL]))
+        .collect();
+    let mut propagation: HashMap<
+        (usize, &KernelLRItem<0>),
+        std::collections::HashSet<
+            (usize, KernelLRItem<0>),
+            std::hash::BuildHasherDefault<rustc_hash::FxHasher>,
+        >,
+        std::hash::BuildHasherDefault<rustc_hash::FxHasher>,
+    > = FxHashMap::default();
+    // calculate generated and propagated lookaheads.
+    for (set_id, set) in lr0.nodes.iter().enumerate() {
+        for item in set {
+            // variables a, b, j, x refers to the notation of the purple dragon book, page
+            // 272.
+            let a = item.to_lr([term_no]);
+            let j = closure(&fxhashset!(a), nonterminals, first);
+            for b in j {
+                let x = b.peek(nonterminals);
+                if let Some(next_i) = lr0.edges[set_id].get(&x) {
+                    let lookahead = b.lookahead()[0];
+                    if lookahead != term_no {
+                        // lookahead generated
+                        lalr_kernels[*next_i as usize].insert(b.next_kernel().to_lr([lookahead]));
+                    } else {
+                        // lookahead propagated
+                        let to_insert = (*next_i as usize, b.next_kernel().to_lr([]));
+                        propagation
+                            .entry((set_id, item))
+                            .and_modify(|x| {
+                                x.insert(to_insert);
+                            })
+                            .or_insert(fxhashset!(to_insert));
+                    }
+                }
+            }
+        }
+    }
+    // propagate lookahead until saturation
+    let mut modified = true;
+    while modified {
+        modified = false;
+        for ((from_i, from_kernel), set) in &propagation {
+            let lookaheads_to_propagate = lalr_kernels[*from_i]
+                .iter()
+                .filter(|x| {
+                    x.rule == from_kernel.rule
+                        && x.position == from_kernel.position
+                        && x.production == from_kernel.production
+                })
+                .map(|x| x.lookahead[0])
+                .collect::<Vec<_>>();
+            for lookahead in lookaheads_to_propagate {
+                for (to_i, to_kernel) in set {
+                    modified |= lalr_kernels[*to_i].insert(to_kernel.to_lr([lookahead]));
+                }
+            }
+        }
+    }
+    LRAutomaton {
+        nodes: lalr_kernels,
+        edges: lr0.edges,
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -309,12 +424,11 @@ impl LRParsingTable {
 
 /// builds an LR(K) parsing table
 fn lr_parsing_table<const K: usize>(
+    automaton: LRAutomaton<K>,
     nonterminals: &[Vec<Vec<ParserSymbol>>],
     term_no: u32,
     start: u32,
-    first: &[FxHashSet<u32>],
 ) -> Result<LRParsingTable, ParseError> {
-    let automaton = lr_automaton::<K>(nonterminals, first, start);
     let mut action = Vec::with_capacity(automaton.nodes.len());
     let mut goto = Vec::with_capacity(automaton.nodes.len());
     for (node, edge) in automaton.nodes.iter().zip(automaton.edges.iter()) {
@@ -479,6 +593,17 @@ struct KernelLRItem<const K: usize> {
     lookahead: [u32; K],
 }
 
+impl<const K: usize> KernelLRItem<K> {
+    fn to_lr<const T: usize>(self, lookahead: [u32; T]) -> KernelLRItem<T> {
+        KernelLRItem::<T> {
+            rule: self.rule,
+            production: self.production,
+            position: self.position,
+            lookahead,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct NonKernelLRItem<const K: usize> {
     rule: u32,
@@ -508,12 +633,17 @@ impl<const K: usize> LRItem<K> {
 
     #[must_use]
     fn next(&self) -> Self {
-        Self::Kernel(KernelLRItem {
+        Self::Kernel(self.next_kernel())
+    }
+
+    #[must_use]
+    fn next_kernel(&self) -> KernelLRItem<K> {
+        KernelLRItem {
             rule: self.rule(),
             production: self.production(),
             position: self.position() + 1,
             lookahead: self.lookahead(),
-        })
+        }
     }
 
     // returns the next symbol. ParserSymbol::Empty in case of A -> ·
@@ -556,10 +686,19 @@ impl<const K: usize> LRItem<K> {
         }
     }
 
-    fn lookahead_mut(&mut self) -> &mut [u32; K] {
+    fn to_lr<const T: usize>(self, lookahead: [u32; T]) -> LRItem<T> {
         match self {
-            LRItem::Kernel(k) => &mut k.lookahead,
-            LRItem::NonKernel(nk) => &mut nk.lookahead,
+            LRItem::Kernel(k) => LRItem::Kernel(KernelLRItem {
+                rule: k.rule,
+                production: k.production,
+                position: k.position,
+                lookahead,
+            }),
+            LRItem::NonKernel(nk) => LRItem::NonKernel(NonKernelLRItem {
+                rule: nk.rule,
+                production: nk.production,
+                lookahead,
+            }),
         }
     }
 }
@@ -571,22 +710,24 @@ impl<const K: usize> From<KernelLRItem<K>> for LRItem<K> {
 }
 
 type LRAutomaton<const K: usize> = Graph<FxHashSet<KernelLRItem<K>>, ParserSymbol>;
+
 struct Graph<T, U> {
     nodes: Vec<T>,
-    edges: Vec<Vec<(U, u32)>>,
+    edges: Vec<FxHashMap<U, u32>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::ShiftReduceAction::{Accept, Error, Reduce, Shift};
     use super::{
-        closure, lr_parsing_table, slr_parsing_table, LRItem, LRParsingTable, ENDLINE_VAL,
+        closure, lalr1_automaton, lr_automaton, lr_parsing_table, slr_parsing_table, LRItem,
+        LRParsingTable, ENDLINE_VAL,
     };
     use crate::fxhashset;
     use crate::parser::conversion::flatten;
     use crate::parser::ll::{first, follow};
     use crate::parser::lr::{goto, KernelLRItem};
-    use crate::parser::tests::{grammar_440, grammar_454, grammar_458};
+    use crate::parser::tests::{grammar_440, grammar_454, grammar_458, grammar_461};
     use crate::parser::ParserSymbol;
 
     #[test]
@@ -736,7 +877,8 @@ mod tests {
     fn lr0() {
         let grammar = grammar_454();
         let nonterminals = flatten(&grammar).unwrap();
-        let table = lr_parsing_table::<0>(&nonterminals, 2, 0, &[]).unwrap();
+        let automaton = lr_automaton::<0>(&nonterminals, &[], 0);
+        let table = lr_parsing_table(automaton, &nonterminals, 2, 0).unwrap();
         let expected = LRParsingTable {
             action: vec![
                 vec![Shift(1), Shift(2), Error],
@@ -803,11 +945,49 @@ mod tests {
     }
 
     #[test]
+    fn lalr1() {
+        let grammar = grammar_461();
+        let nonterminals = flatten(&grammar).unwrap();
+        let first = first(&nonterminals);
+        let automaton = lalr1_automaton(&nonterminals, &first, 3, 0);
+        let table = lr_parsing_table(automaton, &nonterminals, 3, 0).unwrap();
+        let expected = LRParsingTable {
+            action: vec![
+                vec![Error, Shift(4), Shift(5), Error],
+                vec![Error, Error, Error, Accept],
+                vec![Shift(6), Error, Error, Reduce((3, 0))],
+                vec![Error, Error, Error, Reduce((1, 1))],
+                vec![Error, Shift(4), Shift(5), Error],
+                vec![Reduce((2, 1)), Error, Error, Reduce((2, 1))],
+                vec![Error, Shift(4), Shift(5), Error],
+                vec![Reduce((2, 0)), Error, Error, Reduce((2, 0))],
+                vec![Reduce((3, 0)), Error, Error, Reduce((3, 0))],
+                vec![Error, Error, Error, Reduce((1, 0))],
+            ],
+            goto: vec![
+                vec![Some(1), Some(2), Some(3)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, Some(8), Some(7)],
+                vec![None, None, None],
+                vec![None, Some(8), Some(9)],
+                vec![None, None, None],
+                vec![None, None, None],
+                vec![None, None, None],
+            ],
+            nonterminals,
+        };
+        compare_tables(table, expected);
+    }
+
+    #[test]
     fn lr1() {
         let grammar = grammar_458();
         let nonterminals = flatten(&grammar).unwrap();
         let first = first(&nonterminals);
-        let table = lr_parsing_table::<1>(&nonterminals, 5, 0, &first).unwrap();
+        let automaton = lr_automaton::<1>(&nonterminals, &first, 0);
+        let table = lr_parsing_table(automaton, &nonterminals, 5, 0).unwrap();
         let expected = LRParsingTable {
             action: vec![
                 vec![Shift(2), Shift(3), Error, Error, Error, Error],
